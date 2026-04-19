@@ -46,7 +46,149 @@ Spring Boot `DSLContext`-i avtomatik yaradır — əlavə konfiqurasiya lazım d
 
 ---
 
-## 3. İki İstifadə Üsulu
+## 3. jOOQ Kod Generasiyası (Generated Mode üçün)
+
+Generated mode istifadə edəcəksənsə verilənlər bazası sxemindən avtomatik sinif yaratmaq
+lazımdır. Bunun üçün `generateJooq` Gradle task-ı konfiqurasiya edilir.
+
+> **Qeyd:** Entity mode işlədirsənsə bu bölməni keçə bilərsən.
+
+### 3.1. `build.gradle`-ə task əlavə et
+
+```groovy
+// build.gradle (Groovy DSL)
+import org.jooq.codegen.GenerationTool
+import org.jooq.meta.jaxb.*
+
+task generateJooq {
+    doLast {
+        // Verilənlər bazası məlumatları mühit dəyişənlərindən oxunur
+        String dbUrl       = System.getenv("DB_URL")       // jdbc:postgresql://host:5432/mydb
+        String dbDriver    = System.getenv("DB_DRIVER")    // org.postgresql.Driver
+        String dbUsername  = System.getenv("DB_USERNAME")
+        String dbPassword  = System.getenv("DB_PASSWORD")
+
+        Configuration configuration = GenerationTool.load(
+            new File('src/main/resources/jooq-config.xml')
+        )
+        configuration.withJdbc(
+            new Jdbc()
+                .withProperties(new Property().withKey("dialect").withValue("POSTGRES"))
+                .withDriver(dbDriver)
+                .withUrl(dbUrl)
+                .withUser(dbUsername)
+                .withPassword(dbPassword)
+        )
+        GenerationTool.generate(configuration)
+    }
+}
+```
+
+### 3.2. `jooq-config.xml` yarat
+
+`src/main/resources/jooq-config.xml` faylını aşağıdakı kimi konfiqurasiya et:
+
+```xml
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<configuration>
+    <generator>
+        <database>
+            <!-- PostgreSQL üçün -->
+            <name>org.jooq.meta.postgres.PostgresDatabase</name>
+
+            <!-- Bir və ya bir neçə sxema -->
+            <schemata>
+                <schema>
+                    <inputSchema>public</inputSchema>
+                </schema>
+                <schema>
+                    <inputSchema>backlog</inputSchema>   <!-- əlavə sxema varsa -->
+                </schema>
+            </schemata>
+        </database>
+
+        <generate>
+            <pojos>true</pojos>     <!-- POJO sinifləri (DTO kimi istifadə oluna bilər) -->
+            <daos>true</daos>       <!-- DAO sinifləri -->
+            <records>true</records> <!-- Record sinifləri (UsersRecord, OrdersRecord...) -->
+        </generate>
+
+        <target>
+            <!-- Yaradılan siniflərin yerləşəcəyi paket -->
+            <packageName>com.example.myapp.domain.jooq</packageName>
+            <!-- Yaradılan siniflərin yazılacağı qovluq -->
+            <directory>src/main/java</directory>
+        </target>
+    </generator>
+</configuration>
+```
+
+### 3.3. Kodu yenilə
+
+Verilənlər bazasına qoşulub sinifləri yarat:
+
+```bash
+# Mühit dəyişənlərini təyin et (ya da .env faylından yüklə)
+export DB_URL="jdbc:postgresql://localhost:5432/mydb"
+export DB_DRIVER="org.postgresql.Driver"
+export DB_USERNAME="postgres"
+export DB_PASSWORD="secret"
+
+# Task-ı işlət
+./gradlew generateJooq
+```
+
+### 3.4. Yaranan struktur
+
+```
+src/main/java/com/example/myapp/domain/jooq/
+│
+├── tables/
+│   ├── Users.java          ← Tables.USERS
+│   ├── Orders.java         ← Tables.ORDERS
+│   └── ...
+│
+├── tables/records/
+│   ├── UsersRecord.java    ← INSERT/UPDATE üçün
+│   ├── OrdersRecord.java
+│   └── ...
+│
+├── tables/pojos/
+│   ├── Users.java          ← DTO kimi istifadə oluna bilər
+│   └── ...
+│
+└── Tables.java             ← import static Tables.* üçün
+```
+
+### 3.5. İstifadə
+
+```java
+import static com.example.myapp.domain.jooq.Tables.*;
+
+// USERS.ID, USERS.FIRST_NAME, USERS.STATUS — tip-təhlükəli sahələr
+JooqQuery.from(USERS, "u")
+    .select(USERS.ID, USERS.FIRST_NAME, USERS.STATUS)
+    .filter(USERS.STATUS.eq("ACTIVE"))
+    .leftJoin(ORDERS, "o", USERS.ID.eq(ORDERS.USER_ID))
+    .page(0, 20)
+    .execute(dsl);
+```
+
+### 3.6. Nə vaxt yenidən işlətmək lazımdır?
+
+`generateJooq` task-ını aşağıdakı hallarda yenidən işlət:
+
+- Yeni cədvəl əlavə ediləndə
+- Mövcud cədvələ yeni sütun əlavə ediləndə
+- Sütun adı dəyişdirilənddə
+- Sütun tipi dəyişdirilndə
+
+> **Vacib:** Verilənlər bazası dəyişikliklərindən sonra `generateJooq` işlətməsən,
+> köhnə siniflərlə işləyəcəksən — sorğular yanlış sütunlara müraciət edə bilər.
+
+---
+
+## 4. İki İstifadə Üsulu
 
 Kitabxananın iki fərqli giriş nöqtəsi var. Hansını seçəcəyin layihənin quruluşundan asılıdır.
 
@@ -100,7 +242,7 @@ public class UserService {
 
 ---
 
-## 4. Entity Sinifini Hazırla
+## 5. Entity Sinifini Hazırla
 
 Entity mode istifadə edirsənsə JPA annotasiyaları lazımdır:
 
@@ -130,7 +272,7 @@ public class User {
 
 ---
 
-## 5. Nəticəni Almaq
+## 6. Nəticəni Almaq
 
 `execute()` `SelectTable` qaytarır. Onu `SelectFetchJooq` ilə istənilən formata çevir:
 
@@ -169,7 +311,7 @@ List<Map<String, Object>> rows = JooqQuery.from(User.class, "u")
 
 ---
 
-## 6. Filter Növləri
+## 7. Filter Növləri
 
 ```java
 JooqQuery.from(User.class, "u")
@@ -213,7 +355,7 @@ JooqQuery.from(User.class, "u")
 
 ---
 
-## 7. JOIN
+## 8. JOIN
 
 ```java
 JooqQuery.from(User.class, "u")
@@ -232,7 +374,7 @@ JooqQuery.from(User.class, "u")
 
 ---
 
-## 8. GROUP BY və Aqreqat Funksiyalar
+## 9. GROUP BY və Aqreqat Funksiyalar
 
 ```java
 JooqQuery.from(User.class, "u")
@@ -249,7 +391,7 @@ JooqQuery.from(User.class, "u")
 
 ---
 
-## 9. Dinamik Sıralama
+## 10. Dinamik Sıralama
 
 ```java
 // Tək sahə
@@ -270,7 +412,7 @@ JooqQuery.from(User.class, "u")
 
 ---
 
-## 10. Pagination
+## 11. Pagination
 
 ```java
 // Səhifə 0, hər səhifədə 20 sətir
@@ -290,7 +432,7 @@ int total = result.getRowCount();   // COUNT(*) nəticəsi
 
 ---
 
-## 11. GlobalFilter — Xarici Filterlər
+## 12. GlobalFilter — Xarici Filterlər
 
 REST body-dən və ya konfiqurasiyadan `Map<String, Map<String, String>>` formatında gələn
 filterlər üçün:
@@ -330,7 +472,7 @@ JooqQuery.from(User.class, "u")
 
 ---
 
-## 12. EXISTS Subquery
+## 13. EXISTS Subquery
 
 ```java
 // WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id AND o.status = 'PAID')
@@ -353,7 +495,7 @@ JooqQuery.from(User.class, "u")
 
 ---
 
-## 13. IN Subquery
+## 14. IN Subquery
 
 ```java
 // WHERE u.id IN (SELECT o.userId FROM orders o WHERE o.status = 'PAID')
@@ -377,7 +519,7 @@ JooqQuery.from(User.class, "u")
 
 ---
 
-## 14. CASE WHEN
+## 15. CASE WHEN
 
 ```java
 JooqQuery.from(User.class, "u")
@@ -395,7 +537,7 @@ JooqQuery.from(User.class, "u")
 
 ---
 
-## 15. Hesablama Sütunları
+## 16. Hesablama Sütunları
 
 ```java
 // (price * quantity) - discount AS netAmount
@@ -411,7 +553,7 @@ JooqQuery.from(Order.class, "o")
 
 ---
 
-## 16. Derived Table — Sorğu Üzərindən Sorğu
+## 17. Derived Table — Sorğu Üzərindən Sorğu
 
 Bir sorğunun nəticəsini başqa sorğunun cədvəli kimi istifadə et:
 
@@ -435,7 +577,7 @@ SelectTable result = JooqQuery.from(activeUsers, "sub")
 
 ---
 
-## 17. jOOQ Code Generation ilə (Generated Mode)
+## 18. jOOQ Code Generation ilə (Generated Mode)
 
 Layihəndə `generateJooq` task-ı konfiqurasiya edilibsə verilənlər bazası sxemindən
 `Tables.USERS`, `USERS.ID`, `USERS.FIRST_NAME` kimi siniflər yaranır. Bu rejimdə
@@ -467,7 +609,7 @@ JooqQuery.from(USERS, "u")
 
 ---
 
-## 18. Tam Nümunə — REST Endpoint
+## 19. Tam Nümunə — REST Endpoint
 
 ```java
 @RestController
