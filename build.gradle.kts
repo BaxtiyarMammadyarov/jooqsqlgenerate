@@ -48,8 +48,16 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-// ─── Lokal Maven repo-ya yayımla (~/.m2) ─────────────────────────────────────
-// Əmr: ./gradlew publishToMavenLocal
+// ─── GitHub istifadəçi adı və token ──────────────────────────────────────────
+// ~/.gradle/gradle.properties faylında təyin edilməlidir:
+//   githubUsername=sənin_github_adın
+//   githubToken=ghp_xxxxxxxxxxxxxxxxxxxx
+val githubUsername: String = project.findProperty("githubUsername") as String? ?: ""
+val githubToken:    String = project.findProperty("githubToken")    as String? ?: ""
+
+// ─── Yayımlama konfiqurasiyası ────────────────────────────────────────────────
+// Lokal:         ./gradlew publishToMavenLocal
+// GitHub Packages: ./gradlew publishMavenJavaPublicationToGitHubPackagesRepository
 publishing {
     publications {
         create<MavenPublication>("mavenJava") {
@@ -62,6 +70,14 @@ publishing {
             pom {
                 name        = "jooq-sql-generate"
                 description = "jOOQ əsaslı dinamik SQL sorğu generatoru kitabxanası"
+                url         = "https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate"
+
+                licenses {
+                    license {
+                        name = "MIT License"
+                        url  = "https://opensource.org/licenses/MIT"
+                    }
+                }
 
                 // Asılılıqların scope-unu POM-da da "provided" kimi işarələ
                 withXml {
@@ -79,8 +95,21 @@ publishing {
             }
         }
     }
+
     repositories {
+        // Lokal Maven (~/.m2)
         mavenLocal()
+
+        // GitHub Packages
+        // OWNER = GitHub istifadəçi adın və ya təşkilat adın
+        maven {
+            name = "GitHubPackages"
+            url  = uri("https://maven.pkg.github.com/BaxtiyarMammadyarov/jooqsqlgenerate")
+            credentials {
+                username = githubUsername
+                password = githubToken
+            }
+        }
     }
 }
 
