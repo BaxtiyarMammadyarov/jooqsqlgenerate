@@ -1,0 +1,997 @@
+package az.mbm.jooqsqlgenerate.builder;
+
+import org.jooq.*;
+import org.jooq.Record;
+import org.jooq.impl.DSL;
+import az.mbm.jooqsqlgenerate.core.EntityTable;
+import az.mbm.jooqsqlgenerate.core.SelectTable;
+import az.mbm.jooqsqlgenerate.enums.FilterOperations;
+import az.mbm.jooqsqlgenerate.enums.MathOperation;
+import az.mbm.jooqsqlgenerate.spec.Specification;
+
+import java.util.*;
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════
+ *  FLUENT BUILDER — SELECT sorğusu üçün tam implementasiya
+ *
+ *  Design Patterns:
+ *    • Fluent Builder   — zəncir metodlar, mütləq sıra aydındır
+ *    • Specification    — WHERE şərtləri composable
+ *    • Strategy         — FilterStrategies vasitəsilə
+ *    • Composite        — Spec.and() / Spec.or()
+ *    • Template Method  — build() → step1..step10
+ *    • Factory Method   — QueryFactory.select()
+ *
+ *  Köhnə ChwJooqManager-in bütün xüsusiyyətlərini əhatə edir:
+ *    ✓ SELECT (sütun, computed, CASE WHEN, CONCAT)
+ *    ✓ JOIN (entity, subquery) — çoxsəviyyəli
+ *    ✓ WHERE (Specification + AND/OR/NOT/EXISTS/field-to-field)
+ *    ✓ GROUP BY + aqreqat funksiyalar (SUM, COUNT, AVG, MIN, MAX)
+ *    ✓ HAVING
+ *    ✓ ORDER BY
+ *    ✓ DISTINCT
+ *    ✓ Pagination (COUNT + LIMIT/OFFSET)
+ *
+ *  İstifadə:
+ * <pre>{@code
+ *   QueryFactory factory = new QueryFactory(dsl);
+ *
+ *   SelectTable result = factory.select(User.class, "u")
+ *       .columns("u.id", "u.name", "u.email")
+ *       .leftJoin(Order.class, "o").on("id").equalsField("userId")
+ *       .where(Spec.eq("status", "ACTIVE").and(Spec.in("roleId", roles)))
+ *       .orderByDesc("u.createdAt")
+ *       .page(0, 20)
+ *       .build(dsl);
+ * }</pre>
+ * ═══════════════════════════════════════════════════════════════════════
+ *
+ * @param <T> ana cədvəl entity tipi
+ */
+@SuppressWarnings({"unchecked", "rawtypes"})
+public class SelectQueryBuilder<T> {
+
+    // ─── İmmutable meta ──────────────────────────────────────────────────
+    private final Class<T> entityClass;
+    private final String   tableAlias;
+
+    // ─── SELECT sahələri ──────────────────────────────────────────────────
+    private final List<String>            columns        = new ArrayList<>();
+    private final List<ComputedCol>       computed       = new ArrayList<>();
+    private final List<ComputedField>     computedChain  = new ArrayList<>();
+    private final List<CaseBuilder<T>>    caseCols       = new ArrayList<>();
+    private final List<ConcatCol>         concatCols     = new ArrayList<>();
+    private final List<CoalesceCol>       coalesceCols   = new ArrayList<>();
+    private final List<SubSelectBuilder>  subSelectCols  = new ArrayList<>();
+    private final List<Field<?>>          rawSelectFields = new ArrayList<>(); // birbaşa jOOQ Field
+
+    // ─── JOIN ─────────────────────────────────────────────────────────────
+    private final List<JoinConfig>   joins         = new ArrayList<>();
+    private final List<SubQueryJoin> subQueryJoins = new ArrayList<>();
+
+    // ─── WHERE ───────────────────────────────────────────────────────────
+    private Specification<T> whereSpec = null;
+
+    // ─── IN (SELECT ...) subquery filterlər ──────────────────────────────
+    private final List<SubQueryInEntry> inSubQueryEntries = new ArrayList<>();
+
+    private record SubQueryInEntry(List<String> outerFields, SubQueryIn sub) {}
+
+    // ─── Global filter — alias.field ilə join cədvəlinə qədər çatan WHERE filterlər ──
+    private final List<GlobalFilterEntry> globalFilterEntries = new ArrayList<>();
+
+    private record GlobalFilterEntry(String aliasAndField,
+                                     az.mbm.jooqsqlgenerate.enums.FilterOperations op,
+                                     Object value) {}
+
+    // ─── HAVING əlavəsi (computed alias filterlər üçün) ───────────────────
+    private Condition extraHaving = null;
+
+    // ─── Birbaşa jOOQ raw conditions ──────────────────────────────────────
+    private final List<Condition> rawConditions = new ArrayList<>();
+    private final List<Condition> rawHavings    = new ArrayList<>();
+
+    // ─── GROUP BY + Aqreqat ──────────────────────────────────────────────
+    private AggregateBuilder<T> aggregator = null;
+
+    // ─── ORDER BY ────────────────────────────────────────────────────────
+    private final List<SortField<?>> orderFields = new ArrayList<>();
+
+    // ─── Flags ───────────────────────────────────────────────────────────
+    private boolean distinct   = false;
+    private int     pageNumber = 0;
+    private int     pageSize   = 50;
+    private boolean paginate   = true;
+
+    // ════════════════════════════════════════════════════════════════════
+    //  Daxili record-lar
+    // ════════════════════════════════════════════════════════════════════
+
+    /** Riyazi əməliyyatla hesablanmış SELECT sütunu */
+    private record ComputedCol(
+            String alias,
+            String tableAlias1, String field1,
+            MathOperation op,
+            String tableAlias2, String field2) {}
+
+    /** CONCAT SELECT sütunu */
+    private record ConcatCol(String alias, String separator, List<String> fields) {}
+
+    /** COALESCE SELECT sütunu — ilk null olmayan sahəni qaytarır */
+    private record CoalesceCol(String alias, List<String> fields, Object defaultValue) {}
+
+    /** Entity-to-entity JOIN konfiqurasiyası */
+    private record JoinConfig(
+            Class<?>         fromClass,
+            String           fromAlias,
+            Class<?>         toClass,
+            String           toAlias,
+            JoinType         joinType,
+            String           fromField,
+            String           toField,
+            FilterOperations condOp) {}
+
+    /** Subquery JOIN konfiqurasiyası */
+    private record SubQueryJoin(
+            Select<?> subQuery,
+            String    subAlias,
+            String    subField,
+            String    mainField) {}
+
+    // ════════════════════════════════════════════════════════════════════
+    //  Static factory (giriş nöqtəsi)
+    // ════════════════════════════════════════════════════════════════════
+
+    private SelectQueryBuilder(Class<T> entityClass, String tableAlias) {
+        this.entityClass = Objects.requireNonNull(entityClass, "Entity class null ola bilməz");
+        this.tableAlias  = Objects.requireNonNull(tableAlias,  "Table alias null ola bilməz");
+    }
+
+    /**
+     * Builder-i yaradır.
+     *
+     * @param entity     JPA entity class-ı
+     * @param alias      SQL alias-ı (məs. "u")
+     * @param <T>        entity tipi
+     */
+    public static <T> SelectQueryBuilder<T> from(Class<T> entity, String alias) {
+        return new SelectQueryBuilder<>(entity, alias);
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  1 — SELECT sütunlar
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * Seçiləcək sütunlar. Format: "alias.fieldName" və ya "fieldName".
+     *
+     * <pre>{@code .columns("u.id", "u.name", "o.total") }</pre>
+     */
+    public SelectQueryBuilder<T> columns(String... fields) {
+        columns.addAll(Arrays.asList(fields));
+        return this;
+    }
+
+    /** Bütün sahələri seç (SELECT *) — default davranış */
+    public SelectQueryBuilder<T> selectAll() {
+        columns.clear();
+        return this;
+    }
+
+    /**
+     * Riyazi əməliyyatla hesablanmış sütun — 2 sahə üçün sadə form.
+     *
+     * <pre>{@code .computedColumn("net", "o", MathOperation.SUBTRACT, "amount", "o", "discount") }</pre>
+     */
+    public SelectQueryBuilder<T> computedColumn(
+            String alias,
+            String alias1, MathOperation op, String field1,
+            String alias2, String field2) {
+        computed.add(new ComputedCol(alias, alias1, field1, op, alias2, field2));
+        return this;
+    }
+
+    /**
+     * Riyazi əməliyyatla hesablanmış sütun — istənilən sayda sahə üçün.
+     *
+     * <pre>{@code
+     *   .computedColumn(
+     *       ComputedField.of("o.price")
+     *           .add("o.tax")
+     *           .add("o.shipping")
+     *           .subtract("o.discount")
+     *           .as("totalCost")
+     *   )
+     * }</pre>
+     */
+    public SelectQueryBuilder<T> computedColumn(ComputedField cf) {
+        if (cf != null) computedChain.add(cf);
+        return this;
+    }
+
+    /**
+     * CASE WHEN SELECT sütunu.
+     *
+     * <pre>{@code
+     *   .caseColumn(
+     *       CaseBuilder.when("status", FilterOperations.EQUAl, "ACTIVE").then("Aktiv")
+     *                  .otherwise("Naməlum").as("statusLabel")
+     *   )
+     * }</pre>
+     */
+    public SelectQueryBuilder<T> caseColumn(CaseBuilder<T> caseBuilder) {
+        caseCols.add(caseBuilder);
+        return this;
+    }
+
+    /**
+     * CONCAT SELECT sütunu.
+     *
+     * <pre>{@code .concat("fullName", " ", "u.firstName", "u.lastName") }</pre>
+     */
+    public SelectQueryBuilder<T> concat(String alias, String separator, String... fields) {
+        concatCols.add(new ConcatCol(alias, separator, Arrays.asList(fields)));
+        return this;
+    }
+
+    /**
+     * COALESCE SELECT sütunu — ilk null olmayan sahəni qaytarır.
+     *
+     * <pre>{@code
+     *   // COALESCE(u.nickname, u.firstName, 'Naməlum') AS displayName
+     *   .coalesce("displayName", "Naməlum", "u.nickname", "u.firstName")
+     * }</pre>
+     *
+     * @param alias        SELECT alias
+     * @param defaultValue hamısı null olduqda qaytarılacaq sabit dəyər
+     * @param fields       "alias.field" formatında sahələr (sıra ilə yoxlanır)
+     */
+    public SelectQueryBuilder<T> coalesce(String alias, Object defaultValue, String... fields) {
+        if (alias != null && fields.length > 0)
+            coalesceCols.add(new CoalesceCol(alias, Arrays.asList(fields), defaultValue));
+        return this;
+    }
+
+    /**
+     * SELECT listdə scalar subquery sütunu.
+     *
+     * <pre>{@code
+     *   .subSelect(
+     *       SubSelectBuilder.from(Product.class, "p")
+     *           .selectCoalesce("Naməlum", "p.name", "p.code")
+     *           .correlateOn("p.id", "o.productId")
+     *           .as("productName")
+     *   )
+     * }</pre>
+     */
+    public SelectQueryBuilder<T> subSelect(SubSelectBuilder sub) {
+        if (sub != null) subSelectCols.add(sub);
+        return this;
+    }
+
+    /**
+     * SELECT listinə birbaşa jOOQ {@link Field} əlavə edir.
+     *
+     * <pre>{@code
+     *   .rawSelectField(DSL.field(DSL.select(...).from(...).where(...)).as("alias"))
+     *   .rawSelectField(DSL.coalesce(...).as("displayName"))
+     * }</pre>
+     */
+    public SelectQueryBuilder<T> rawSelectField(Field<?> field) {
+        if (field != null) rawSelectFields.add(field);
+        return this;
+    }
+
+    /**
+     * ORDER BY-a birbaşa jOOQ {@link SortField} əlavə edir.
+     *
+     * <pre>{@code
+     *   .rawOrderBy(DSL.field("created_at").desc())
+     *   .rawOrderBy(DSL.field("score").asc().nullsLast())
+     * }</pre>
+     */
+    public SelectQueryBuilder<T> rawOrderBy(SortField<?> sortField) {
+        if (sortField != null) orderFields.add(sortField);
+        return this;
+    }
+
+    /** SELECT DISTINCT */
+    public SelectQueryBuilder<T> distinct() {
+        this.distinct = true;
+        return this;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  2 — JOIN
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * INNER JOIN.
+     *
+     * <pre>{@code .innerJoin(Order.class, "o").on("id").equalsField("userId") }</pre>
+     *
+     * <p>Bu "u.id = o.userId" deməkdir.
+     */
+    public <F> JoinOnBuilder<F> innerJoin(Class<F> foreignEntity, String alias) {
+        return new JoinOnBuilder<>(this, entityClass, tableAlias, foreignEntity, alias, JoinType.JOIN);
+    }
+
+    /** LEFT JOIN */
+    public <F> JoinOnBuilder<F> leftJoin(Class<F> foreignEntity, String alias) {
+        return new JoinOnBuilder<>(this, entityClass, tableAlias, foreignEntity, alias, JoinType.LEFT_OUTER_JOIN);
+    }
+
+    /** RIGHT JOIN */
+    public <F> JoinOnBuilder<F> rightJoin(Class<F> foreignEntity, String alias) {
+        return new JoinOnBuilder<>(this, entityClass, tableAlias, foreignEntity, alias, JoinType.RIGHT_OUTER_JOIN);
+    }
+
+    /**
+     * Müəyyən entity-dən çoxsəviyyəli LEFT JOIN.
+     *
+     * <pre>{@code
+     *   // u → o → p (Product)
+     *   .leftJoinFrom(Order.class, "o", Product.class, "p").on("productId").equalsField("id")
+     * }</pre>
+     */
+    public <F> JoinOnBuilder<F> leftJoinFrom(Class<?> fromEntity, String fromAlias,
+                                              Class<F> toEntity, String toAlias) {
+        return new JoinOnBuilder<>(this, fromEntity, fromAlias, toEntity, toAlias, JoinType.LEFT_OUTER_JOIN);
+    }
+
+    /** Müəyyən entity-dən çoxsəviyyəli INNER JOIN */
+    public <F> JoinOnBuilder<F> innerJoinFrom(Class<?> fromEntity, String fromAlias,
+                                               Class<F> toEntity, String toAlias) {
+        return new JoinOnBuilder<>(this, fromEntity, fromAlias, toEntity, toAlias, JoinType.JOIN);
+    }
+
+    /**
+     * Subquery ilə JOIN.
+     *
+     * <pre>{@code
+     *   DSLContext dsl = ...;
+     *   Select<?> sub = dsl.select(DSL.field("userId"), DSL.sum(DSL.field("amount")))
+     *                      .from("orders").groupBy(DSL.field("userId"));
+     *   .joinSubQuery(sub, "orderSums", "userId", "id")
+     * }</pre>
+     */
+    public SelectQueryBuilder<T> joinSubQuery(
+            Select<?> subQuery, String subAlias,
+            String subField, String mainField) {
+        subQueryJoins.add(new SubQueryJoin(subQuery, subAlias, subField, mainField));
+        return this;
+    }
+
+    // ─── JoinOnBuilder ────────────────────────────────────────────────────
+
+    public static class JoinOnBuilder<F> {
+        private final SelectQueryBuilder<?> parent;
+        private final Class<?>  fromClass;
+        private final String    fromAlias;
+        private final Class<F>  toClass;
+        private final String    toAlias;
+        private final JoinType  joinType;
+        private       String    fromField;
+
+        JoinOnBuilder(SelectQueryBuilder<?> p,
+                      Class<?> fc, String fa,
+                      Class<F> tc, String ta, JoinType jt) {
+            parent = p; fromClass = fc; fromAlias = fa;
+            toClass = tc; toAlias = ta; joinType = jt;
+        }
+
+        /** Ana cədvəlin sahəsini seç */
+        public JoinOnBuilder<F> on(String fromField) {
+            this.fromField = fromField;
+            return this;
+        }
+
+        /**
+         * Xarici cədvəlin sahəsini seç → JOIN tamamlandı.
+         * "fromAlias.fromField = toAlias.toField" şərti yaranır.
+         */
+        public SelectQueryBuilder<?> equalsField(String toField) {
+            ((SelectQueryBuilder) parent).joins.add(new JoinConfig(
+                    fromClass, fromAlias, toClass, toAlias,
+                    joinType, fromField, toField, FilterOperations.EQUAl));
+            return parent;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  3 — WHERE
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * WHERE şərtidir — {@link Specification} ilə.
+     * Bir neçə {@code .where()} çağrışı AND ilə birləşdirilir.
+     *
+     * <pre>{@code
+     *   .where(Spec.eq("status", "ACTIVE"))
+     *   .where(Spec.in("roleId", roleIds))
+     *   // → WHERE status = 'ACTIVE' AND roleId IN (...)
+     * }</pre>
+     */
+    public SelectQueryBuilder<T> where(Specification<T> spec) {
+        if (spec == null) return this;  // Filter.build() null qaytara bilər — atlanır
+        this.whereSpec = (this.whereSpec == null) ? spec : this.whereSpec.and(spec);
+        return this;
+    }
+
+    /** Hazır jOOQ {@link Condition}-u birbaşa WHERE-ə əlavə edir */
+    public SelectQueryBuilder<T> where(Condition condition) {
+        if (condition == null) return this;
+        return where(table -> condition);
+    }
+
+    /**
+     * WHERE outerField IN (SELECT ... FROM entity WHERE ...)
+     *
+     * <p>Tək sahə üçün:
+     * <pre>{@code
+     *   .inSubQuery(List.of("userId"),
+     *       SubQueryIn.from(Order.class, "o")
+     *           .select("o.userId")
+     *           .filter("status", FilterOperations.EQUAl, "PAID"))
+     * }</pre>
+     *
+     * <p>Composite sahə üçün:
+     * <pre>{@code
+     *   .inSubQuery(List.of("firstName", "lastName"),
+     *       SubQueryIn.from(Blacklist.class, "bl")
+     *           .select("bl.firstName", "bl.lastName"))
+     * }</pre>
+     *
+     * @param outerFields əsas sorğudakı sahə adları (camelCase, alias olmadan)
+     * @param sub         SubQueryIn builder-i
+     */
+    public SelectQueryBuilder<T> inSubQuery(List<String> outerFields, SubQueryIn sub) {
+        if (outerFields != null && !outerFields.isEmpty() && sub != null)
+            inSubQueryEntries.add(new SubQueryInEntry(outerFields, sub));
+        return this;
+    }
+
+    /**
+     * Global filter — həm əsas cədvəl, həm də join cədvəllərinə WHERE filtri.
+     *
+     * <p>Field adı "alias.field" formatında olduqda tableMap-dən uyğun
+     * EntityTable tapılır; alias yoxdursa əsas cədvəl istifadə edilir.
+     * Tip uyğunlaşması (String → Integer, və s.) avtomatik edilir.
+     *
+     * <pre>{@code
+     *   .globalWhereFilter("status",    FilterOperations.EQUAl,        "ACTIVE")
+     *   .globalWhereFilter("o.amount",  FilterOperations.GREATER_THAN, "100")  // join cədvəli
+     *   .globalWhereFilter("c.country", FilterOperations.IN,           "AZ,TR")
+     * }</pre>
+     */
+    public SelectQueryBuilder<T> globalWhereFilter(
+            String aliasAndField,
+            az.mbm.jooqsqlgenerate.enums.FilterOperations op,
+            Object value) {
+        if (aliasAndField != null && !aliasAndField.isBlank() && op != null && value != null)
+            globalFilterEntries.add(new GlobalFilterEntry(aliasAndField, op, value));
+        return this;
+    }
+
+    /**
+     * Birbaşa jOOQ {@link Condition}-u WHERE-ə əlavə edir.
+     * Bir neçə çağrış AND ilə birləşir.
+     *
+     * <pre>{@code
+     *   .rawCondition(DSL.field("user_id").in(DSL.select(...)))
+     *   .rawCondition(DSL.exists(DSL.selectOne().from(...)))
+     * }</pre>
+     */
+    public SelectQueryBuilder<T> rawCondition(Condition condition) {
+        if (condition != null) rawConditions.add(condition);
+        return this;
+    }
+
+    /**
+     * Birbaşa jOOQ {@link Condition}-u HAVING-ə əlavə edir.
+     *
+     * <pre>{@code
+     *   .rawHaving(DSL.count().greaterThan(5))
+     *   .rawHaving(DSL.sum(DSL.field("amount", Double.class)).greaterThan(1000.0))
+     * }</pre>
+     */
+    public SelectQueryBuilder<T> rawHaving(Condition condition) {
+        if (condition != null) rawHavings.add(condition);
+        return this;
+    }
+
+    /**
+     * Əlavə HAVING şərti — computed alias filterlər üçün.
+     * Bir neçə çağrış AND ilə birləşir.
+     */
+    public SelectQueryBuilder<T> having(Condition condition) {
+        if (condition == null) return this;
+        this.extraHaving = (this.extraHaving == null) ? condition : this.extraHaving.and(condition);
+        return this;
+    }
+
+    /**
+     * Specification-u HAVING-ə əlavə edir (EXISTS / NOT EXISTS üçün).
+     */
+    public SelectQueryBuilder<T> having(Specification<T> spec) {
+        if (spec == null) return this;
+        EntityTable<T> table = new EntityTable<>(entityClass, tableAlias);
+        Condition condition = spec.toCondition(table);
+        return having(condition);
+    }
+
+    /**
+     * Field-to-field müqayisəsi.
+     *
+     * <pre>{@code .whereFieldEq("u", "managerId", "d", "headId") }</pre>
+     * <p>→ {@code u.managerId = d.headId}
+     */
+    public SelectQueryBuilder<T> whereFieldEq(String t1, String f1, String t2, String f2) {
+        return where(mainTable ->
+                new EntityTable<>(entityClass, t1).getField(f1)
+                        .eq(new EntityTable<>(entityClass, t2).getField(f2))
+        );
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  4 — GROUP BY + Aqreqat + HAVING
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * Aqreqat funksiyalar + GROUP BY + HAVING.
+     *
+     * <pre>{@code
+     *   .aggregate(
+     *       AggregateBuilder.groupBy("u.status")
+     *           .sum("o.amount").round(2)
+     *               .having(FilterOperations.GREATER_THAN, 500)
+     *               .orderDesc()
+     *               .as("totalAmount").done()
+     *           .count("o.id").as("orderCount").done()
+     *   )
+     * }</pre>
+     */
+    public SelectQueryBuilder<T> aggregate(AggregateBuilder<T> agg) {
+        this.aggregator = agg;
+        return this;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  5 — ORDER BY
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * ORDER BY field DESC.
+     *
+     * <pre>{@code .orderByDesc("u.createdAt") }</pre>
+     */
+    public SelectQueryBuilder<T> orderByDesc(String tableAliasAndField) {
+        Field<Object> f = (Field<Object>) resolveTable(tableAliasAndField).getField(fieldPart(tableAliasAndField));
+        orderFields.add(f.desc());
+        return this;
+    }
+
+    /**
+     * ORDER BY field ASC.
+     *
+     * <pre>{@code .orderByAsc("u.name") }</pre>
+     */
+    public SelectQueryBuilder<T> orderByAsc(String tableAliasAndField) {
+        Field<Object> f = (Field<Object>) resolveTable(tableAliasAndField).getField(fieldPart(tableAliasAndField));
+        orderFields.add(f.asc());
+        return this;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  6 — PAGİNASİYA
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * Sayfalama — {@link SelectTable#getRowCount()} cəmi sətir sayını qaytarır.
+     *
+     * @param pageNumber 0-based səhifə nömrəsi
+     * @param pageSize   hər səhifədəki sətir sayı
+     */
+    public SelectQueryBuilder<T> page(int pageNumber, int pageSize) {
+        this.pageNumber = pageNumber;
+        this.pageSize   = pageSize;
+        this.paginate   = true;
+        return this;
+    }
+
+    /** Sayfalama olmadan bütün nəticəni gətirir */
+    public SelectQueryBuilder<T> noPagination() {
+        this.paginate = false;
+        return this;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  BUILD — Template Method Pattern
+    //  Hər addım ayrı private metod — test edilə bilər
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * Builder-dən jOOQ sorğusu qurur.
+     *
+     * @param dsl jOOQ DSLContext
+     * @return {@link SelectTable} — sorğu + sətir sayı
+     */
+    public SelectTable build(DSLContext dsl) {
+        EntityTable<T> mainTable = new EntityTable<>(entityClass, tableAlias);
+
+        Map<String, EntityTable<?>> tableMap = new LinkedHashMap<>();
+        tableMap.put(tableAlias, mainTable);
+
+        // Addım 1 — SELECT sahələri
+        List<SelectFieldOrAsterisk> selectFields = buildSelectFields(mainTable, tableMap);
+
+        // Addım 2 — FROM
+        SelectJoinStep<Record> query = distinct
+                ? dsl.selectDistinct(selectFields).from(mainTable.getTable())
+                : dsl.select(selectFields).from(mainTable.getTable());
+
+        // Addım 3 — Entity JOINlər
+        query = buildEntityJoins(query, tableMap);
+
+        // Addım 4 — Subquery JOINlər
+        query = buildSubQueryJoins(query);
+
+        // Addım 5 — WHERE şərti
+        Condition whereCondition = buildWhereCondition(mainTable, tableMap);
+
+        // Addım 6 — GROUP BY + HAVING
+        SelectHavingStep<Record> afterGroupBy = buildGroupBy(query, mainTable, whereCondition, tableMap);
+
+        // Addım 7 — ORDER BY sahələri (normal + aqreqat)
+        List<SortField<?>> allOrderFields = buildAllOrderFields();
+
+        // Addım 8 — ORDER BY tətbiqi
+        SelectSeekStepN<Record> ordered = afterGroupBy.orderBy(allOrderFields);
+
+        // Addım 9 — COUNT (pagination üçün)
+        int rowCount = 0;
+        if (paginate) {
+            rowCount = buildCount(dsl, mainTable, whereCondition, afterGroupBy);
+        }
+
+        // Addım 10 — LIMIT / OFFSET
+        Select<Record> finalQuery = paginate
+                ? ordered.limit(pageSize).offset((long) pageNumber * pageSize)
+                : ordered;
+
+        return new SelectTable(finalQuery, rowCount);
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  Template Method addımları (private)
+    // ════════════════════════════════════════════════════════════════════
+
+    private List<SelectFieldOrAsterisk> buildSelectFields(
+            EntityTable<T> mainTable,
+            Map<String, EntityTable<?>> tableMap) {
+
+        boolean hasCustomFields = !columns.isEmpty() || !computed.isEmpty()
+                || !computedChain.isEmpty() || !caseCols.isEmpty() || !concatCols.isEmpty()
+                || !coalesceCols.isEmpty() || !subSelectCols.isEmpty() || !rawSelectFields.isEmpty()
+                || (aggregator != null && !aggregator.getAggFields().isEmpty());
+
+        if (!hasCustomFields) return List.of(DSL.asterisk());
+
+        List<SelectFieldOrAsterisk> fields = new ArrayList<>();
+
+        // Sadə sütunlar
+        for (String col : columns) {
+            EntityTable<?> t = tableMap.getOrDefault(aliasPart(col), mainTable);
+            fields.add(t.getField(fieldPart(col)));
+        }
+
+        // GROUP BY sütunlar
+        if (aggregator != null) {
+            for (String gf : aggregator.getGroupByFields()) {
+                EntityTable<?> t = tableMap.getOrDefault(aliasPart(gf), mainTable);
+                fields.add(t.getField(fieldPart(gf)));
+            }
+        }
+
+        // Riyazi əməliyyatla hesablanmış sütunlar — 2 sahəli sadə form
+        for (ComputedCol c : computed) {
+            EntityTable<?> t1 = tableMap.getOrDefault(c.tableAlias1(), mainTable);
+            EntityTable<?> t2 = tableMap.getOrDefault(c.tableAlias2(), mainTable);
+            Field<Object> f1 = (Field<Object>) t1.getField(c.field1());
+            Field<Object> f2 = (Field<Object>) t2.getField(c.field2());
+            fields.add(applyMathOp(f1, c.op(), f2).as(c.alias()));
+        }
+
+        // Riyazi əməliyyatla hesablanmış sütunlar — çox sahəli zəncir form
+        for (ComputedField cf : computedChain) {
+            fields.add(cf.toField(mainTable, tableMap));
+        }
+
+        // CASE WHEN sütunlar
+        for (CaseBuilder<T> cb : caseCols) {
+            fields.add(cb.toField(mainTable));
+        }
+
+        // CONCAT sütunlar
+        for (ConcatCol cc : concatCols) {
+            fields.add(buildConcatField(cc, mainTable, tableMap));
+        }
+
+        // COALESCE sütunlar
+        for (CoalesceCol cc : coalesceCols) {
+            fields.add(buildCoalesceField(cc, mainTable, tableMap));
+        }
+
+        // Subquery sütunlar
+        for (SubSelectBuilder sub : subSelectCols) {
+            fields.add(sub.toField(tableMap));
+        }
+
+        // Birbaşa jOOQ Field-lər
+        fields.addAll(rawSelectFields);
+
+        // Aqreqat sütunlar (SUM, COUNT, AVG, ...)
+        if (aggregator != null) {
+            for (AggregateBuilder.AggField agg : aggregator.getAggFields()) {
+                EntityTable<?> t = tableMap.getOrDefault(agg.tableAlias(), mainTable);
+                fields.add(AggregateBuilder.toJooqField(agg, t, tableMap));
+            }
+        }
+
+        return fields;
+    }
+
+    private SelectJoinStep<Record> buildEntityJoins(
+            SelectJoinStep<Record> query,
+            Map<String, EntityTable<?>> tableMap) {
+
+        for (JoinConfig j : joins) {
+            EntityTable<?> fromTable = tableMap.computeIfAbsent(
+                    j.fromAlias(), a -> new EntityTable<>(j.fromClass(), a));
+            EntityTable<?> toTable   = new EntityTable<>(j.toClass(), j.toAlias());
+            tableMap.put(j.toAlias(), toTable);
+
+            Field<Object> fromField = (Field<Object>) fromTable.getField(j.fromField());
+            Field<Object> toField   = (Field<Object>) toTable.getField(j.toField());
+            Condition     on        = fromField.eq(toField);
+
+            query = switch (j.joinType()) {
+                case LEFT_OUTER_JOIN  -> query.leftJoin(toTable.getTable()).on(on);
+                case RIGHT_OUTER_JOIN -> query.rightJoin(toTable.getTable()).on(on);
+                default               -> query.join(toTable.getTable()).on(on);
+            };
+        }
+        return query;
+    }
+
+    private SelectJoinStep<Record> buildSubQueryJoins(SelectJoinStep<Record> query) {
+        for (SubQueryJoin sj : subQueryJoins) {
+            Table<?>       sub  = sj.subQuery().asTable(sj.subAlias());
+            EntityTable<T> main = new EntityTable<>(entityClass, tableAlias);
+            Field<Object>  mf   = (Field<Object>) main.getField(sj.mainField());
+            Field<Object>  sf   = (Field<Object>) DSL.field(DSL.name(sj.subAlias(), sj.subField()));
+            query = query.leftJoin(sub).on(mf.eq(sf));
+        }
+        return query;
+    }
+
+    private Condition buildWhereCondition(EntityTable<T> mainTable,
+                                          Map<String, EntityTable<?>> tableMap) {
+        Condition cond = whereSpec == null ? null : whereSpec.toCondition(mainTable);
+
+        // IN (SELECT ...) subquery şərtlər
+        for (SubQueryInEntry e : inSubQueryEntries) {
+            Condition c = e.sub().toCondition(e.outerFields(), mainTable, tableMap);
+            cond = (cond == null) ? c : cond.and(c);
+        }
+
+        // Global filter — alias.field → tableMap-dən resolve edilir
+        for (GlobalFilterEntry gf : globalFilterEntries) {
+            int dot = gf.aliasAndField().indexOf('.');
+            EntityTable<?> t;
+            String fieldName;
+            if (dot > 0) {
+                String alias = gf.aliasAndField().substring(0, dot);
+                fieldName    = gf.aliasAndField().substring(dot + 1);
+                t = tableMap.getOrDefault(alias, mainTable);
+            } else {
+                fieldName = gf.aliasAndField();
+                t = mainTable;
+            }
+            @SuppressWarnings("unchecked")
+            Field<Object> f = (Field<Object>) t.getField(fieldName);
+            Condition c = az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(gf.op()).apply(f, gf.value());
+            cond = (cond == null) ? c : cond.and(c);
+        }
+
+        // Birbaşa jOOQ raw condition-lar
+        for (Condition rc : rawConditions) {
+            cond = (cond == null) ? rc : cond.and(rc);
+        }
+
+        return cond;
+    }
+
+    private SelectHavingStep<Record> buildGroupBy(
+            SelectJoinStep<Record> query,
+            EntityTable<T> mainTable,
+            Condition where,
+            Map<String, EntityTable<?>> tableMap) {
+
+        SelectConditionStep<Record> conditioned = (where != null)
+                ? query.where(where)
+                : query.where(DSL.trueCondition());
+
+        if (aggregator == null || aggregator.getGroupByFields().isEmpty()) {
+            return conditioned;
+        }
+
+        // ── Explicit GROUP BY sahələri ───────────────────────────────────
+        // LinkedHashMap: sıra + duplicate yoxlama
+        LinkedHashMap<String, Field<?>> groupFieldMap = new LinkedHashMap<>();
+
+        for (String gf : aggregator.getGroupByFields()) {
+            EntityTable<?> t = tableMap.getOrDefault(aliasPart(gf), mainTable);
+            Field<?> f = t.getField(fieldPart(gf));
+            groupFieldMap.put(f.getName(), f);
+        }
+
+        // ── AUTO GROUP BY: SELECT-dəki qeyri-aggregate sütunlar ─────────
+        // SQL qaydası: SELECT-dəki hər qeyri-aggregate sütun GROUP BY-da olmalıdır.
+        // Developer bunu unutsa da sistem özü əlavə edir.
+
+        // Aggregate alias-ları — bunlar GROUP BY-a getməməlidir
+        Set<String> aggAliases = new HashSet<>();
+        for (AggregateBuilder.AggField af : aggregator.getAggFields())
+            aggAliases.add(af.alias());
+
+        // Sadə sütunlar — GROUP BY-a əlavə et
+        for (String col : columns) {
+            String fieldName = fieldPart(col);
+            if (!aggAliases.contains(fieldName)) {
+                EntityTable<?> t = tableMap.getOrDefault(aliasPart(col), mainTable);
+                Field<?> f = t.getField(fieldName);
+                groupFieldMap.putIfAbsent(f.getName(), f);
+            }
+        }
+
+        // 2 sahəli computed sütunlar — hər iki sahəni GROUP BY-a əlavə et
+        for (ComputedCol cc : computed) {
+            EntityTable<?> t1 = tableMap.getOrDefault(cc.tableAlias1(), mainTable);
+            EntityTable<?> t2 = tableMap.getOrDefault(cc.tableAlias2(), mainTable);
+            Field<?> f1 = t1.getField(cc.field1());
+            Field<?> f2 = t2.getField(cc.field2());
+            groupFieldMap.putIfAbsent(f1.getName(), f1);
+            groupFieldMap.putIfAbsent(f2.getName(), f2);
+        }
+
+        // Çox sahəli computed sütunlar (ComputedField) — alias ilə GROUP BY
+        // SQL-də computed ifadənin özünü GROUP BY-a vermək lazımdır,
+        // alias isə bir çox DB-də GROUP BY-da işləmir.
+        // Ən təhlükəsiz yol: ComputedField-in toField() nəticəsini alias-sız vermək.
+        for (ComputedField cf : computedChain) {
+            // GROUP BY-da alias deyil, ifadənin özü lazımdır
+            Field<?> expr = cf.buildExpr(mainTable, tableMap);
+            groupFieldMap.putIfAbsent("__cf_" + cf.getAlias(), expr);
+        }
+
+        SelectHavingStep<Record> grouped = conditioned.groupBy(new ArrayList<>(groupFieldMap.values()));
+
+        // HAVING = aggregate HAVING + extraHaving + rawHavings
+        Condition aggHaving = AggregateBuilder.buildHaving(aggregator.getAggFields(), mainTable);
+        Condition allHaving = (aggHaving != null && extraHaving != null) ? aggHaving.and(extraHaving)
+                            : (aggHaving  != null) ? aggHaving
+                            : extraHaving;
+
+        for (Condition rh : rawHavings) {
+            allHaving = (allHaving == null) ? rh : allHaving.and(rh);
+        }
+
+        return (allHaving != null) ? (SelectHavingStep<Record>) grouped.having(allHaving) : grouped;
+    }
+
+    private List<SortField<?>> buildAllOrderFields() {
+        List<SortField<?>> all = new ArrayList<>(orderFields);
+        if (aggregator != null) {
+            for (AggregateBuilder.AggField agg : aggregator.getAggFields()) {
+                if (agg.orderDirection() != null) {
+                    Field<?> f = DSL.field(DSL.name(agg.alias()));
+                    all.add("DESC".equalsIgnoreCase(agg.orderDirection()) ? f.desc() : f.asc());
+                }
+            }
+        }
+        return all;
+    }
+
+    private int buildCount(
+            DSLContext dsl,
+            EntityTable<T> mainTable,
+            Condition where,
+            SelectHavingStep<Record> groupedQuery) {
+
+        if (aggregator != null && !aggregator.getGroupByFields().isEmpty()) {
+            // GROUP BY varsa: COUNT(1) FROM (subquery) AS _count
+            Record1<Integer> r = dsl.selectCount()
+                    .from(groupedQuery.asTable("_count"))
+                    .fetchOne();
+            return r == null ? 0 : r.value1();
+        } else {
+            Record1<Integer> r = dsl.selectCount()
+                    .from(mainTable.getTable())
+                    .where(where != null ? where : DSL.trueCondition())
+                    .fetchOne();
+            return r == null ? 0 : r.value1();
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  Yardımcı metodlar
+    // ════════════════════════════════════════════════════════════════════
+
+    private EntityTable<T> resolveTable(String tableAndField) {
+        String alias = aliasPart(tableAndField);
+        return alias != null
+                ? new EntityTable<>(entityClass, alias)
+                : new EntityTable<>(entityClass, tableAlias);
+    }
+
+    /** "u.name" → "u"  (nöqtə yoxdursa null) */
+    private String aliasPart(String s) {
+        int dot = s.indexOf('.');
+        return dot > 0 ? s.substring(0, dot) : null;
+    }
+
+    /** "u.name" → "name" */
+    private String fieldPart(String s) {
+        int dot = s.indexOf('.');
+        return dot > 0 ? s.substring(dot + 1) : s;
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private Field<?> applyMathOp(Field<Object> f1, MathOperation op, Field<Object> f2) {
+        // mul/div Field<? extends Number> tələb edir — double cast ilə keçir
+        Field<? extends Number> numF2 = (Field<? extends Number>) (Field<?>) f2;
+        return switch (op) {
+            case ADD      -> f1.add(f2);
+            case SUBTRACT -> f1.subtract(f2);
+            case MULTIPLY -> f1.mul(numF2);
+            case DIVIDE   -> f1.div(numF2);
+            default       -> f1;
+        };
+    }
+
+    private Field<?> buildConcatField(ConcatCol cc, EntityTable<T> mainTable,
+                                       Map<String, EntityTable<?>> tableMap) {
+        List<Field<?>> parts = new ArrayList<>();
+        for (int i = 0; i < cc.fields().size(); i++) {
+            if (i > 0 && cc.separator() != null && !cc.separator().isEmpty()) {
+                parts.add(DSL.inline(cc.separator()));
+            }
+            String         f = cc.fields().get(i);
+            EntityTable<?> t = tableMap.getOrDefault(aliasPart(f), mainTable);
+            parts.add(DSL.coalesce(t.getField(fieldPart(f)), DSL.inline("")));
+        }
+        return DSL.concat(parts.toArray(new Field[0])).as(cc.alias());
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private Field<?> buildCoalesceField(CoalesceCol cc, EntityTable<T> mainTable,
+                                         Map<String, EntityTable<?>> tableMap) {
+        if (cc.fields().isEmpty())
+            throw new IllegalStateException("COALESCE: ən azı bir sahə lazımdır");
+
+        List<Field<?>> coalesceList = new ArrayList<>();
+        for (String f : cc.fields()) {
+            EntityTable<?> t = tableMap.getOrDefault(aliasPart(f), mainTable);
+            coalesceList.add(t.getField(fieldPart(f)));
+        }
+        // Son element — default dəyər
+        coalesceList.add(DSL.inline(cc.defaultValue()));
+
+        Field<?> first = coalesceList.get(0);
+        Field<?>[] rest = coalesceList.subList(1, coalesceList.size()).toArray(new Field[0]);
+        return DSL.coalesce(first, rest).as(cc.alias());
+    }
+}
