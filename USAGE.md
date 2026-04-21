@@ -353,6 +353,40 @@ JooqQuery.from(User.class, "u")
 > **Null qaydası:** `value` null və ya boş sətirdirsə həmin filter **avtomatik atlanır** —
 > əlavə `if` yazmağa ehtiyac yoxdur.
 
+### Alias prefix ilə filter
+
+`filter()` metodu sahə adının əvvəlindəki `alias.` prefiksini **avtomatik həll edir** —
+alias hansı cədvələ (main, JOIN) aiddirsə həmin `EntityTable`-dan sahə götürülür:
+
+```java
+JooqQuery.from(WarehouseFlow.class, "t")
+    .leftJoin(Product.class, "t1", "fkProductId", "id")
+
+    // Main cədvəl — alias ilə və ya onsuz, eyni nəticə:
+    .filter("status",        FilterOperations.EQUAl, "A")
+    .filter("t.status",      FilterOperations.EQUAl, "A")   // eynidir
+
+    // JOIN cədvəli — "t1" alias-ı Product EntityTable-ına yönləndirilir:
+    .filter("t1.fkProductCategoryId", FilterOperations.IN, dto.getFkProductCategoryId())
+    .filter("t1.productName",         FilterOperations.LIKE, dto.getProductName())
+
+    .execute(dsl);
+```
+
+Bu qaydalar **HAVING** üçün də eynidir — computed sütun filterlərini alias prefix ilə
+yaza bilərsən, prefix stripped olunub yalnız alias adı HAVING yoxlamasında istifadə edilir:
+
+```java
+JooqQuery.from(Order.class, "o")
+    .computedColumn(ComputedField.of("o.price").multiply("o.quantity").as("totalAmount"))
+
+    // Hər ikisi HAVING-ə düşür:
+    .filter("totalAmount",   FilterOperations.GREATER_THAN, 1000)
+    .filter("o.totalAmount", FilterOperations.GREATER_THAN, 1000)  // eynidir
+
+    .execute(dsl);
+```
+
 ---
 
 ## 8. JOIN
@@ -367,10 +401,15 @@ JooqQuery.from(User.class, "u")
     // INNER JOIN
     .innerJoin(Role.class, "r", "u.roleId", "r.id")
 
-    .filter("u.status", FilterOperations.EQUAl, "ACTIVE")
-    .filter("o.amount", FilterOperations.GREATER_THAN, 100)
+    // Hər cədvəlin filterlərini birbaşa alias ilə yaz — avtomatik həll olunur:
+    .filter("u.status",  FilterOperations.EQUAl,        "ACTIVE")
+    .filter("o.amount",  FilterOperations.GREATER_THAN,  100)
+    .filter("r.roleKey", FilterOperations.IN,            List.of("ADMIN", "MANAGER"))
     .execute(dsl);
 ```
+
+> **Köhnə ekvivalent:** `addGlobalFilter(GlobalFilter.of().equal("o.status", "A"))` —
+> bu yazılış hələ işləyir, lakin artıq `filter("o.status", EQUAl, "A")` ilə eynidir.
 
 ---
 
@@ -629,9 +668,11 @@ public class UserController {
     ) {
         SelectTable result = JooqQuery.from(User.class, "u")
             .select("u.id", "u.firstName", "u.lastName", "u.email", "u.department")
-            .filter("u.status",     FilterOperations.EQUAl, status)      // null → atlanır
-            .filter("u.firstName",  FilterOperations.LIKE,  name)         // null → atlanır
-            .filter("u.department", FilterOperations.EQUAl, department)   // null → atlanır
+            .filter("u.status",     FilterOperations.EQUAl, status)     // null → atlanır
+            .filter("u.firstName",  FilterOperations.LIKE,  name)        // null → atlanır
+            .filter("u.department", FilterOperations.EQUAl, department)  // null → atlanır
+            // JOIN cədvəlinə filter — "r." alias-ı avtomatik Role EntityTable-ına həll edilir:
+            // .filter("r.roleKey", FilterOperations.IN, roles)
             .orderBy("u.createdAt", "DESC")
             .page(page, size)
             .execute(dsl);
