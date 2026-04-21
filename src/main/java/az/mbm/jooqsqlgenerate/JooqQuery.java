@@ -71,7 +71,7 @@ public final class JooqQuery<T> {
 
     private final List<String>              columns          = new ArrayList<>();
     private final List<SelectAsRow>         selectAsRows     = new ArrayList<>();
-    private final List<ComputedField>       computedFields   = new ArrayList<>();
+    private final List<ComputedFieldEntry>  computedFields   = new ArrayList<>();
     private final List<ComputedRow>         computedCols     = new ArrayList<>();
     private final List<CoalesceRow>         coalesceCols     = new ArrayList<>();
     private final List<SubSelectBuilder>    subSelectCols    = new ArrayList<>();
@@ -110,6 +110,9 @@ public final class JooqQuery<T> {
     private record ComputedRow(String alias,
                                String ta1, String f1, MathOperation op,
                                String ta2, String f2) {}
+    private record ComputedFieldEntry(ComputedField cf,
+                                      FilterOperations filterOp,
+                                      Object filterValue) {}
     private record CoalesceRow(String alias, Object def, String[] fields) {}
     private record SubQueryInRow(List<String> outerFields, SubQueryIn sub) {}
     private record GlobalFilterEntry(String aliasAndField, FilterOperations op, Object value) {}
@@ -290,7 +293,36 @@ public final class JooqQuery<T> {
 
     /** Çox sahəli riyazi ifadə sütunu ({@link ComputedField} ilə). */
     public JooqQuery<T> computedColumn(ComputedField cf) {
-        if (cf != null) computedFields.add(cf);
+        if (cf != null) computedFields.add(new ComputedFieldEntry(cf, null, null));
+        return this;
+    }
+
+    /**
+     * Çox sahəli riyazi ifadə sütunu + həmin sütunun nəticəsinə HAVING filtri.
+     *
+     * <pre>{@code
+     *   // grandTotal > 1000
+     *   .computedColumn(
+     *       ComputedField.sumOf(
+     *           ComputedField.expr("o.price").multiply("o.qty"),
+     *           ComputedField.expr("o.tax")
+     *       ).as("grandTotal"),
+     *       FilterOperations.GREATER_THAN, 1000
+     *   )
+     *
+     *   // netAmount BETWEEN 500 AND 2000
+     *   .computedColumn(
+     *       ComputedField.of("o.amount").subtract("o.discount").as("netAmount"),
+     *       FilterOperations.BETWEEN, new Object[]{500, 2000}
+     *   )
+     * }</pre>
+     *
+     * @param cf    computed sütun ({@code .as(alias)} mütləq olmalıdır)
+     * @param op    filter əməliyyatı
+     * @param value filter dəyəri
+     */
+    public JooqQuery<T> computedColumn(ComputedField cf, FilterOperations op, Object value) {
+        if (cf != null) computedFields.add(new ComputedFieldEntry(cf, op, value));
         return this;
     }
 
@@ -768,8 +800,8 @@ public final class JooqQuery<T> {
             builder.columns(columns.toArray(new String[0]));
         for (ComputedRow cr : computedCols)
             builder.computedColumn(cr.alias(), cr.ta1(), cr.op(), cr.f1(), cr.ta2(), cr.f2());
-        for (ComputedField cf : computedFields)
-            builder.computedColumn(cf);
+        for (ComputedFieldEntry entry : computedFields)
+            builder.computedColumn(entry.cf(), entry.filterOp(), entry.filterValue());
         for (CoalesceRow cr : coalesceCols)
             builder.coalesce(cr.alias(), cr.def(), cr.fields());
         for (SubSelectBuilder sub : subSelectCols)
@@ -793,7 +825,7 @@ public final class JooqQuery<T> {
         for (AggRow ar : aggRows) aggAliases.add(ar.alias());
         Set<String> computedAliases = new HashSet<>();
         for (ComputedRow cr  : computedCols)   computedAliases.add(cr.alias());
-        for (ComputedField cf : computedFields) if (cf.getAlias() != null) computedAliases.add(cf.getAlias());
+        for (ComputedFieldEntry entry : computedFields) if (entry.cf().getAlias() != null) computedAliases.add(entry.cf().getAlias());
         boolean hasGroupBy = !groupByFields.isEmpty() || !aggRows.isEmpty();
 
         List<FilterRow> whereFilters          = new ArrayList<>();
@@ -834,7 +866,9 @@ public final class JooqQuery<T> {
         for (Condition rc : rawConditions) builder.rawCondition(rc);
         for (ExistsSpec<?, ?> es : existsSpecs) builder.where((Specification) es);
 
-        for (FilterRow fr : computedWhereFilters) { Condition c = aliasCondition(fr); if (c != null) builder.where(c); }
+        // ComputedField alias filter → globalWhereFilter vasitəsilə ifadə genişləndirilir
+        // SelectQueryBuilder.buildWhereCondition() alias-ı tanıyır, WHERE-ə expression yazır
+        for (FilterRow fr : computedWhereFilters) builder.globalWhereFilter(fr.field(), fr.op(), fr.value());
 
         // HAVING
         for (FilterRow fr : computedHavingFilters) { Condition c = aliasCondition(fr); if (c != null) builder.having(c); }
