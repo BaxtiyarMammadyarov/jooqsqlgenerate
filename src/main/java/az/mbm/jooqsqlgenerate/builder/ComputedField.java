@@ -1,8 +1,12 @@
 package az.mbm.jooqsqlgenerate.builder;
 
+import org.jooq.Condition;
 import org.jooq.Field;
+import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
+import az.mbm.jooqsqlgenerate.enums.FilterOperations;
 import az.mbm.jooqsqlgenerate.enums.MathOperation;
+import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -64,14 +68,33 @@ public class ComputedField {
         boolean isNested() { return nested != null; }
     }
 
-    private final String        firstTableAlias;
-    private final String        firstFieldName;
-    private final List<Step>    steps = new ArrayList<>();
-    private       String        alias = null;
+    /**
+     * WHERE filter şərti — {@code CASE WHEN condition THEN expr ELSE NULL END} üçün.
+     * Bir neçə {@code .where()} AND ilə birləşir.
+     */
+    private record FilterClause(String tableAlias, String fieldName,
+                                FilterOperations op, Object value) {}
 
+    private final String             firstTableAlias;
+    private final String             firstFieldName;
+    /** {@code sumOf()} üçün: ilk hissə başqa bir ComputedField ifadəsidir */
+    private final ComputedField      firstNested;
+    private final List<Step>         steps         = new ArrayList<>();
+    private final List<FilterClause> filterClauses = new ArrayList<>();
+    private       String             alias         = null;
+
+    /** Sadə sahə konstruktoru */
     private ComputedField(String tableAlias, String fieldName) {
         this.firstTableAlias = tableAlias;
         this.firstFieldName  = fieldName;
+        this.firstNested     = null;
+    }
+
+    /** sumOf() üçün: ilk element ComputedField ifadəsidir */
+    private ComputedField(ComputedField firstNested) {
+        this.firstTableAlias = null;
+        this.firstFieldName  = null;
+        this.firstNested     = firstNested;
     }
 
     // ─── Giriş nöqtəsi ───────────────────────────────────────────────────
@@ -98,6 +121,49 @@ public class ComputedField {
      */
     public static ComputedField expr(String tableAliasAndField) {
         return of(tableAliasAndField);   // alias olmadan da işləyir — toField() yoxlayır
+    }
+
+    /**
+     * Bir neçə hissəni toplayır — hər hissənin öz riyazi əməliyyatı ola bilər.
+     *
+     * <p>Hər part üçün {@link #expr(String)} istifadə edin. Nəticə:
+     * {@code part1 + part2 + part3 + ...}
+     *
+     * <pre>{@code
+     *   // (price * qty) + tax + (shipping - discount) AS grandTotal
+     *   ComputedField.sumOf(
+     *       ComputedField.expr("o.price").multiply("o.qty"),
+     *       ComputedField.expr("o.tax"),
+     *       ComputedField.expr("o.shipping").subtract("o.discount")
+     *   ).as("grandTotal")
+     *
+     *   // (width * height) + (depth * height) + baseArea AS totalSurface
+     *   ComputedField.sumOf(
+     *       ComputedField.expr("p.width").multiply("p.height"),
+     *       ComputedField.expr("p.depth").multiply("p.height"),
+     *       ComputedField.expr("p.baseArea")
+     *   ).as("totalSurface")
+     *
+     *   // WHERE filter ilə birlikdə
+     *   ComputedField.sumOf(
+     *       ComputedField.expr("o.price").multiply("o.qty"),
+     *       ComputedField.expr("o.tax")
+     *   )
+     *   .where("o.status", FilterOperations.EQUAl, "ACTIVE")
+     *   .as("activeTotal")
+     * }</pre>
+     *
+     * @param first   birinci hissə (ən azı bir tələb olunur)
+     * @param rest    qalan hissələr (sıfır və ya daha çox)
+     */
+    public static ComputedField sumOf(ComputedField first, ComputedField... rest) {
+        Objects.requireNonNull(first, "sumOf: birinci hissə null ola bilməz");
+        ComputedField cf = new ComputedField(first);
+        for (ComputedField part : rest) {
+            Objects.requireNonNull(part, "sumOf: hissə null ola bilməz");
+            cf.steps.add(Step.nested(MathOperation.ADD, part));
+        }
+        return cf;
     }
 
     // ─── Əməliyyat zənciri — sadə sahə ──────────────────────────────────
@@ -183,6 +249,38 @@ public class ComputedField {
         return this;
     }
 
+    // ─── WHERE filter (group funksiyasız CASE WHEN) ──────────────────────
+
+    /**
+     * Riyazi ifadəyə şərt əlavə edir — group funksiyası olmadan.
+     *
+     * <p>Nəticə SQL-də belə görünür:
+     * <pre>{@code CASE WHEN condition THEN (expr) ELSE NULL END AS alias }</pre>
+     *
+     * <p>Bir neçə {@code .where()} AND ilə birləşir:
+     * <pre>{@code
+     *   // CASE WHEN o.status = 'PAID' AND o.type = 'SALE'
+     *   //      THEN (o.price - o.discount)
+     *   //      ELSE NULL END AS paidNet
+     *   ComputedField.of("o.price")
+     *       .subtract("o.discount")
+     *       .where("o.status", FilterOperations.EQUAl, "PAID")
+     *       .where("o.type",   FilterOperations.EQUAl, "SALE")
+     *       .as("paidNet")
+     * }</pre>
+     *
+     * @param tableAliasAndField  "alias.field" formatında sahə
+     * @param op                  müqayisə əməliyyatı
+     * @param value               filter dəyəri
+     */
+    public ComputedField where(String tableAliasAndField,
+                               FilterOperations op,
+                               Object value) {
+        String[] parts = split(tableAliasAndField);
+        filterClauses.add(new FilterClause(parts[0], parts[1], op, value));
+        return this;
+    }
+
     // ─── Alias ───────────────────────────────────────────────────────────
 
     /**
@@ -219,9 +317,14 @@ public class ComputedField {
     @SuppressWarnings({"unchecked", "rawtypes"})
     Field<Object> buildExpr(EntityTable<?> mainTable,
                             java.util.Map<String, EntityTable<?>> tableMap) {
-        // Birinci sahə
-        EntityTable<?> t0 = resolve(firstTableAlias, mainTable, tableMap);
-        Field<Object> result = (Field<Object>) t0.getField(firstFieldName);
+        // Birinci element: ya sadə sahə, ya da sumOf()-dan gələn nested ifadə
+        Field<Object> result;
+        if (firstNested != null) {
+            result = firstNested.buildExpr(mainTable, tableMap);
+        } else {
+            EntityTable<?> t0 = resolve(firstTableAlias, mainTable, tableMap);
+            result = (Field<Object>) t0.getField(firstFieldName);
+        }
 
         // Zəncir əməliyyatlar
         for (Step s : steps) {
@@ -245,6 +348,19 @@ public class ComputedField {
                 case DIVIDE   -> result.div(numOperand);
                 default       -> result;
             };
+        }
+
+        // ─── WHERE filter varsa → CASE WHEN cond THEN result ELSE NULL END ──
+        if (!filterClauses.isEmpty()) {
+            Condition cond = null;
+            for (FilterClause fc : filterClauses) {
+                EntityTable<?> ft = resolve(fc.tableAlias(), mainTable, tableMap);
+                @SuppressWarnings("unchecked")
+                Field<Object> ff = (Field<Object>) ft.getField(fc.fieldName());
+                Condition c = FilterStrategies.get(fc.op()).apply(ff, fc.value());
+                cond = (cond == null) ? c : cond.and(c);
+            }
+            result = (Field<Object>) DSL.when(cond, result).otherwise(DSL.castNull(Object.class));
         }
 
         return result;
