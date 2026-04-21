@@ -44,3 +44,6 @@ bin/
 .idea/.name
 .idea/gradle.xml
 /.idea
+
+### Secrets ###
+gradle.properties
