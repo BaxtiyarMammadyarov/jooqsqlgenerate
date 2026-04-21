@@ -233,6 +233,25 @@ public class JooqManager {
         return this;
     }
 
+    /**
+     * SELECT sütununa özəlləşdirilmiş çıxış alias verir — entity mode üçün.
+     *
+     * <pre>{@code
+     *   jooq.setMainTable(Warehouse.class, "t")
+     *       .addSelectAs("t1.fkProductId", "productId")
+     *       .addSelectAs("t.operationDate", "date")
+     *       .addLeftJoin(Product.class, "t1", "fkProductId", "id")
+     *       .execute();
+     * }</pre>
+     *
+     * @param aliasAndField sütun: {@code "tableAlias.javaFieldName"} formatında
+     * @param outputAlias   SQL alias-ı (nəticədə bu ad görünür)
+     */
+    public JooqManager addSelectAs(String aliasAndField, String outputAlias) {
+        q().selectAs(aliasAndField, outputAlias);
+        return this;
+    }
+
     /** SELECT DISTINCT */
     public JooqManager setDistinct() {
         q().distinct();
