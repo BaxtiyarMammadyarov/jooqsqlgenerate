@@ -139,6 +139,21 @@ public JooqQuery<T> select(String... cols) {
 - Entity mode → `SelectQueryBuilder` + `EntityTable` ilə sorğu qurulur
 - Generated mode → `executeGenerated()` ilə birbaşa jOOQ DSL işlənir
 
+**Entity mode-da `filter()` — alias həlli:**
+
+`filter("alias.field", op, value)` çağrılanda field adı içindəki nöqtəyə görə
+otomatik yönləndirilir:
+
+```
+"t1.status"   →  alias="t1" → tableMap["t1"] (Product EntityTable) → status sütunu
+"t.fkUnitId"  →  alias="t"  → tableMap["t"]  (main EntityTable)    → fk_unit_id sütunu
+"status"      →  alias yox  → main EntityTable                      → status sütunu
+```
+
+Bu qaydalar həm **WHERE**, həm də **HAVING** üçün eyni cür işləyir — computed sütun
+filterlərində alias prefix yazılsa belə (`"t.averageCost"`), yalnız field hissəsi
+(`"averageCost"`) HAVING yoxlamasında istifadə olunur.
+
 ---
 
 ### 2. `JooqManager` — Spring Wrapper
@@ -347,11 +362,15 @@ hər parametri ayrıca `if` ilə yoxlamağa məcbur deyilsən:
 ```java
 // status=null, name="Ali" gəldi — yalnız name filter işləyəcək
 Specification filter = Filter.of()
-    .eq("u.status", status)    // null → bu sətir tamamilə atlanır
-    .like("u.name", name)      // "Ali" → WHERE u.name LIKE '%Ali%'
-    .in("u.roleId", roleIds)   // boş list → atlanır
+    .eq("status", status)    // null → bu sətir tamamilə atlanır
+    .like("name", name)      // "Ali" → WHERE u.name LIKE '%Ali%'
+    .in("roleId", roleIds)   // boş list → atlanır
     .build();
 ```
+
+> **Qeyd:** `Filter` sinfi yalnız main table üçündür. JOIN cədvəlinin sahələrini filtreləmək
+> üçün `filter("alias.field", op, value)` metodunu birbaşa `JooqQuery` / `JooqManager`
+> üzərindən çağır — alias həlli avtomatik aparılır.
 
 ---
 
@@ -693,3 +712,5 @@ JooqQuery.from(User.class, "u")
 | String `"equal"` yazı xətası riski | `FilterOperationConstants` + `FilterOperations` enum |
 | Sorğu üzərindən sorğu | `SelectTable.asTable()` + `JooqQuery.from(SelectTable, alias)` |
 | Tip-təhlükəsiz sorğular | Generated mode — `USERS.FIRST_NAME`, compile zamanı yoxlanılır |
+| JOIN cədvəlinə filter yazmaq | `filter("t1.field", op, value)` — alias avtomatik həll edilir |
+| HAVING-də alias prefix | `filter("t.computedAlias", op, value)` — prefix stripped, HAVING-ə düşür |
