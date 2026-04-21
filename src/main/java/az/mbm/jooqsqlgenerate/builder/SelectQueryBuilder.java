@@ -58,6 +58,7 @@ public class SelectQueryBuilder<T> {
 
     // ─── SELECT sahələri ──────────────────────────────────────────────────
     private final List<String>            columns        = new ArrayList<>();
+    private final List<SelectAsCol>       selectAsCols   = new ArrayList<>();
     private final List<ComputedCol>       computed       = new ArrayList<>();
     private final List<ComputedField>     computedChain  = new ArrayList<>();
     private final List<CaseBuilder<T>>    caseCols       = new ArrayList<>();
@@ -107,6 +108,9 @@ public class SelectQueryBuilder<T> {
     // ════════════════════════════════════════════════════════════════════
     //  Daxili record-lar
     // ════════════════════════════════════════════════════════════════════
+
+    /** SELECT sütununa özelleştirilmiş alias: "t1.fieldName" AS "outputAlias" */
+    private record SelectAsCol(String aliasAndField, String outputAlias) {}
 
     /** Riyazi əməliyyatla hesablanmış SELECT sütunu */
     private record ComputedCol(
@@ -176,6 +180,27 @@ public class SelectQueryBuilder<T> {
     /** Bütün sahələri seç (SELECT *) — default davranış */
     public SelectQueryBuilder<T> selectAll() {
         columns.clear();
+        return this;
+    }
+
+    /**
+     * SELECT sütununa özəlləşdirilmiş çıxış alias verir.
+     *
+     * <p>Format: {@code "tableAlias.fieldName"} → SQL-də {@code tableAlias.column_name AS outputAlias}
+     *
+     * <pre>{@code
+     *   .selectAs("t1.fkProductId", "productId")
+     *   .selectAs("t.operationDate", "date")
+     *   .selectAs("o.totalAmount",   "amount")
+     * }</pre>
+     *
+     * @param aliasAndField sütun: {@code "tableAlias.javaFieldName"} formatında
+     * @param outputAlias   SQL alias-ı (nəticədə bu ad görünür)
+     */
+    public SelectQueryBuilder<T> selectAs(String aliasAndField, String outputAlias) {
+        if (aliasAndField != null && !aliasAndField.isBlank()
+                && outputAlias != null && !outputAlias.isBlank())
+            selectAsCols.add(new SelectAsCol(aliasAndField, outputAlias));
         return this;
     }
 
@@ -671,9 +696,10 @@ public class SelectQueryBuilder<T> {
             EntityTable<T> mainTable,
             Map<String, EntityTable<?>> tableMap) {
 
-        boolean hasCustomFields = !columns.isEmpty() || !computed.isEmpty()
-                || !computedChain.isEmpty() || !caseCols.isEmpty() || !concatCols.isEmpty()
-                || !coalesceCols.isEmpty() || !subSelectCols.isEmpty() || !rawSelectFields.isEmpty()
+        boolean hasCustomFields = !columns.isEmpty() || !selectAsCols.isEmpty()
+                || !computed.isEmpty() || !computedChain.isEmpty() || !caseCols.isEmpty()
+                || !concatCols.isEmpty() || !coalesceCols.isEmpty() || !subSelectCols.isEmpty()
+                || !rawSelectFields.isEmpty()
                 || (aggregator != null && !aggregator.getAggFields().isEmpty());
 
         if (!hasCustomFields) return List.of(DSL.asterisk());
@@ -684,6 +710,12 @@ public class SelectQueryBuilder<T> {
         for (String col : columns) {
             EntityTable<?> t = tableMap.getOrDefault(aliasPart(col), mainTable);
             fields.add(t.getField(fieldPart(col)));
+        }
+
+        // Özəl alias verilmiş sütunlar: "t1.fieldName" AS "outputAlias"
+        for (SelectAsCol sa : selectAsCols) {
+            EntityTable<?> t = tableMap.getOrDefault(aliasPart(sa.aliasAndField()), mainTable);
+            fields.add(t.getField(fieldPart(sa.aliasAndField())).as(sa.outputAlias()));
         }
 
         // GROUP BY sütunlar
