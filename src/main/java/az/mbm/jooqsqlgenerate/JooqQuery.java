@@ -775,17 +775,29 @@ public final class JooqQuery<T> {
         List<FilterRow> computedHavingFilters = new ArrayList<>();
 
         for (FilterRow fr : filters) {
-            if (aggAliases.contains(fr.field()))
-                havingMap.put(fr.field(), fr);
-            else if (computedAliases.contains(fr.field()))
-                (hasGroupBy ? computedHavingFilters : computedWhereFilters).add(fr);
+            // Alias prefix varsa ("t1.status") yalnız sahə adı ilə yoxla
+            String fieldKey = fieldPart(fr.field());
+            if (aggAliases.contains(fieldKey))
+                havingMap.put(fieldKey, new FilterRow(fieldKey, fr.op(), fr.value()));
+            else if (computedAliases.contains(fieldKey))
+                (hasGroupBy ? computedHavingFilters : computedWhereFilters)
+                        .add(new FilterRow(fieldKey, fr.op(), fr.value()));
             else
-                whereFilters.add(fr);
+                whereFilters.add(fr); // alias ilə saxlanılır → aşağıda həll edilir
         }
 
         if (!whereFilters.isEmpty()) {
             Filter filter = Filter.of();
-            for (FilterRow fr : whereFilters) applyFilter(filter, fr);
+            for (FilterRow fr : whereFilters) {
+                if (fr.field().contains(".")) {
+                    // Aliased sahə ("t1.status", "t.fkProductId") →
+                    // globalWhereFilter alias-ı həll edir (t1 → Product EntityTable)
+                    builder.globalWhereFilter(fr.field(), fr.op(), fr.value());
+                } else {
+                    // Alias yoxdur → main table üzərindən Filter (köhnə davranış)
+                    applyFilter(filter, fr);
+                }
+            }
             Specification spec = filter.build();
             if (spec != null) builder.where(spec);
         }
