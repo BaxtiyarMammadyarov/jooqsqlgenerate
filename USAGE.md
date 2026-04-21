@@ -590,6 +590,168 @@ JooqQuery.from(Order.class, "o")
     .execute(dsl);
 ```
 
+### 16.1. Bir Neçə Hissəni Toplama — `sumOf()`
+
+Hər hissənin öz riyazi əməliyyatı ola bilər (vurma, bölmə, çıxma):
+
+```java
+// (price * qty) + tax + (shipping - discount) AS grandTotal
+JooqQuery.from(Order.class, "o")
+    .computedColumn(
+        ComputedField.sumOf(
+            ComputedField.expr("o.price").multiply("o.qty"),
+            ComputedField.expr("o.tax"),
+            ComputedField.expr("o.shipping").subtract("o.discount")
+        ).as("grandTotal")
+    )
+    .execute(dsl);
+
+// Daha mürəkkəb nümunə: (width * height) + (depth * height) + baseArea
+JooqQuery.from(Product.class, "p")
+    .computedColumn(
+        ComputedField.sumOf(
+            ComputedField.expr("p.width").multiply("p.height"),
+            ComputedField.expr("p.depth").multiply("p.height"),
+            ComputedField.expr("p.baseArea")
+        ).as("totalSurface")
+    )
+    .execute(dsl);
+
+// WHERE filter ilə birlikdə
+JooqQuery.from(Order.class, "o")
+    .computedColumn(
+        ComputedField.sumOf(
+            ComputedField.expr("o.price").multiply("o.qty"),
+            ComputedField.expr("o.tax")
+        )
+        .where("o.status", FilterOperations.EQUAl, "ACTIVE")
+        .as("activeTotal")
+    )
+    .execute(dsl);
+```
+
+---
+
+### 16.2. Computed Sütunun Nəticəsinə Filter
+
+Hesablanmış sütunun nəticəsini filterlə — `computedColumn()` üçüncü arqument kimi:
+
+```java
+// grandTotal > 1000
+JooqQuery.from(Order.class, "o")
+    .computedColumn(
+        ComputedField.sumOf(
+            ComputedField.expr("o.price").multiply("o.qty"),
+            ComputedField.expr("o.tax"),
+            ComputedField.expr("o.shipping").subtract("o.discount")
+        ).as("grandTotal"),
+        FilterOperations.GREATER_THAN, 1000
+    )
+    .execute(dsl);
+
+// netAmount BETWEEN 500 AND 2000
+JooqQuery.from(Order.class, "o")
+    .computedColumn(
+        ComputedField.of("o.amount").subtract("o.discount").as("netAmount"),
+        FilterOperations.BETWEEN, new Object[]{500, 2000}
+    )
+    .execute(dsl);
+
+// Bir neçə computed sütun — hər birinin öz filteri
+JooqQuery.from(Order.class, "o")
+    .computedColumn(
+        ComputedField.sumOf(
+            ComputedField.expr("o.price").multiply("o.qty"),
+            ComputedField.expr("o.bonus")
+        ).as("totalRevenue"),
+        FilterOperations.GREATER_THAN_OR_EQUAL_TO, 5000
+    )
+    .computedColumn(
+        ComputedField.of("o.cost").divide("o.qty").as("unitCost"),
+        FilterOperations.LESS_THAN, 100
+    )
+    .execute(dsl);
+```
+
+> **Qeyd:** Bu filter `HAVING` kimi işləyir — `WHERE` ilə qarışmır.
+
+### 16.3. `globalWhereFilter` / `.filter()` ilə Computed Alias Filter
+
+`globalWhereFilter` və ya `.filter()` metodu bir computed sütunun alias-ını aldıqda sistem
+həmin ifadəni taparaq `WHERE`-ə **genişləndirilmiş** formada yazır:
+
+```java
+// Daxili SQL:
+// WHERE (o.price * o.qty) + o.tax > 1000   ← alias deyil, ifadənin özü
+JooqQuery.from(Order.class, "o")
+    .computedColumn(
+        ComputedField.sumOf(
+            ComputedField.expr("o.price").multiply("o.qty"),
+            ComputedField.expr("o.tax")
+        ).as("grandTotal")
+    )
+    .filter("grandTotal", FilterOperations.GREATER_THAN, 1000)
+    .execute(dsl);
+
+// globalWhereFilter ilə eyni nəticə:
+JooqQuery.from(Order.class, "o")
+    .computedColumn(
+        ComputedField.of("o.amount").subtract("o.discount").as("netAmount")
+    )
+    .globalWhereFilter("netAmount", FilterOperations.GREATER_THAN_OR_EQUAL_TO, 500)
+    .execute(dsl);
+```
+
+> **Fərq:** `computedColumn(..., op, value)` → `HAVING`;
+> `.filter("alias", op, value)` → `WHERE` (ifadə genişləndirilir).
+
+---
+
+### 16.3. WHERE Filteri ilə Hesablama Sütunu (group funksiyasız)
+
+Riyazi ifadəyə şərt əlavə etmək üçün `.where()` istifadə edin.
+Şərt ödənilmədikdə nəticə `NULL` qaytarır:
+
+```sql
+-- SQL nəticəsi:
+-- CASE WHEN o.status = 'PAID' THEN (o.price - o.discount) ELSE NULL END AS paidNet
+```
+
+```java
+// Tək şərt
+JooqQuery.from(Order.class, "o")
+    .computedColumn(
+        ComputedField.of("o.price")
+            .subtract("o.discount")
+            .where("o.status", FilterOperations.EQUAl, "PAID")
+            .as("paidNet")
+    )
+    .execute(dsl);
+
+// Bir neçə şərt — AND ilə birləşir
+JooqQuery.from(Order.class, "o")
+    .computedColumn(
+        ComputedField.of("o.price")
+            .subtract("o.discount")
+            .where("o.status", FilterOperations.EQUAl,    "PAID")
+            .where("o.type",   FilterOperations.EQUAl,    "SALE")
+            .where("o.amount", FilterOperations.GREATER_THAN, 0)
+            .as("paidSaleNet")
+    )
+    .execute(dsl);
+
+// Çox sahəli ifadə + WHERE filter
+JooqQuery.from(Order.class, "o")
+    .computedColumn(
+        ComputedField.of("o.price")
+            .multiply("o.quantity")
+            .subtract(ComputedField.expr("o.discount").multiply("o.quantity"))
+            .where("o.status", FilterOperations.EQUAl, "ACTIVE")
+            .as("activeLineTotal")
+    )
+    .execute(dsl);
+```
+
 ---
 
 ## 17. Derived Table — Sorğu Üzərindən Sorğu
