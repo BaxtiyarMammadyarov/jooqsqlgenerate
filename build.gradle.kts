@@ -1,18 +1,20 @@
 plugins {
     `java-library`
     `maven-publish`
+    signing
+    id("io.github.gradle-nexus.publish-plugin") version "2.0.0"
 }
 
 // ─── Layihə məlumatları ───────────────────────────────────────────────────────
 group   = "az.mbm"
-version = "1.0.0"
+version = "1.0.1"
 
 // ─── Java versiyası ───────────────────────────────────────────────────────────
 java {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
-    withSourcesJar()   // *-sources.jar
-    withJavadocJar()   // *-javadoc.jar
+    withSourcesJar()
+    withJavadocJar()
 }
 
 tasks.withType<JavaCompile> {
@@ -25,39 +27,37 @@ repositories {
 }
 
 // ─── Asılılıqlar ──────────────────────────────────────────────────────────────
-// "compileOnly" = compile zamanı lazımdır, amma JAR-a daxil edilmir.
-// İstifadəçinin Spring Boot layihəsi bu asılılıqları özü gətirir.
 val springBootVersion = "3.2.5"
 val jooqVersion       = "3.18.6"
 val jakartaVersion    = "3.1.0"
 
 dependencies {
-
-    // jOOQ (DSLContext, Field, Condition, ...)
     compileOnly("org.springframework.boot:spring-boot-starter-jooq:$springBootVersion")
     compileOnly("org.jooq:jooq:$jooqVersion")
-
-    // JPA annotasiyaları (@Table, @Column) — EntityTable üçün
     compileOnly("jakarta.persistence:jakarta.persistence-api:$jakartaVersion")
-
-    // Spring context (isteğe bağlı — QueryFactory @Bean üçün)
     compileOnly("org.springframework:spring-context:6.1.6")
 
-    // ─── Test ────────────────────────────────────────────────────────────────
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-// ─── GitHub istifadəçi adı və token ──────────────────────────────────────────
-// ~/.gradle/gradle.properties faylında təyin edilməlidir:
-//   githubUsername=sənin_github_adın
-//   githubToken=ghp_xxxxxxxxxxxxxxxxxxxx
-val githubUsername: String = project.findProperty("githubUsername") as String? ?: ""
-val githubToken:    String = project.findProperty("githubToken")    as String? ?: ""
+// ─── Credentials ─────────────────────────────────────────────────────────────
+val sonatypeUsername: String = project.findProperty("sonatypeUsername") as String? ?: ""
+val sonatypePassword: String = project.findProperty("sonatypePassword") as String? ?: ""
+
+// ─── İmzalama ─────────────────────────────────────────────────────────────────
+val signingPassword: String? = project.findProperty("signingPassword") as String?
+val signingKeyFile = file("${System.getProperty("user.home")}/.gradle/secret.pgp")
+
+signing {
+    useInMemoryPgpKeys(
+        if (signingKeyFile.exists()) signingKeyFile.readText() else null,
+        signingPassword
+    )
+    sign(publishing.publications)
+}
 
 // ─── Yayımlama konfiqurasiyası ────────────────────────────────────────────────
-// Lokal:         ./gradlew publishToMavenLocal
-// GitHub Packages: ./gradlew publishMavenJavaPublicationToGitHubPackagesRepository
 publishing {
     publications {
         create<MavenPublication>("mavenJava") {
@@ -65,7 +65,7 @@ publishing {
 
             groupId    = "az.mbm"
             artifactId = "jooq-sql-generate"
-            version    = "1.0.0"
+            version    = "1.0.1"
 
             pom {
                 name        = "jooq-sql-generate"
@@ -79,7 +79,20 @@ publishing {
                     }
                 }
 
-                // Asılılıqların scope-unu POM-da da "provided" kimi işarələ
+                developers {
+                    developer {
+                        id    = "BaxtiyarMammadyarov"
+                        name  = "Baxtiyar Mammadyarov"
+                        email = "baxtiyar.mammadyarov@gmail.com"
+                    }
+                }
+
+                scm {
+                    connection          = "scm:git:git://github.com/BaxtiyarMammadyarov/jooqsqlgenerate.git"
+                    developerConnection = "scm:git:ssh://github.com/BaxtiyarMammadyarov/jooqsqlgenerate.git"
+                    url                 = "https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate"
+                }
+
                 withXml {
                     val deps = asNode().get("dependencies") as groovy.util.NodeList
                     if (deps.isNotEmpty()) {
@@ -95,20 +108,16 @@ publishing {
             }
         }
     }
+}
 
+// ─── Maven Central (yeni portal) ─────────────────────────────────────────────
+nexusPublishing {
     repositories {
-        // Lokal Maven (~/.m2)
-        mavenLocal()
-
-        // GitHub Packages
-        // OWNER = GitHub istifadəçi adın və ya təşkilat adın
-        maven {
-            name = "GitHubPackages"
-            url  = uri("https://maven.pkg.github.com/BaxtiyarMammadyarov/jooqsqlgenerate")
-            credentials {
-                username = githubUsername
-                password = githubToken
-            }
+        sonatype {
+            nexusUrl.set(uri("https://ossrh-staging-api.central.sonatype.com/service/local/"))
+            snapshotRepositoryUrl.set(uri("https://central.sonatype.com/repository/maven-snapshots/"))
+            username = sonatypeUsername
+            password = sonatypePassword
         }
     }
 }
