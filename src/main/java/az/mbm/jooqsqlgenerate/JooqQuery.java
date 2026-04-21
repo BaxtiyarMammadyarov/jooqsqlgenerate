@@ -70,6 +70,7 @@ public final class JooqQuery<T> {
     private final List<RawJoinRow>          rawJoins         = new ArrayList<>();
 
     private final List<String>              columns          = new ArrayList<>();
+    private final List<SelectAsRow>         selectAsRows     = new ArrayList<>();
     private final List<ComputedField>       computedFields   = new ArrayList<>();
     private final List<ComputedRow>         computedCols     = new ArrayList<>();
     private final List<CoalesceRow>         coalesceCols     = new ArrayList<>();
@@ -97,6 +98,7 @@ public final class JooqQuery<T> {
 
     // ─── Daxili record-lar ───────────────────────────────────────────────
     private record FilterRow(String field, FilterOperations op, Object value) {}
+    private record SelectAsRow(String aliasAndField, String outputAlias) {}
     private record JoinRow(String type, Class<?> entity, String alias,
                            String fromField, String toField) {}
     private record AggRow(GroupFunction fn, String field, String alias, Integer round,
@@ -308,6 +310,29 @@ public final class JooqQuery<T> {
     /** SELECT siyahısına birbaşa jOOQ {@link Field}. */
     public JooqQuery<T> rawSelect(Field<?> field) {
         if (field != null) rawSelectFields.add(field);
+        return this;
+    }
+
+    /**
+     * SELECT sütununa özəlləşdirilmiş çıxış alias verir — entity mode üçün.
+     *
+     * <p>Format: {@code "tableAlias.javaFieldName"} → SQL-də {@code col_name AS outputAlias}
+     *
+     * <pre>{@code
+     *   JooqQuery.from(Warehouse.class, "t")
+     *       .selectAs("t1.fkProductId", "productId")
+     *       .selectAs("t.operationDate", "date")
+     *       .leftJoin(Product.class, "t1", "fkProductId", "id")
+     *       .execute(dsl);
+     * }</pre>
+     *
+     * @param aliasAndField sütun: {@code "tableAlias.javaFieldName"} formatında
+     * @param outputAlias   SQL alias-ı (nəticədə bu ad görünür)
+     */
+    public JooqQuery<T> selectAs(String aliasAndField, String outputAlias) {
+        if (aliasAndField != null && !aliasAndField.isBlank()
+                && outputAlias != null && !outputAlias.isBlank())
+            selectAsRows.add(new SelectAsRow(aliasAndField, outputAlias));
         return this;
     }
 
@@ -751,6 +776,8 @@ public final class JooqQuery<T> {
             builder.subSelect(sub);
         for (Field<?> rf : rawSelectFields)
             builder.rawSelectField(rf);
+        for (SelectAsRow sa : selectAsRows)
+            builder.selectAs(sa.aliasAndField(), sa.outputAlias());
         if (distinct) builder.distinct();
 
         // JOIN
