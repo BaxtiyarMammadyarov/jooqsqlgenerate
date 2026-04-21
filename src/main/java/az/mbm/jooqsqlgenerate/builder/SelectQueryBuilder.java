@@ -8,6 +8,7 @@ import az.mbm.jooqsqlgenerate.core.SelectTable;
 import az.mbm.jooqsqlgenerate.enums.FilterOperations;
 import az.mbm.jooqsqlgenerate.enums.MathOperation;
 import az.mbm.jooqsqlgenerate.spec.Specification;
+import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 
 import java.util.*;
 
@@ -232,6 +233,56 @@ public class SelectQueryBuilder<T> {
      */
     public SelectQueryBuilder<T> computedColumn(ComputedField cf) {
         if (cf != null) computedChain.add(cf);
+        return this;
+    }
+
+    /**
+     * Riyazi əməliyyatla hesablanmış sütun + həmin sütuna HAVING filtri.
+     *
+     * <p>Sorğu icra ediləndə nəticə sətirləri yalnız filtri keçənlər qaytarılır.
+     * Əsas cədvəl WHERE-i ilə qarışmır — computed alias üzərindən HAVING işləyir.
+     *
+     * <pre>{@code
+     *   // grandTotal > 1000
+     *   .computedColumn(
+     *       ComputedField.sumOf(
+     *           ComputedField.expr("o.price").multiply("o.qty"),
+     *           ComputedField.expr("o.tax")
+     *       ).as("grandTotal"),
+     *       FilterOperations.GREATER_THAN, 1000
+     *   )
+     *
+     *   // netAmount BETWEEN 500 AND 2000
+     *   .computedColumn(
+     *       ComputedField.of("o.amount").subtract("o.discount").as("netAmount"),
+     *       FilterOperations.BETWEEN, new Object[]{500, 2000}
+     *   )
+     *
+     *   // marginPct >= 15  (çox hissəli ifadə + filter)
+     *   .computedColumn(
+     *       ComputedField.sumOf(
+     *           ComputedField.expr("o.price").multiply("o.qty"),
+     *           ComputedField.expr("o.bonus")
+     *       ).as("totalRevenue"),
+     *       FilterOperations.GREATER_THAN_OR_EQUAL_TO, 5000
+     *   )
+     * }</pre>
+     *
+     * @param cf    computed sütun ({@code .as(alias)} mütləq olmalıdır)
+     * @param op    filter əməliyyatı
+     * @param value filter dəyəri
+     */
+    @SuppressWarnings("unchecked")
+    public SelectQueryBuilder<T> computedColumn(ComputedField cf,
+                                                FilterOperations op,
+                                                Object value) {
+        if (cf == null) return this;
+        computedChain.add(cf);
+        if (op != null && value != null) {
+            Field<Object> aliasField = (Field<Object>) DSL.field(DSL.name(cf.getAlias()));
+            Condition c = FilterStrategies.get(op).apply(aliasField, value);
+            rawHavings.add(c);
+        }
         return this;
     }
 
@@ -819,22 +870,44 @@ public class SelectQueryBuilder<T> {
         }
 
         // Global filter — alias.field → tableMap-dən resolve edilir
+        // Xüsusi hal: filter sahəsi bir ComputedField alias-ına uyğun gəlirsə,
+        // ifadənin özü WHERE-ə genişləndirilir (HAVING deyil).
         for (GlobalFilterEntry gf : globalFilterEntries) {
             int dot = gf.aliasAndField().indexOf('.');
-            EntityTable<?> t;
-            String fieldName;
-            if (dot > 0) {
-                String alias = gf.aliasAndField().substring(0, dot);
-                fieldName    = gf.aliasAndField().substring(dot + 1);
-                t = tableMap.getOrDefault(alias, mainTable);
+            String plainName = (dot > 0)
+                    ? gf.aliasAndField().substring(dot + 1)
+                    : gf.aliasAndField();
+
+            // ComputedField alias uyğunluğunu yoxla
+            ComputedField matchedCf = computedChain.stream()
+                    .filter(cf -> plainName.equals(cf.getAlias()))
+                    .findFirst()
+                    .orElse(null);
+
+            Condition c;
+            if (matchedCf != null) {
+                // Computed ifadəni birbaşa WHERE-ə genişləndir:
+                // məs. globalWhereFilter("grandTotal", GT, 1000)
+                // → WHERE (price * qty) + tax > 1000
+                @SuppressWarnings("unchecked")
+                Field<Object> expr = (Field<Object>) matchedCf.buildExpr(mainTable, tableMap);
+                c = FilterStrategies.get(gf.op()).apply(expr, gf.value());
             } else {
-                fieldName = gf.aliasAndField();
-                t = mainTable;
+                // Adi sahə — cədvəldən resolve et
+                EntityTable<?> t;
+                String fieldName;
+                if (dot > 0) {
+                    String alias = gf.aliasAndField().substring(0, dot);
+                    fieldName    = plainName;
+                    t = tableMap.getOrDefault(alias, mainTable);
+                } else {
+                    fieldName = plainName;
+                    t = mainTable;
+                }
+                @SuppressWarnings("unchecked")
+                Field<Object> f = (Field<Object>) t.getField(fieldName);
+                c = FilterStrategies.get(gf.op()).apply(f, gf.value());
             }
-            @SuppressWarnings("unchecked")
-            Field<Object> f = (Field<Object>) t.getField(fieldName);
-            Condition c = az.mbm.jooqsqlgenerate.strategy.FilterStrategies
-                    .get(gf.op()).apply(f, gf.value());
             cond = (cond == null) ? c : cond.and(c);
         }
 
