@@ -22,6 +22,12 @@ public enum Op {
     NOT_REGEXP("notRegexp"),
     REGEXP("regexp"),
 
+    // ─── Türk əlifbası case-insensitive LIKE ─────────────────────────────
+    // LOWER(REPLACE(REPLACE(field,'İ','i'),'I','i')) LIKE '%value%'
+    LIKE_IGNORE_CASE("likeIgnoreCase"),
+    START_WITH_IGNORE_CASE("startWithIgnoreCase"),
+    END_WITH_IGNORE_CASE("endWithIgnoreCase"),
+
     // ─── ROUND müqayisə əməliyyatları (WHERE ROUND(field, scale) OP value) ──
     // Scale 0 — tam ədədə yuvarlama (ROUND(0.4,0)=0  ROUND(0.6,0)=1)
     EQUAL_ROUND_0("equalRound0"),
