@@ -9,14 +9,16 @@ import az.mbm.jooqsqlgenerate.builder.ComputedField;
 import az.mbm.jooqsqlgenerate.builder.SelectQueryBuilder;
 import az.mbm.jooqsqlgenerate.builder.SubQueryIn;
 import az.mbm.jooqsqlgenerate.builder.SubSelectBuilder;
+import az.mbm.jooqsqlgenerate.core.EntityTable;
 import az.mbm.jooqsqlgenerate.core.SelectFetchJooq;
 import az.mbm.jooqsqlgenerate.core.SelectTable;
-import az.mbm.jooqsqlgenerate.enums.FilterOperations;
-import az.mbm.jooqsqlgenerate.enums.GroupFunction;
+import az.mbm.jooqsqlgenerate.enums.Op;
+import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
+import az.mbm.jooqsqlgenerate.enums.Agg;
 import az.mbm.jooqsqlgenerate.enums.MathOperation;
 import az.mbm.jooqsqlgenerate.spec.ExistsSpec;
 import az.mbm.jooqsqlgenerate.spec.Filter;
-import az.mbm.jooqsqlgenerate.spec.GlobalFilter;
+import az.mbm.jooqsqlgenerate.spec.Filters;
 import az.mbm.jooqsqlgenerate.spec.Specification;
 
 import java.util.*;
@@ -46,8 +48,8 @@ import java.util.stream.Collectors;
  *     public SelectTable searchUsers(String status, String name) {
  *         return JooqQuery.from(User.class, "u")
  *             .select("u.id", "u.name", "u.email", "u.status")
- *             .filter("status", FilterOperations.EQUAl, status)
- *             .filter("name",   FilterOperations.LIKE,   name)
+ *             .filter("status", Op.EQUAl, status)
+ *             .filter("name",   Op.LIKE,   name)
  *             .orderBy("u.createdAt", "DESC")
  *             .page(0, 20)
  *             .execute(dsl);
@@ -66,8 +68,10 @@ public final class JooqQuery<T> {
     private final Table<?>             generatedTable; // null → entity mode
 
     // Generated mode — birbaşa Field<?> siyahıları
-    private final List<Field<?>>            rawGroupByFields = new ArrayList<>();
-    private final List<RawJoinRow>          rawJoins         = new ArrayList<>();
+    private final List<Field<?>>            rawGroupByFields  = new ArrayList<>();
+    private final List<RawJoinRow>          rawJoins          = new ArrayList<>();
+    /** alias → original Table (alias tətbiq edilməmiş) — generated mode-da field resolve üçün */
+    private final Map<String, Table<?>>     joinTableRegistry = new LinkedHashMap<>();
 
     private final List<String>              columns          = new ArrayList<>();
     private final List<SelectAsRow>         selectAsRows     = new ArrayList<>();
@@ -81,8 +85,10 @@ public final class JooqQuery<T> {
     private final List<Field<?>>            rawSelectFields  = new ArrayList<>();
     private final List<SortField<?>>        rawOrderFields   = new ArrayList<>();
     private final List<FilterRow>           filters          = new ArrayList<>();
-    private final List<GlobalFilterEntry>   globalFilters    = new ArrayList<>();
+    private final List<FiltersEntry>   globalFilters    = new ArrayList<>();
     private final List<JoinRow>             joins            = new ArrayList<>();
+    private final List<ExtJoinRow>          extJoins         = new ArrayList<>();
+    private final List<SelectJoinRow>       selectJoins      = new ArrayList<>();
     private final List<ExistsSpec<?, ?>>    existsSpecs      = new ArrayList<>();
     private final List<ExistsSpec<?, ?>>    havingExistsSpecs = new ArrayList<>();
     private final List<String>              groupByFields    = new ArrayList<>();
@@ -91,32 +97,54 @@ public final class JooqQuery<T> {
     private final List<CaseRow>             caseRows         = new ArrayList<>();
     private final List<CaseBuilder<?>>      caseBuilders     = new ArrayList<>();
 
+    private final List<FilterRow> havingFilterRows = new ArrayList<>();
+
+    /** ROUND(field, scale) AS alias — SELECT sütunları + filter registry */
+    private final List<RoundedColumnRow>        roundedColumns  = new ArrayList<>();
+    private final Map<String, RoundedColumnRow> roundedAliasMap = new LinkedHashMap<>();
+
     private boolean distinct   = false;
-    private boolean paginate   = true;
+    private boolean paginate   = false;  // yalnız setPage() çağrılanda aktiv olur
+    private boolean countOnly  = false;  // pagination olmadan yalnız COUNT
     private int     pageNumber = 0;
     private int     pageSize   = 50;
 
     // ─── Daxili record-lar ───────────────────────────────────────────────
-    private record FilterRow(String field, FilterOperations op, Object value) {}
+    private record FilterRow(String field, Op op, Object value) {}
     private record SelectAsRow(String aliasAndField, String outputAlias) {}
     private record JoinRow(String type, Class<?> entity, String alias,
                            String fromField, String toField) {}
-    private record AggRow(GroupFunction fn, String field, String alias, Integer round,
-                          FilterOperations havingOp, Object havingVal, String orderDir,
+    private record AggRow(Agg fn, String field, String alias, Integer round,
+                          String orderDir,
                           MathOperation mathOp, String mathField, ComputedField expr) {}
     private record SortRow(String field, String dir) {}
-    private record CaseRow(String field, FilterOperations op, Object when,
+    private record CaseRow(String field, Op op, Object when,
                            Object then, Object els, String alias) {}
     private record ComputedRow(String alias,
                                String ta1, String f1, MathOperation op,
                                String ta2, String f2) {}
     private record ComputedFieldEntry(ComputedField cf,
-                                      FilterOperations filterOp,
+                                      Op filterOp,
                                       Object filterValue) {}
     private record CoalesceRow(String alias, Object def, String[] fields) {}
     private record SubQueryInRow(List<String> outerFields, SubQueryIn sub) {}
-    private record GlobalFilterEntry(String aliasAndField, FilterOperations op, Object value) {}
+    private record FiltersEntry(String aliasAndField, Op op, Object value) {}
     private record RawJoinRow(Table<?> table, JoinType type, Condition on) {}
+    /** Çoxlu ON field cütü: fromAlias.fromField = toAlias.toField */
+    private record FieldPair(String fromAlias, String fromField, String toField) {}
+    /** JOIN ON-da əlavə value şərti: toAlias.field OP value */
+    private record JoinFilterRow(String field, Op op, Object value) {}
+    /** Genişləndirilmiş entity JOIN — çoxlu field cütü + əlavə şərtlər */
+    private record ExtJoinRow(String type, Class<?> entity, String alias,
+                               List<FieldPair> pairs, List<JoinFilterRow> extras) {}
+    /** SelectTable (derived table) JOIN — string field adları ilə */
+    private record SelectJoinRow(String type, SelectTable subQuery, String alias,
+                                  List<FieldPair> pairs, List<JoinFilterRow> extras) {}
+    /**
+     * ROUND(field, scale) AS alias — SELECT-də yuvarlama ilə sütun.
+     * Filter tətbiq edildikdə WHERE ROUND(field, scale) OP value kimi işlənir.
+     */
+    private record RoundedColumnRow(String alias, String fieldRef, int scale) {}
 
     // ─── Konstruktorlar — birbaşa istifadə edilmir ───────────────────────
 
@@ -201,7 +229,7 @@ public final class JooqQuery<T> {
      *
      *   JooqQuery.from(active, "sub")
      *       .select("id", "name")                          // sub.id, sub.name
-     *       .filter("name", FilterOperations.LIKE, "Ali")  // sub.name LIKE '%Ali%'
+     *       .filter("name", Op.LIKE, "Ali")  // sub.name LIKE '%Ali%'
      *       .leftJoin(ORDERS, "o", sub.field("id", Long.class).eq(ORDERS.USER_ID))
      *       .orderBy("name", "ASC")
      *       .page(0, 20)
@@ -234,7 +262,7 @@ public final class JooqQuery<T> {
         if (cols == null) return this;
         if (generatedTable != null) {
             for (String col : cols) {
-                Field<?> f = resolveFromTable(generatedTable, fieldPart(col));
+                Field<?> f = resolveFieldByAlias(col);
                 if (f != null) rawSelectFields.add(f);
             }
         } else {
@@ -248,7 +276,7 @@ public final class JooqQuery<T> {
         if (cols == null) return this;
         if (generatedTable != null) {
             for (String col : cols) {
-                Field<?> f = resolveFromTable(generatedTable, fieldPart(col));
+                Field<?> f = resolveFieldByAlias(col);
                 if (f != null) rawSelectFields.add(f);
             }
         } else {
@@ -307,13 +335,13 @@ public final class JooqQuery<T> {
      *           ComputedField.expr("o.price").multiply("o.qty"),
      *           ComputedField.expr("o.tax")
      *       ).as("grandTotal"),
-     *       FilterOperations.GREATER_THAN, 1000
+     *       Op.GREATER_THAN, 1000
      *   )
      *
      *   // netAmount BETWEEN 500 AND 2000
      *   .computedColumn(
      *       ComputedField.of("o.amount").subtract("o.discount").as("netAmount"),
-     *       FilterOperations.BETWEEN, new Object[]{500, 2000}
+     *       Op.BETWEEN, new Object[]{500, 2000}
      *   )
      * }</pre>
      *
@@ -321,7 +349,7 @@ public final class JooqQuery<T> {
      * @param op    filter əməliyyatı
      * @param value filter dəyəri
      */
-    public JooqQuery<T> computedColumn(ComputedField cf, FilterOperations op, Object value) {
+    public JooqQuery<T> computedColumn(ComputedField cf, Op op, Object value) {
         if (cf != null) computedFields.add(new ComputedFieldEntry(cf, op, value));
         return this;
     }
@@ -342,6 +370,54 @@ public final class JooqQuery<T> {
     /** SELECT siyahısına birbaşa jOOQ {@link Field}. */
     public JooqQuery<T> rawSelect(Field<?> field) {
         if (field != null) rawSelectFields.add(field);
+        return this;
+    }
+
+    /**
+     * SELECT siyahısına {@code ROUND(field, scale) AS alias} sütunu əlavə edir.
+     *
+     * <p>Bu sütuna {@link #filter(String, Op, Object)} tətbiq edildikdə
+     * backend-də {@code WHERE ROUND(field, scale) OP value} kimi işlənir —
+     * sadəcə {@code field OP value} deyil.
+     *
+     * <p>Həm <b>entity mode</b>, həm <b>generated mode</b> dəstəklənir.
+     * JOIN edilmiş cədvəl sahəsi üçün {@code "alias.field"} formatı istifadə edin.
+     *
+     * <pre>{@code
+     *   // Sadə istifadə
+     *   JooqQuery.from(Order.class, "o")
+     *       .selectRound("o.totalPrice", 2, "roundedTotal")
+     *       .filter("roundedTotal", Op.GREATER_THAN, 100)
+     *       // → SELECT ROUND(o."total_price", 2) AS "roundedTotal"
+     *       //   WHERE ROUND(o."total_price", 2) > 100
+     *
+     *   // Generated mode
+     *   JooqQuery.from(ORDERS, "o")
+     *       .selectRound("o.total_price", 2, "roundedTotal")
+     *       .filter("roundedTotal", Op.LESS_THAN, 500)
+     *       // → WHERE ROUND(o."total_price", 2) < 500
+     * }</pre>
+     *
+     * @param fieldRef sahə: {@code "tableAlias.fieldName"} və ya {@code "fieldName"} formatında
+     * @param scale    onluq rəqəm sayı (məs. 2 → 0.00)
+     * @param alias    çıxış alias adı (məs. "roundedTotal")
+     */
+    public JooqQuery<T> selectRound(String fieldRef, int scale, String alias) {
+        if (fieldRef == null || alias == null) return this;
+        String cleanAlias = fieldPart(alias); // "t.roundedAmount" → "roundedAmount"
+        RoundedColumnRow row = new RoundedColumnRow(cleanAlias, fieldRef, scale);
+        roundedColumns.add(row);
+        roundedAliasMap.put(cleanAlias, row);
+
+        // Generated mode — field dərhal həll edilir
+        if (generatedTable != null) {
+            Field<?> f = resolveFieldByAlias(fieldRef);
+            if (f != null) {
+                rawSelectFields.add(
+                        DSL.round((Field<? extends Number>) f, scale).as(cleanAlias));
+            }
+        }
+        // Entity mode — execute()-də işlənir (EntityTable lazımdır)
         return this;
     }
 
@@ -378,18 +454,113 @@ public final class JooqQuery<T> {
     //  JOIN
     // ════════════════════════════════════════════════════════════════════
 
-    /** LEFT JOIN — entity mode üçün (string field adları) */
+    /** LEFT JOIN — entity mode üçün (string field adları, tək cüt) */
     public JooqQuery<T> leftJoin(Class<?> entity, String alias,
                                  String fromField, String toField) {
         joins.add(new JoinRow("LEFT", entity, alias, fromField, toField));
         return this;
     }
 
-    /** INNER JOIN — entity mode üçün (string field adları) */
+    /** INNER JOIN — entity mode üçün (string field adları, tək cüt) */
     public JooqQuery<T> innerJoin(Class<?> entity, String alias,
                                   String fromField, String toField) {
         joins.add(new JoinRow("INNER", entity, alias, fromField, toField));
         return this;
+    }
+
+    /**
+     * LEFT JOIN builder — çoxlu ON şərti + əlavə value filterlər.
+     *
+     * <pre>{@code
+     *   JooqQuery.from(WarehouseFlow.class, "t")
+     *       .leftJoin(Product.class, "t1")
+     *           .on("fkProductId", "id")           // t.fkProductId = t1.id
+     *           .on("companyId",   "companyId")     // t.companyId   = t1.companyId
+     *           .andOn("status", Op.EQUAl, "A")  // t1.status = 'A'
+     *       .done()
+     *       .execute(dsl);
+     * }</pre>
+     */
+    public JoinBuilder leftJoin(Class<?> entity, String alias) {
+        return new JoinBuilder(this, "LEFT", entity, alias);
+    }
+
+    /**
+     * INNER JOIN builder — çoxlu ON şərti + əlavə value filterlər.
+     */
+    public JoinBuilder innerJoin(Class<?> entity, String alias) {
+        return new JoinBuilder(this, "INNER", entity, alias);
+    }
+
+    /**
+     * Fluent JOIN builder — çoxlu field cütü + əlavə ON şərtləri.
+     *
+     * <p>{@code on(fromField, toField)} — əsas cədvəl sahəsi = join cədvəl sahəsi.
+     * {@code onFrom(fromAlias, fromField, toField)} — konkret alias-dan.
+     * {@code andOn(field, op, value)} — join cədvəlindəki dəyər şərti.
+     * {@code done()} — {@link JooqQuery}-yə qayıdır.
+     */
+    public final class JoinBuilder {
+        private final JooqQuery<T>          parent;
+        private final String                type;
+        private final Class<?>              entity;
+        private final String                joinAlias;
+        private final List<FieldPair>       pairs  = new ArrayList<>();
+        private final List<JoinFilterRow>   extras = new ArrayList<>();
+
+        JoinBuilder(JooqQuery<T> parent, String type, Class<?> entity, String joinAlias) {
+            this.parent    = parent;
+            this.type      = type;
+            this.entity    = entity;
+            this.joinAlias = joinAlias;
+        }
+
+        /**
+         * ON şərti: ana cədvəl.fromField = join cədvəl.toField
+         *
+         * @param fromField ana cədvəldəki sahə adı (camelCase)
+         * @param toField   join cədvəlindəki sahə adı (camelCase)
+         */
+        public JoinBuilder on(String fromField, String toField) {
+            if (fromField != null && toField != null)
+                pairs.add(new FieldPair(alias, fromField, toField));
+            return this;
+        }
+
+        /**
+         * ON şərti: konkret alias.fromField = join cədvəl.toField
+         *
+         * @param fromAlias  "from" cədvəlin alias-ı
+         * @param fromField  həmin cədvəldəki sahə adı
+         * @param toField    join cədvəlindəki sahə adı
+         */
+        public JoinBuilder onFrom(String fromAlias, String fromField, String toField) {
+            if (fromAlias != null && fromField != null && toField != null)
+                pairs.add(new FieldPair(fromAlias, fromField, toField));
+            return this;
+        }
+
+        /**
+         * JOIN ON-a əlavə dəyər şərti: join cədvəli.field OP value
+         *
+         * <pre>{@code .andOn("status", Op.EQUAl, "A") }</pre>
+         *
+         * @param field join cədvəlindəki sahə adı
+         * @param op    filter əməliyyatı
+         * @param value null olduqda atlanır
+         */
+        public JoinBuilder andOn(String field, Op op, Object value) {
+            if (field != null && op != null && value != null)
+                extras.add(new JoinFilterRow(field, op, value));
+            return this;
+        }
+
+        /** Builder-i tamamlayır, {@link JooqQuery}-yə qayıdır. */
+        public JooqQuery<T> done() {
+            parent.extJoins.add(new ExtJoinRow(type, entity, joinAlias,
+                    new ArrayList<>(pairs), new ArrayList<>(extras)));
+            return parent;
+        }
     }
 
     /**
@@ -400,6 +571,7 @@ public final class JooqQuery<T> {
      * }</pre>
      */
     public JooqQuery<T> leftJoin(Table<?> table, String alias, Condition on) {
+        if (alias != null) joinTableRegistry.put(alias, table);
         rawJoins.add(new RawJoinRow(table.as(alias), JoinType.LEFT_OUTER_JOIN, on));
         return this;
     }
@@ -412,8 +584,114 @@ public final class JooqQuery<T> {
      * }</pre>
      */
     public JooqQuery<T> innerJoin(Table<?> table, String alias, Condition on) {
+        if (alias != null) joinTableRegistry.put(alias, table);
         rawJoins.add(new RawJoinRow(table.as(alias), JoinType.JOIN, on));
         return this;
+    }
+
+    /**
+     * LEFT JOIN — başqa bir {@link SelectTable} ilə, raw jOOQ ON şərti.
+     */
+    public JooqQuery<T> leftJoin(SelectTable subQuery, String alias, Condition on) {
+        Table<?> tbl = subQuery.asTable(alias);
+        joinTableRegistry.put(alias, tbl);
+        rawJoins.add(new RawJoinRow(tbl, JoinType.LEFT_OUTER_JOIN, on));
+        return this;
+    }
+
+    /**
+     * INNER JOIN — başqa bir {@link SelectTable} ilə, raw jOOQ ON şərti.
+     */
+    public JooqQuery<T> innerJoin(SelectTable subQuery, String alias, Condition on) {
+        Table<?> tbl = subQuery.asTable(alias);
+        joinTableRegistry.put(alias, tbl);
+        rawJoins.add(new RawJoinRow(tbl, JoinType.JOIN, on));
+        return this;
+    }
+
+    /**
+     * LEFT JOIN — başqa bir {@link SelectTable} ilə, string field adları ilə.
+     *
+     * <pre>{@code
+     *   .leftJoin(budgetQuery, "b", "f.fkAccountId", "fkAccountId")
+     *   // ON f."fkAccountId" = b."fkAccountId"
+     * }</pre>
+     *
+     * @param fromField  ana cədvəlin sahəsi: {@code "alias.field"} və ya {@code "field"}
+     * @param toField    join cədvəlinin sahəsi: sadə {@code "field"} adı
+     */
+    public JooqQuery<T> leftJoin(SelectTable subQuery, String alias,
+                                  String fromField, String toField) {
+        selectJoins.add(new SelectJoinRow("LEFT", subQuery, alias,
+                List.of(new FieldPair(aliasPart(fromField), fieldPart(fromField), toField)),
+                List.of()));
+        return this;
+    }
+
+    /**
+     * INNER JOIN — başqa bir {@link SelectTable} ilə, string field adları ilə.
+     */
+    public JooqQuery<T> innerJoin(SelectTable subQuery, String alias,
+                                   String fromField, String toField) {
+        selectJoins.add(new SelectJoinRow("INNER", subQuery, alias,
+                List.of(new FieldPair(aliasPart(fromField), fieldPart(fromField), toField)),
+                List.of()));
+        return this;
+    }
+
+    /**
+     * SelectTable JOIN builder — çoxlu ON field cütü + əlavə ON şərtləri.
+     *
+     * <pre>{@code
+     *   .leftJoin(budgetQuery, "b")
+     *       .on("f.fkAccountId", "fkAccountId")
+     *       .on("f.fkCurrencyId", "fkCurrencyId")
+     *       .andOn("status", Op.EQUAl, "A")
+     *       .done()
+     * }</pre>
+     */
+    public SelectJoinBuilder<T> leftJoin(SelectTable subQuery, String alias) {
+        return new SelectJoinBuilder<>(this, "LEFT", subQuery, alias);
+    }
+
+    public SelectJoinBuilder<T> innerJoin(SelectTable subQuery, String alias) {
+        return new SelectJoinBuilder<>(this, "INNER", subQuery, alias);
+    }
+
+    public static class SelectJoinBuilder<T> {
+        private final JooqQuery<T>      parent;
+        private final String             type;
+        private final SelectTable        subQuery;
+        private final String             alias;
+        private final List<FieldPair>    pairs  = new ArrayList<>();
+        private final List<JoinFilterRow> extras = new ArrayList<>();
+
+        SelectJoinBuilder(JooqQuery<T> parent, String type,
+                          SelectTable subQuery, String alias) {
+            this.parent   = parent;
+            this.type     = type;
+            this.subQuery = subQuery;
+            this.alias    = alias;
+        }
+
+        /** ON: fromAlias.fromField = joinAlias.toField */
+        public SelectJoinBuilder<T> on(String fromField, String toField) {
+            pairs.add(new FieldPair(aliasPart(fromField), fieldPart(fromField), toField));
+            return this;
+        }
+
+        /** ON əlavə şərt: join cədvəlinin field-i OP value */
+        public SelectJoinBuilder<T> andOn(String field, Op op, Object value) {
+            if (field != null && op != null && value != null)
+                extras.add(new JoinFilterRow(field, op, value));
+            return this;
+        }
+
+        public JooqQuery<T> done() {
+            parent.selectJoins.add(new SelectJoinRow(type, subQuery, alias,
+                    new ArrayList<>(pairs), new ArrayList<>(extras)));
+            return parent;
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -436,13 +714,36 @@ public final class JooqQuery<T> {
      *   .filter("firstName", LIKE, "Ali")    // generated mode: USERS.FIRST_NAME
      * }</pre>
      */
-    public JooqQuery<T> filter(String field, FilterOperations op, Object value) {
+    public JooqQuery<T> filter(String field, Op op, Object value) {
         if (field == null || field.isBlank() || op == null || value == null) return this;
         if (value instanceof String s && s.isBlank()) return this;
 
-        // Generated mode — sahəni generatedTable üzərindən həll et, FilterStrategies ilə Condition qur
+        // BETWEEN: "from,to" formatında hər iki tərəf null/"null"/boş olduqda atlanır
+        if (op == Op.BETWEEN && value instanceof String s) {
+            String[] parts = s.split(",", 2);
+            if (parts.length < 2) return this;
+            String from = parts[0].trim();
+            String to   = parts[1].trim();
+            if (from.isEmpty() || from.equalsIgnoreCase("null") ||
+                to.isEmpty()   || to.equalsIgnoreCase("null")) return this;
+        }
+
+        // Generated mode — sahəni main və ya join cədvəlindən həll et (alias prefix nəzərə alınır)
         if (generatedTable != null) {
-            Field<?> resolved = resolveFromTable(generatedTable, fieldPart(field));
+            // Rounded column yoxlaması: alias roundedAliasMap-dədirsə ROUND(field, scale) OP value
+            String cleanField = fieldPart(field);
+            RoundedColumnRow rounded = roundedAliasMap.get(cleanField);
+            if (rounded != null) {
+                Field<?> rf = resolveFieldByAlias(rounded.fieldRef());
+                if (rf != null) {
+                    Field<?> roundedField = DSL.round((Field<? extends Number>) rf, rounded.scale());
+                    Condition c = az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                            .get(op).apply((Field<Object>) roundedField, value);
+                    return rawCondition(c);
+                }
+            }
+
+            Field<?> resolved = resolveFieldByAlias(field);
             if (resolved == null) return this; // sahə tapılmadı — atla
             Object cleanValue = value;
             if (value instanceof Collection<?> c) {
@@ -455,11 +756,16 @@ public final class JooqQuery<T> {
             return rawCondition(c);
         }
 
-        // Entity mode — köhnə davranış
+        // Entity mode — list gəldikdə IN istifadə edilir
         if (value instanceof Collection<?> c) {
             List<?> clean = c.stream().filter(Objects::nonNull).collect(Collectors.toList());
             if (clean.isEmpty()) return this;
-            filters.add(new FilterRow(field, op, clean));
+            Op resolvedOp = switch (op) {
+                case EQUAl     -> Op.IN;
+                case NOT_EQUAL -> Op.NOT_IN;
+                default        -> op;
+            };
+            filters.add(new FilterRow(field, resolvedOp, clean));
             return this;
         }
         filters.add(new FilterRow(field, op, value));
@@ -467,38 +773,115 @@ public final class JooqQuery<T> {
     }
 
     /**
-     * Global filter — {@link GlobalFilter} fluent builder ilə.
+     * Global filter — {@link Filters} fluent builder ilə.
      *
      * <pre>{@code
      *   .globalFilter(
-     *       GlobalFilter.of()
+     *       Filters.of()
      *           .equal("status", "ACTIVE")
      *           .like("name", name)
      *           .greaterThan("o.amount", "100")
      *   )
      * }</pre>
      */
-    public JooqQuery<T> globalFilter(GlobalFilter gf) {
+    public JooqQuery<T> globalFilter(Filters gf) {
         if (gf == null) return this;
-        return globalFilter(gf.build());
-    }
-
-    /** Global filter — xam {@code Map<String, Map<String,String>>} ilə. */
-    public JooqQuery<T> globalFilter(Map<String, Map<String, String>> map) {
-        if (map == null || map.isEmpty()) return this;
-        for (Map.Entry<String, Map<String, String>> opEntry : map.entrySet()) {
-            FilterOperations op = JooqManager.parseOperationPublic(opEntry.getKey());
+        // Filters.build() → operation → {field → value} strukturu
+        // birbaşa emal edirik, field-first globalFilter(Map)-ə getmir
+        for (Map.Entry<String, Map<String, String>> opEntry : gf.build().entrySet()) {
+            Op op = JooqManager.parseOperationPublic(opEntry.getKey());
             if (op == null || opEntry.getValue() == null) continue;
             for (Map.Entry<String, String> fe : opEntry.getValue().entrySet()) {
                 String field = fe.getKey();
                 String raw   = fe.getValue();
-                if (field == null || field.isBlank() || raw == null || raw.isBlank()) continue;
-                Object value = (op == FilterOperations.IN || op == FilterOperations.NOT_IN)
+                if (field == null || field.isBlank() || raw == null) continue;
+                Object value = (op == Op.IN || op == Op.NOT_IN)
                         ? Arrays.asList(raw.split(",")) : raw;
-                if (op == FilterOperations.IS_EMPTY || op == FilterOperations.IS_NOT_EMPTY)
-                    value = "__null_check__";
-                globalFilters.add(new GlobalFilterEntry(field, op, value));
+                globalFilters.add(new FiltersEntry(field, op, value));
             }
+        }
+        return this;
+    }
+
+
+    /**
+     * Global filter — tək field üçün bir neçə əməliyyat.
+     *
+     * <p>Map-in hər entry-si: key = əməliyyat adı (String), value = dəyər.
+     * {@code field} və ya {@code filters} null / boş olduqda metod atlanır.
+     * Map daxilindəki null key və ya null value avtomatik atlanır.
+     *
+     * <pre>{@code
+     *   .globalFilter("o.amount", Map.of(
+     *       "greaterThan", 100,
+     *       "lessThan",    500
+     *   ))
+     *   .globalFilter("u.status", Map.of("equal", "ACTIVE"))
+     *   .globalFilter("u.name",   Map.of("like",  name))   // name null → atlanır
+     * }</pre>
+     *
+     * @param field   sahə adı: {@code "alias.field"} və ya {@code "field"} formatında
+     * @param filters əməliyyat adı → dəyər cütləri
+     */
+    /**
+     * Global filter — tək field üçün {@code Map<String, String>} ilə.
+     *
+     * <p>Map-in hər entry-si: key = əməliyyat adı, value = String dəyər.
+     * {@code field} və ya {@code filters} null / boş olduqda atlanır.
+     * Map daxilindəki null key, null və ya boş value avtomatik atlanır.
+     *
+     * <pre>{@code
+     *   .globalFilter("o.amount", Map.of(
+     *       "greaterThan", "100",
+     *       "lessThan",    "500"
+     *   ))
+     *   .globalFilter("u.status", Map.of("equal", "ACTIVE"))
+     * }</pre>
+     *
+     * @param field   sahə adı: {@code "alias.field"} və ya {@code "field"} formatında
+     * @param filters əməliyyat adı → String dəyər cütləri
+     */
+    public JooqQuery<T> globalFilter(String field, Map<String, String> filters) {
+        if (field == null || field.isBlank()) return this;
+        if (filters == null || filters.isEmpty()) return this;
+        for (Map.Entry<String, String> e : filters.entrySet()) {
+            if (e.getKey() == null || e.getValue() == null || e.getValue().isBlank()) continue;
+            Op op = JooqManager.parseOperationPublic(e.getKey());
+            if (op == null) continue;
+            String raw = e.getValue();
+            // BETWEEN: hər iki tərəf null/"null"/boş olduqda atlanır
+            if (op == Op.BETWEEN) {
+                String[] parts = raw.split(",", 2);
+                if (parts.length < 2) continue;
+                String from = parts[0].trim(), to = parts[1].trim();
+                if (from.isEmpty() || from.equalsIgnoreCase("null") ||
+                    to.isEmpty()   || to.equalsIgnoreCase("null")) continue;
+            }
+            Object value = (op == Op.IN || op == Op.NOT_IN)
+                    ? Arrays.asList(raw.split(","))
+                    : raw;
+            globalFilters.add(new FiltersEntry(field, op, value));
+        }
+        return this;
+    }
+
+    /**
+     * Global filter — field-first {@code Map<String, Map<String,String>>} strukturu.
+     *
+     * <p>Struktur: outer key = field adı, inner key = əməliyyat, inner value = dəyər.
+     *
+     * <pre>{@code
+     *   // JSON: {"price": {"like": "10"}, "status": {"equal": "ACTIVE"}}
+     *   .globalFilterByField(Map.of(
+     *       "price",  Map.of("like",  "10"),
+     *       "status", Map.of("equal", "ACTIVE")
+     *   ))
+     * }</pre>
+     */
+    public JooqQuery<T> globalFilter(Map<String, Map<String, String>> fieldMap) {
+        if (fieldMap == null || fieldMap.isEmpty()) return this;
+        for (Map.Entry<String, Map<String, String>> e : fieldMap.entrySet()) {
+            globalFilter(e.getKey(), e.getValue());
         }
         return this;
     }
@@ -531,7 +914,7 @@ public final class JooqQuery<T> {
      *   .filter(USERS.AGE,    GREATER_THAN, 18)
      * }</pre>
      */
-    public <V> JooqQuery<T> filter(Field<V> field, FilterOperations op, Object value) {
+    public <V> JooqQuery<T> filter(Field<V> field, Op op, Object value) {
         if (field == null || op == null || value == null) return this;
         Condition c = az.mbm.jooqsqlgenerate.strategy.FilterStrategies
                 .get(op).apply((Field<Object>) field, value);
@@ -573,7 +956,7 @@ public final class JooqQuery<T> {
         if (fields == null) return this;
         if (generatedTable != null) {
             for (String f : fields) {
-                Field<?> resolved = resolveFromTable(generatedTable, fieldPart(f));
+                Field<?> resolved = resolveFieldByAlias(f);
                 if (resolved != null) rawGroupByFields.add(resolved);
             }
         } else {
@@ -587,7 +970,7 @@ public final class JooqQuery<T> {
         if (fields == null) return this;
         if (generatedTable != null) {
             for (String f : fields) {
-                Field<?> resolved = resolveFromTable(generatedTable, fieldPart(f));
+                Field<?> resolved = resolveFieldByAlias(f);
                 if (resolved != null) rawGroupByFields.add(resolved);
             }
         } else {
@@ -621,40 +1004,84 @@ public final class JooqQuery<T> {
         return this;
     }
 
-    /** SUM / COUNT / AVG / MIN / MAX aqreqat. */
-    public JooqQuery<T> agg(GroupFunction fn, String field, String alias,
-                            Integer round, FilterOperations havingOp, Object havingVal,
-                            String orderDir) {
+    /**
+     * SUM / COUNT / AVG / MIN / MAX aqreqat.
+     *
+     * <p>HAVING üçün ayrıca {@link #havingFilter(String, Map)} istifadə edin.
+     *
+     * <pre>{@code
+     *   .agg(SUM, "t.totalPrice", "totalPrice", null, "DESC")
+     * }</pre>
+     */
+    public JooqQuery<T> agg(Agg fn, String field, String alias,
+                            Integer round, String orderDir) {
         if (fn != null && field != null && alias != null)
-            aggRows.add(new AggRow(fn, field, alias, round,
-                                   havingOp, havingVal, orderDir,
-                                   MathOperation.NONOPERATION, null, null));
+            // alias-da "t.totalPrice" kimi prefix gəlsə yalnız "totalPrice" saxlanır
+            aggRows.add(new AggRow(fn, field, fieldPart(alias), round,
+                                   orderDir, MathOperation.NONOPERATION, null, null));
         return this;
     }
 
-    /** Riyazi ifadəli aqreqat: SUM(f1 * f2). */
-    public JooqQuery<T> aggWithMath(GroupFunction fn,
+    /** SUM / COUNT / AVG / MIN / MAX — yalnız əsas parametrlər. */
+    public JooqQuery<T> agg(Agg fn, String field, String alias) {
+        return agg(fn, field, alias, null, null);
+    }
+
+    /** SUM / COUNT / AVG / MIN / MAX — yuvarlama ilə. */
+    public JooqQuery<T> agg(Agg fn, String field, String alias, Integer round) {
+        return agg(fn, field, alias, round, null);
+    }
+
+    /**
+     * Riyazi ifadəli aqreqat: SUM(f1 * f2).
+     *
+     * <p>HAVING üçün ayrıca {@link #havingFilter(String, Map)} istifadə edin.
+     */
+    public JooqQuery<T> aggWithMath(Agg fn,
                                     String field, MathOperation mathOp, String mathField,
-                                    String alias, Integer round,
-                                    FilterOperations havingOp, Object havingVal,
-                                    String orderDir) {
+                                    String alias, Integer round, String orderDir) {
         if (fn != null && field != null && alias != null)
-            aggRows.add(new AggRow(fn, field, alias, round,
-                                   havingOp, havingVal, orderDir,
-                                   mathOp, mathField, null));
+            aggRows.add(new AggRow(fn, field, fieldPart(alias), round,
+                                   orderDir, mathOp, mathField, null));
         return this;
     }
 
-    /** ComputedField üzərindəki aqreqat: SUM((price * qty) - discount). */
-    public JooqQuery<T> aggOnComputed(GroupFunction fn, ComputedField expr,
-                                      String alias, Integer round,
-                                      FilterOperations havingOp, Object havingVal,
-                                      String orderDir) {
+    /** Riyazi ifadəli aqreqat — yalnız əsas parametrlər. */
+    public JooqQuery<T> aggWithMath(Agg fn,
+                                    String field, MathOperation mathOp, String mathField,
+                                    String alias) {
+        return aggWithMath(fn, field, mathOp, mathField, alias, null, null);
+    }
+
+    /** Riyazi ifadəli aqreqat — yuvarlama ilə. */
+    public JooqQuery<T> aggWithMath(Agg fn,
+                                    String field, MathOperation mathOp, String mathField,
+                                    String alias, Integer round) {
+        return aggWithMath(fn, field, mathOp, mathField, alias, round, null);
+    }
+
+    /**
+     * ComputedField üzərindəki aqreqat: SUM((price * qty) - discount).
+     *
+     * <p>HAVING üçün ayrıca {@link #havingFilter(String, Map)} istifadə edin.
+     */
+    public JooqQuery<T> aggOnComputed(Agg fn, ComputedField expr,
+                                      String alias, Integer round, String orderDir) {
         if (fn != null && expr != null && alias != null)
-            aggRows.add(new AggRow(fn, null, alias, round,
-                                   havingOp, havingVal, orderDir,
-                                   null, null, expr));
+            aggRows.add(new AggRow(fn, null, fieldPart(alias), round,
+                                   orderDir, null, null, expr));
         return this;
+    }
+
+    /** ComputedField üzərindəki aqreqat — yalnız əsas parametrlər. */
+    public JooqQuery<T> aggOnComputed(Agg fn, ComputedField expr, String alias) {
+        return aggOnComputed(fn, expr, alias, null, null);
+    }
+
+    /** ComputedField üzərindəki aqreqat — yuvarlama ilə. */
+    public JooqQuery<T> aggOnComputed(Agg fn, ComputedField expr,
+                                      String alias, Integer round) {
+        return aggOnComputed(fn, expr, alias, round, null);
     }
 
     /** HAVING EXISTS / NOT EXISTS (GROUP BY ilə birlikdə). */
@@ -669,12 +1096,88 @@ public final class JooqQuery<T> {
         return this;
     }
 
+    /**
+     * HAVING filter — GROUP BY sahəsi üçün əməliyyat + dəyər ilə.
+     *
+     * <p>Aqreqat funksiyasız, GROUP BY-da olan sahəyə birbaşa HAVING şərti tətbiq edir.
+     * Null dəyər və ya boş string olduqda atlanır.
+     *
+     * <pre>{@code
+     *   .havingFilter("t.operationType", Op.EQUAl,    "SELL")
+     *   .havingFilter("t.status",        Op.NOT_EQUAL, "PASSIVE")
+     *   .havingFilter("t.amount",        Op.GREATER_THAN, 100)
+     * }</pre>
+     *
+     * @param field sahə adı: {@code "alias.field"} və ya {@code "field"} formatında
+     * @param op    filter əməliyyatı
+     * @param value filter dəyəri (null / boş string → atlanır)
+     */
+    public JooqQuery<T> havingFilter(String field, Op op, Object value) {
+        if (field == null || field.isBlank() || op == null || value == null) return this;
+        if (value instanceof String s && s.isBlank()) return this;
+        @SuppressWarnings("unchecked")
+        Field<Object> f = (Field<Object>) DSL.field(DSL.name(fieldPart(field)));
+        Condition c = az.mbm.jooqsqlgenerate.strategy.FilterStrategies.get(op).apply(f, value);
+        rawHavings.add(c);
+        return this;
+    }
+
+    /**
+     * HAVING filter — aggregat alias üçün {@code Map<String, String>} ilə.
+     *
+     * <p>field: aggregat alias adı (məs. "totalPrice"),
+     * map: əməliyyat adı → dəyər (məs. {"greaterThan": "1000"}).
+     * Null, boş map və boş dəyərlər atlanır.
+     *
+     * <pre>{@code
+     *   .havingFilter("totalPrice", Map.of("greaterThan", "1000"))
+     *   .havingFilter("totalPrice", Map.of("between",     "100,5000"))
+     * }</pre>
+     */
+    /**
+     * HAVING filter — aggregat alias üçün {@code Map<String, String>} ilə.
+     *
+     * <p><b>Entity mode</b>: alias-a uyğun aqreqat funksiyası ({@code AggRow}) tapılır
+     * və {@code AggregateBuilder.step.having(op, val)} vasitəsilə
+     * {@code HAVING SUM(total_price) > 1000} kimi düzgün SQL yaranır.<br>
+     * <b>Generated mode</b>: alias birbaşa HAVING-ə yazılır —
+     * {@code HAVING "totalPrice" > 1000} (PostgreSQL/MySQL-də işləyir).
+     *
+     * <pre>{@code
+     *   .havingFilter("totalPrice", Map.of("greaterThan", "1000"))
+     *   .havingFilter("cnt",        Map.of("between",     "5,50"))
+     * }</pre>
+     */
+    public JooqQuery<T> havingFilter(String field, Map<String, String> filters) {
+        if (field == null || field.isBlank()) return this;
+        if (filters == null || filters.isEmpty()) return this;
+        for (Map.Entry<String, String> e : filters.entrySet()) {
+            if (e.getKey() == null || e.getValue() == null || e.getValue().isBlank()) continue;
+            Op op = JooqManager.parseOperationPublic(e.getKey());
+            if (op == null) continue;
+            Object value = (op == Op.IN || op == Op.NOT_IN)
+                    ? Arrays.asList(e.getValue().split(","))
+                    : e.getValue();
+
+            if (generatedTable != null) {
+                // Generated mode — alias referansı ilə HAVING (PostgreSQL/MySQL dəstəkləyir)
+                @SuppressWarnings("unchecked")
+                Field<Object> f = (Field<Object>) DSL.field(DSL.name(fieldPart(field)));
+                rawHavings.add(az.mbm.jooqsqlgenerate.strategy.FilterStrategies.get(op).apply(f, value));
+            } else {
+                // Entity mode — AggregateBuilder.step.having() vasitəsilə işlər (execute()-də)
+                havingFilterRows.add(new FilterRow(fieldPart(field), op, value));
+            }
+        }
+        return this;
+    }
+
     // ════════════════════════════════════════════════════════════════════
     //  CASE WHEN
     // ════════════════════════════════════════════════════════════════════
 
     /** Sadə CASE WHEN ... THEN ... ELSE ... END AS alias. */
-    public JooqQuery<T> caseWhen(String field, FilterOperations op,
+    public JooqQuery<T> caseWhen(String field, Op op,
                                  Object when, Object then, Object els, String alias) {
         if (field != null && op != null && when != null && alias != null)
             caseRows.add(new CaseRow(field, op, when, then, els, alias));
@@ -730,6 +1233,26 @@ public final class JooqQuery<T> {
     }
 
     /**
+     * ORDER BY — {@code List<Map<String, String>>} ilə.
+     *
+     * <p>Hər map-in tək entry-si: key = field adı, value = "ASC" və ya "DESC".
+     * Sıralama siyahıdakı ardıcıllığa görə tətbiq olunur.
+     *
+     * <pre>{@code
+     *   .orderBy(List.of(
+     *       Map.of("u.createdAt", "DESC"),
+     *       Map.of("u.name",      "ASC")
+     *   ))
+     * }</pre>
+     */
+    public JooqQuery<T> orderBy(List<Map<String, String>> sorts) {
+        if (sorts == null) return this;
+        for (Map<String, String> map : sorts)
+            if (map != null) map.forEach((field, dir) -> orderBy(field, dir));
+        return this;
+    }
+
+    /**
      * ORDER BY — generated field ilə, tip-təhlükəli.
      *
      * <pre>{@code
@@ -768,9 +1291,16 @@ public final class JooqQuery<T> {
         return this;
     }
 
-    /** Səhifələməni söndürür — bütün nəticəni qaytarır. */
+    /** Səhifələməni söndürür — bütün nəticəni qaytarır, COUNT işləmir. */
     public JooqQuery<T> noPagination() {
         this.paginate = false;
+        return this;
+    }
+
+    /** Pagination olmadan yalnız COUNT-u aktiv edir. */
+    public JooqQuery<T> withCount() {
+        this.paginate = false;  // LIMIT/OFFSET yox
+        this.countOnly = true;  // amma COUNT işlər
         return this;
     }
 
@@ -812,12 +1342,52 @@ public final class JooqQuery<T> {
             builder.selectAs(sa.aliasAndField(), sa.outputAlias());
         if (distinct) builder.distinct();
 
-        // JOIN
+        // JOIN — tək field cütü (köhnə üsul)
         for (JoinRow jr : joins) {
             if ("LEFT".equals(jr.type()))
                 builder.leftJoin(jr.entity(), jr.alias()).on(jr.fromField()).equalsField(jr.toField());
             else
                 builder.innerJoin(jr.entity(), jr.alias()).on(jr.fromField()).equalsField(jr.toField());
+        }
+
+        // JOIN — çoxlu field cütü + əlavə ON şərtləri (yeni üsul)
+        // entityClassMap: alias → entity class (from + join cədvəlləri üçün)
+        Map<String, Class<?>> entityClassMap = new LinkedHashMap<>();
+        entityClassMap.put(alias, entity);
+        for (JoinRow jr : joins) entityClassMap.put(jr.alias(), jr.entity());
+
+        for (ExtJoinRow jr : extJoins) {
+            EntityTable<?> toTable = new EntityTable<>(jr.entity(), jr.alias());
+            entityClassMap.put(jr.alias(), jr.entity());
+
+            Condition on = null;
+
+            // Field cütlərindən ON şərti
+            for (FieldPair fp : jr.pairs()) {
+                Class<?> fromClass = entityClassMap.getOrDefault(fp.fromAlias(), entity);
+                EntityTable<?> fromTable = new EntityTable<>(fromClass, fp.fromAlias());
+                @SuppressWarnings("unchecked")
+                Field<Object> fromField = (Field<Object>) fromTable.getField(fp.fromField());
+                @SuppressWarnings("unchecked")
+                Field<Object> toField   = (Field<Object>) toTable.getField(fp.toField());
+                Condition c = fromField.eq(toField);
+                on = (on == null) ? c : on.and(c);
+            }
+
+            // Əlavə value şərtlər (t1.status = 'A' kimi)
+            for (JoinFilterRow extra : jr.extras()) {
+                @SuppressWarnings("unchecked")
+                Field<Object> f = (Field<Object>) toTable.getField(extra.field());
+                Condition c = FilterStrategies.get(extra.op()).apply(f, extra.value());
+                on = (on == null) ? c : on.and(c);
+            }
+
+            if (on == null) on = DSL.trueCondition();
+
+            if ("LEFT".equals(jr.type()))
+                builder.leftJoinWithCondition(jr.entity(), jr.alias(), on);
+            else
+                builder.innerJoinWithCondition(jr.entity(), jr.alias(), on);
         }
 
         // WHERE — normal filterlər
@@ -832,11 +1402,22 @@ public final class JooqQuery<T> {
         Map<String, FilterRow> havingMap      = new LinkedHashMap<>();
         List<FilterRow> computedWhereFilters  = new ArrayList<>();
         List<FilterRow> computedHavingFilters = new ArrayList<>();
+        List<FilterRow> roundedWhereFilters   = new ArrayList<>();  // ROUND(field,scale) filterlər
+
+        // havingFilter() ilə birbaşa əlavə edilən HAVING şərtləri
+        // → bunlar AggregateBuilder.step.having(op, val) vasitəsilə işlənir
+        //   beləliklə HAVING SUM(field) > val kimi düzgün SQL yaranır
+        for (FilterRow fr : havingFilterRows) {
+            havingMap.put(fr.field(), fr);
+        }
 
         for (FilterRow fr : filters) {
             // Alias prefix varsa ("t1.status") yalnız sahə adı ilə yoxla
             String fieldKey = fieldPart(fr.field());
-            if (aggAliases.contains(fieldKey))
+            if (roundedAliasMap.containsKey(fieldKey))
+                // ROUND(field, scale) filter — ayrıca işlənir
+                roundedWhereFilters.add(new FilterRow(fieldKey, fr.op(), fr.value()));
+            else if (aggAliases.contains(fieldKey))
                 havingMap.put(fieldKey, new FilterRow(fieldKey, fr.op(), fr.value()));
             else if (computedAliases.contains(fieldKey))
                 (hasGroupBy ? computedHavingFilters : computedWhereFilters)
@@ -862,13 +1443,59 @@ public final class JooqQuery<T> {
         }
 
         for (SubQueryInRow sir : subQueryInCols) builder.inSubQuery(sir.outerFields(), sir.sub());
-        for (GlobalFilterEntry gf : globalFilters) builder.globalWhereFilter(gf.aliasAndField(), gf.op(), gf.value());
+        for (FiltersEntry gf : globalFilters) builder.globalWhereFilter(gf.aliasAndField(), gf.op(), gf.value());
         for (Condition rc : rawConditions) builder.rawCondition(rc);
         for (ExistsSpec<?, ?> es : existsSpecs) builder.where((Specification) es);
 
         // ComputedField alias filter → globalWhereFilter vasitəsilə ifadə genişləndirilir
         // SelectQueryBuilder.buildWhereCondition() alias-ı tanıyır, WHERE-ə expression yazır
         for (FilterRow fr : computedWhereFilters) builder.globalWhereFilter(fr.field(), fr.op(), fr.value());
+
+        // ─── Rounded columns — entity mode ──────────────────────────────────
+        // 1) SELECT-ə ROUND(field, scale) AS alias sütunları əlavə et
+        // 2) Filter varsa WHERE ROUND(field, scale) OP value kimi raw condition yaz
+        if (!roundedColumns.isEmpty() || !roundedWhereFilters.isEmpty()) {
+            // Bütün mövcud cədvəllərin (main + join) EntityTable-larını hazırla
+            Map<String, EntityTable<?>> roundedTableMap = new LinkedHashMap<>();
+            EntityTable<?> mainEt = new EntityTable<>(entity, alias);
+            roundedTableMap.put(alias, mainEt);
+            for (JoinRow jr : joins)
+                roundedTableMap.put(jr.alias(), new EntityTable<>(jr.entity(), jr.alias()));
+            for (ExtJoinRow jr : extJoins)
+                roundedTableMap.put(jr.alias(), new EntityTable<>(jr.entity(), jr.alias()));
+
+            // SELECT: ROUND(field, scale) AS alias
+            for (RoundedColumnRow rc : roundedColumns) {
+                String tAlias    = aliasPart(rc.fieldRef());
+                String fieldName = fieldPart(rc.fieldRef());
+                EntityTable<?> targetEt = tAlias.isBlank()
+                        ? mainEt
+                        : roundedTableMap.getOrDefault(tAlias, mainEt);
+                Field<?> f = targetEt.getField(fieldName);
+                if (f != null) {
+                    builder.rawSelectField(
+                            DSL.round((Field<? extends Number>) f, rc.scale()).as(rc.alias()));
+                }
+            }
+
+            // WHERE: ROUND(field, scale) OP value
+            for (FilterRow fr : roundedWhereFilters) {
+                RoundedColumnRow rc = roundedAliasMap.get(fr.field());
+                if (rc == null) continue;
+                String tAlias    = aliasPart(rc.fieldRef());
+                String fieldName = fieldPart(rc.fieldRef());
+                EntityTable<?> targetEt = tAlias.isBlank()
+                        ? mainEt
+                        : roundedTableMap.getOrDefault(tAlias, mainEt);
+                Field<?> f = targetEt.getField(fieldName);
+                if (f != null) {
+                    Field<?> roundedF = DSL.round((Field<? extends Number>) f, rc.scale());
+                    Condition c = FilterStrategies.get(fr.op())
+                            .apply((Field<Object>) roundedF, fr.value());
+                    builder.rawCondition(c);
+                }
+            }
+        }
 
         // HAVING
         for (FilterRow fr : computedHavingFilters) { Condition c = aliasCondition(fr); if (c != null) builder.having(c); }
@@ -905,8 +1532,8 @@ public final class JooqQuery<T> {
                 }
                 step.as(ar.alias());
                 if (ar.round() != null) step.round(ar.round());
-                if (ar.havingOp() != null) step.having(ar.havingOp(), ar.havingVal());
-                else if (havingMap.containsKey(ar.alias())) {
+                // HAVING — addHavingFilter(alias, Map) ilə verilir
+                if (havingMap.containsKey(ar.alias())) {
                     FilterRow hr = havingMap.get(ar.alias());
                     step.having(hr.op(), hr.value());
                 }
@@ -925,8 +1552,9 @@ public final class JooqQuery<T> {
         for (SortField<?> sf : rawOrderFields) builder.rawOrderBy(sf);
 
         // PAGINATION
-        if (paginate) builder.page(pageNumber, pageSize);
-        else          builder.noPagination();
+        if (paginate)        builder.page(pageNumber, pageSize);
+        else if (countOnly)  builder.withCount();
+        else                 builder.noPagination();
 
         return builder.build(dsl);
     }
@@ -951,21 +1579,80 @@ public final class JooqQuery<T> {
      * Generated jOOQ {@link Table} ilə sorğu qurur.
      * Reflection yoxdur, EntityTable yoxdur — sırf jOOQ Field-ləri ilə işləyir.
      */
+    @SuppressWarnings({"unchecked", "rawtypes"})
     private SelectTable executeGenerated(DSLContext dsl) {
 
         // FROM — alias ilə
         Table<?> mainTable = generatedTable.as(alias);
 
-        // SELECT
+        // ─── Bütün JOIN cədvəllərini joinTableRegistry-yə əvvəlcədən yaz ──────
+        // filter / groupBy / agg / orderBy metodları bu registry-dən field resolve edir
+        for (JoinRow jr : joins) {
+            EntityTable<?> et = new EntityTable<>(jr.entity(), jr.alias());
+            joinTableRegistry.put(jr.alias(), et.getTable());
+        }
+        for (ExtJoinRow jr : extJoins) {
+            EntityTable<?> et = new EntityTable<>(jr.entity(), jr.alias());
+            joinTableRegistry.put(jr.alias(), et.getTable());
+        }
+        for (SelectJoinRow jr : selectJoins) {
+            joinTableRegistry.put(jr.alias(), jr.subQuery().asTable(jr.alias()));
+        }
+
+        // ─── SELECT — agg sütunlar + alias→expr xəritəsi (HAVING üçün lazım) ──
         List<SelectFieldOrAsterisk> selectList = new ArrayList<>(rawSelectFields);
+        Map<String, Field<?>> aggExprByAlias   = new LinkedHashMap<>();
+
+        for (AggRow ar : aggRows) {
+            if (ar.field() == null || ar.fn() == null) continue;
+
+            Field<?> baseField = resolveFieldByAlias(ar.field());
+            if (baseField == null) baseField = DSL.field(DSL.name(fieldPart(ar.field())));
+
+            Field<?> operand = baseField;
+            if (ar.mathOp() != null && ar.mathOp() != MathOperation.NONOPERATION
+                    && ar.mathField() != null) {
+                Field<?> mathF = resolveFieldByAlias(ar.mathField());
+                if (mathF == null) mathF = DSL.field(DSL.name(fieldPart(ar.mathField())));
+                Field<? extends Number> numBase = (Field<? extends Number>) baseField;
+                Field<? extends Number> numMath = (Field<? extends Number>) mathF;
+                operand = switch (ar.mathOp()) {
+                    case ADD      -> numBase.add(numMath);
+                    case SUBTRACT -> numBase.subtract(numMath);
+                    case MULTIPLY -> numBase.mul(numMath);
+                    case DIVIDE   -> numBase.div(numMath);
+                    default       -> baseField;
+                };
+            }
+
+            Field<? extends Number> numOp = (Field<? extends Number>) operand;
+            Field<?> aggField = switch (ar.fn()) {
+                case SUM   -> DSL.sum(numOp);
+                case COUNT -> DSL.count(operand);
+                case AVG   -> DSL.avg(numOp);
+                case MAX   -> DSL.max(operand);
+                case MIN   -> DSL.min(operand);
+            };
+            if (ar.round() != null)
+                aggField = DSL.round((Field<? extends Number>) aggField, ar.round());
+
+            aggExprByAlias.put(ar.alias(), aggField);
+            selectList.add(DSL.coalesce(aggField, DSL.val(0)).as(ar.alias()));
+
+            if ("DESC".equalsIgnoreCase(ar.orderDir()))
+                rawOrderFields.add(DSL.field(DSL.name(ar.alias())).desc());
+            else if ("ASC".equalsIgnoreCase(ar.orderDir()))
+                rawOrderFields.add(DSL.field(DSL.name(ar.alias())).asc());
+        }
+
         if (selectList.isEmpty()) selectList.add(DSL.asterisk());
 
-        // FROM
+        // ─── FROM ────────────────────────────────────────────────────────────
         SelectJoinStep<Record> query = distinct
                 ? dsl.selectDistinct(selectList).from(mainTable)
                 : dsl.select(selectList).from(mainTable);
 
-        // JOIN-lər
+        // ─── JOIN — raw (generated table ilə) ───────────────────────────────
         for (RawJoinRow jr : rawJoins) {
             query = switch (jr.type()) {
                 case LEFT_OUTER_JOIN  -> query.leftJoin(jr.table()).on(jr.on());
@@ -974,14 +1661,91 @@ public final class JooqQuery<T> {
             };
         }
 
-        // WHERE
+        // ─── JOIN — entity class, tək field cütü ────────────────────────────
+        for (JoinRow jr : joins) {
+            EntityTable<?> et = new EntityTable<>(jr.entity(), jr.alias());
+            Table<?> jt       = et.getTable();
+
+            String fromAlias     = aliasPart(jr.fromField());
+            String fromFieldName = fieldPart(jr.fromField());
+            Table<?> fromTbl     = (fromAlias != null && !fromAlias.isBlank())
+                    ? joinTableRegistry.getOrDefault(fromAlias, mainTable)
+                    : mainTable;
+
+            Field<?> fromF = resolveFromTable(fromTbl, fromFieldName);
+            if (fromF == null) fromF = DSL.field(DSL.name(fromAlias, fromFieldName));
+            Field<?> toF = et.getField(jr.toField());
+
+            Condition on = ((Field<Object>) fromF).eq((Field<Object>) toF);
+            query = "LEFT".equals(jr.type())
+                    ? query.leftJoin(jt).on(on)
+                    : query.join(jt).on(on);
+        }
+
+        // ─── JOIN — SelectTable (derived table), string field adları ilə ──────
+        for (SelectJoinRow jr : selectJoins) {
+            Table<?> jt = jr.subQuery().asTable(jr.alias());
+            joinTableRegistry.put(jr.alias(), jt);
+
+            Condition on = null;
+            for (FieldPair fp : jr.pairs()) {
+                Table<?> fromTbl = (fp.fromAlias() != null && !fp.fromAlias().isBlank())
+                        ? joinTableRegistry.getOrDefault(fp.fromAlias(), mainTable)
+                        : mainTable;
+                Field<?> fromF = resolveFromTable(fromTbl, fp.fromField());
+                if (fromF == null) fromF = DSL.field(DSL.name(fp.fromAlias(), fp.fromField()));
+                Field<?> toF   = resolveFromTable(jt, fp.toField());
+                if (toF == null) toF = DSL.field(DSL.name(jr.alias(), fp.toField()));
+                Condition c = ((Field<Object>) fromF).eq((Field<Object>) toF);
+                on = (on == null) ? c : on.and(c);
+            }
+            for (JoinFilterRow extra : jr.extras()) {
+                Field<?> f = resolveFromTable(jt, extra.field());
+                if (f == null) f = DSL.field(DSL.name(jr.alias(), extra.field()));
+                Condition c = FilterStrategies.get(extra.op()).apply((Field<Object>) f, extra.value());
+                on = (on == null) ? c : on.and(c);
+            }
+            if (on == null) on = DSL.trueCondition();
+
+            query = "LEFT".equals(jr.type())
+                    ? query.leftJoin(jt).on(on)
+                    : query.join(jt).on(on);
+        }
+
+        // ─── JOIN — entity class, çoxlu field cütü + əlavə şərtlər ─────────
+        for (ExtJoinRow jr : extJoins) {
+            EntityTable<?> toEt = new EntityTable<>(jr.entity(), jr.alias());
+            Table<?> jt         = toEt.getTable();
+
+            Condition on = null;
+            for (FieldPair fp : jr.pairs()) {
+                Table<?> fromTbl = joinTableRegistry.getOrDefault(fp.fromAlias(), mainTable);
+                Field<?> fromF   = resolveFromTable(fromTbl, fp.fromField());
+                if (fromF == null) fromF = DSL.field(DSL.name(fp.fromAlias(), fp.fromField()));
+                Field<?> toF = toEt.getField(fp.toField());
+                Condition c = ((Field<Object>) fromF).eq((Field<Object>) toF);
+                on = (on == null) ? c : on.and(c);
+            }
+            for (JoinFilterRow extra : jr.extras()) {
+                Field<Object> f = (Field<Object>) toEt.getField(extra.field());
+                Condition c = FilterStrategies.get(extra.op()).apply(f, extra.value());
+                on = (on == null) ? c : on.and(c);
+            }
+            if (on == null) on = DSL.trueCondition();
+
+            query = "LEFT".equals(jr.type())
+                    ? query.leftJoin(jt).on(on)
+                    : query.join(jt).on(on);
+        }
+
+        // ─── WHERE ───────────────────────────────────────────────────────────
         Condition where = null;
         for (Condition c : rawConditions) where = (where == null) ? c : where.and(c);
         SelectConditionStep<Record> conditioned = (where != null)
                 ? query.where(where)
                 : query.where(DSL.trueCondition());
 
-        // GROUP BY
+        // ─── GROUP BY ────────────────────────────────────────────────────────
         SelectHavingStep<Record> grouped;
         if (!rawGroupByFields.isEmpty()) {
             grouped = conditioned.groupBy(rawGroupByFields);
@@ -989,15 +1753,34 @@ public final class JooqQuery<T> {
             grouped = conditioned;
         }
 
-        // HAVING
+        // ─── HAVING — raw + havingFilterRows (agg alias → ifadə ilə) ────────
         Condition having = null;
         for (Condition c : rawHavings) having = (having == null) ? c : having.and(c);
+
+        for (FilterRow fr : havingFilterRows) {
+            Field<Object> f;
+            Field<?> aggExpr = aggExprByAlias.get(fr.field());
+            if (aggExpr != null) {
+                f = (Field<Object>) aggExpr;              // HAVING SUM(field) > val
+            } else {
+                f = (Field<Object>) DSL.field(DSL.name(fr.field())); // birbaşa alias ref
+            }
+            Condition c = FilterStrategies.get(fr.op()).apply(f, fr.value());
+            having = (having == null) ? c : having.and(c);
+        }
+
         if (having != null) grouped = (SelectHavingStep<Record>) grouped.having(having);
 
-        // ORDER BY
+        // ─── ORDER BY — sortRows ─────────────────────────────────────────────
+        for (SortRow sr : sortRows) {
+            Field<?> f = resolveFieldByAlias(sr.field());
+            if (f == null) f = DSL.field(DSL.name(fieldPart(sr.field())));
+            rawOrderFields.add("DESC".equalsIgnoreCase(sr.dir()) ? f.desc() : f.asc());
+        }
+
         SelectSeekStepN<Record> ordered = grouped.orderBy(rawOrderFields);
 
-        // COUNT (pagination üçün)
+        // ─── COUNT (pagination üçün) ─────────────────────────────────────────
         int rowCount = 0;
         if (paginate) {
             Record1<Integer> r = dsl.selectCount()
@@ -1007,7 +1790,7 @@ public final class JooqQuery<T> {
             rowCount = (r == null) ? 0 : r.value1();
         }
 
-        // LIMIT / OFFSET
+        // ─── LIMIT / OFFSET ───────────────────────────────────────────────────
         Select<Record> finalQuery = paginate
                 ? ordered.limit(pageSize).offset((long) pageNumber * pageSize)
                 : ordered;
@@ -1097,6 +1880,16 @@ public final class JooqQuery<T> {
     }
 
     /**
+     * "t.fieldName" → "t" (cədvəl alias hissəsi).
+     * Nöqtə yoxdursa boş sətir qaytarılır.
+     */
+    private static String aliasPart(String aliasAndField) {
+        if (aliasAndField == null) return "";
+        int dot = aliasAndField.indexOf('.');
+        return dot >= 0 ? aliasAndField.substring(0, dot) : "";
+    }
+
+    /**
      * Generated cədvəldə string adla {@link Field} tapır.
      *
      * <ol>
@@ -1109,6 +1902,24 @@ public final class JooqQuery<T> {
      * @param fieldName camelCase və ya snake_case sahə adı
      * @return tapılan {@link Field}, tapılmadıqda {@code null}
      */
+    /**
+     * Generated mode üçün: "alias.field" və ya "field" formatında sətri parse edib
+     * düzgün cədvəldən (main və ya join) Field-i tapır.
+     *
+     * <p>Alias joinTableRegistry-də tapılmadıqda generatedTable istifadə olunur.
+     */
+    private Field<?> resolveFieldByAlias(String col) {
+        if (col == null || col.isBlank()) return null;
+        int dot = col.indexOf('.');
+        if (dot > 0) {
+            String tableAlias = col.substring(0, dot);
+            String fieldName  = col.substring(dot + 1);
+            Table<?> target   = joinTableRegistry.getOrDefault(tableAlias, generatedTable);
+            return resolveFromTable(target, fieldName);
+        }
+        return resolveFromTable(generatedTable, col);
+    }
+
     private static Field<?> resolveFromTable(Table<?> table, String fieldName) {
         if (fieldName == null || fieldName.isBlank()) return null;
 
