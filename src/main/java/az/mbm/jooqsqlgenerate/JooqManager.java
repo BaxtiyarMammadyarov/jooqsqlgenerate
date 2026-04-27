@@ -2,6 +2,7 @@ package az.mbm.jooqsqlgenerate;
 
 import org.jooq.*;
 import org.jooq.Record;
+import org.jooq.RecordMapper;
 import az.mbm.jooqsqlgenerate.builder.CaseBuilder;
 import az.mbm.jooqsqlgenerate.builder.ComputedField;
 import az.mbm.jooqsqlgenerate.builder.SubQueryIn;
@@ -9,12 +10,12 @@ import az.mbm.jooqsqlgenerate.builder.SubSelectBuilder;
 import az.mbm.jooqsqlgenerate.builder.UpdateQueryBuilder;
 import az.mbm.jooqsqlgenerate.core.SelectFetchJooq;
 import az.mbm.jooqsqlgenerate.core.SelectTable;
-import az.mbm.jooqsqlgenerate.enums.FilterOperations;
-import az.mbm.jooqsqlgenerate.enums.GroupFunction;
+import az.mbm.jooqsqlgenerate.enums.Op;
+import az.mbm.jooqsqlgenerate.enums.Agg;
 import az.mbm.jooqsqlgenerate.enums.MathOperation;
 import az.mbm.jooqsqlgenerate.spec.ExistsSpec;
 import az.mbm.jooqsqlgenerate.spec.Filter;
-import az.mbm.jooqsqlgenerate.spec.GlobalFilter;
+import az.mbm.jooqsqlgenerate.spec.Filters;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Component;
@@ -43,8 +44,8 @@ import java.util.stream.Collectors;
  *     public SelectTable search(String status, String name) {
  *         jooq.setMainTable(User.class, "u");
  *         jooq.addColumns("u.id", "u.name", "u.email");
- *         jooq.addFilter("status", FilterOperations.EQUAl, status);
- *         jooq.addFilter("name",   FilterOperations.LIKE,   name);
+ *         jooq.addFilter("status", Op.EQUAl, status);
+ *         jooq.addFilter("name",   Op.LIKE,   name);
  *         return jooq.execute();
  *     }
  * }
@@ -60,9 +61,12 @@ public class JooqManager {
     @SuppressWarnings("rawtypes")
     private JooqQuery current;
 
+    /** Son icra edilən sorğunun ümumi sətir sayı (pagination üçün) */
+    private int lastRowCount = 0;
+
     /** UPDATE üçün ayrıca filter siyahısı (JooqQuery SELECT-ə yönəlibdir) */
     private final List<UpdateFilterRow> updateFilters = new ArrayList<>();
-    private record UpdateFilterRow(String field, FilterOperations op, Object value) {}
+    private record UpdateFilterRow(String field, Op op, Object value) {}
 
     public JooqManager(DSLContext dsl) {
         this.dsl = Objects.requireNonNull(dsl, "DSLContext null ola bilməz");
@@ -134,7 +138,7 @@ public class JooqManager {
      *
      *   jooq.setMainTable(active, "sub")
      *       .addColumns("id", "name")
-     *       .addFilter("name", FilterOperations.LIKE, "Ali")
+     *       .addFilter("name", Op.LIKE, "Ali")
      *       .addLeftJoin(ORDERS, "o", sub.field("id", Long.class).eq(ORDERS.USER_ID))
      *       .addOrderBy("name", "ASC")
      *       .execute();
@@ -262,18 +266,89 @@ public class JooqManager {
     //  JOIN
     // ════════════════════════════════════════════════════════════════════
 
-    /** LEFT JOIN — entity mode (string field adları) */
+    /** LEFT JOIN — entity mode (string field adları, tək cüt) */
     public JooqManager addLeftJoin(Class<?> entity, String alias,
                                    String fromField, String toField) {
         q().leftJoin(entity, alias, fromField, toField);
         return this;
     }
 
-    /** INNER JOIN — entity mode (string field adları) */
+    /** INNER JOIN — entity mode (string field adları, tək cüt) */
     public JooqManager addInnerJoin(Class<?> entity, String alias,
                                     String fromField, String toField) {
         q().innerJoin(entity, alias, fromField, toField);
         return this;
+    }
+
+    /**
+     * LEFT JOIN builder — çoxlu ON field cütü + əlavə ON şərtləri.
+     *
+     * <pre>{@code
+     *   jooq.setMainTable(WarehouseFlow.class, "t")
+     *       .addLeftJoin(Product.class, "t1")
+     *           .on("fkProductId", "id")          // t.fkProductId = t1.id
+     *           .on("companyId",   "companyId")    // t.companyId   = t1.companyId
+     *           .andOn("status", Op.EQUAl, "A")  // AND t1.status = 'A'
+     *       .done()
+     *       .addColumns(...)
+     *       .execute();
+     * }</pre>
+     */
+    @SuppressWarnings("unchecked")
+    public JoinSetup addLeftJoin(Class<?> entity, String alias) {
+        return new JoinSetup(this, q().leftJoin(entity, alias));
+    }
+
+    /**
+     * INNER JOIN builder — çoxlu ON field cütü + əlavə ON şərtləri.
+     */
+    @SuppressWarnings("unchecked")
+    public JoinSetup addInnerJoin(Class<?> entity, String alias) {
+        return new JoinSetup(this, q().innerJoin(entity, alias));
+    }
+
+    /**
+     * JOIN fluent setup — {@link JooqQuery.JoinBuilder}-i {@link JooqManager}-ə bağlayır.
+     * {@code done()} çağrıldıqda {@link JooqManager}-ə qayıdır.
+     */
+    public final class JoinSetup {
+        private final JooqManager              manager;
+        @SuppressWarnings("rawtypes")
+        private final JooqQuery.JoinBuilder    inner;
+
+        @SuppressWarnings("rawtypes")
+        JoinSetup(JooqManager manager, JooqQuery.JoinBuilder inner) {
+            this.manager = manager;
+            this.inner   = inner;
+        }
+
+        /** ON şərti: ana cədvəl.fromField = join cədvəl.toField */
+        @SuppressWarnings("unchecked")
+        public JoinSetup on(String fromField, String toField) {
+            inner.on(fromField, toField);
+            return this;
+        }
+
+        /** ON şərti: konkret fromAlias.fromField = join cədvəl.toField */
+        @SuppressWarnings("unchecked")
+        public JoinSetup onFrom(String fromAlias, String fromField, String toField) {
+            inner.onFrom(fromAlias, fromField, toField);
+            return this;
+        }
+
+        /** JOIN ON-a əlavə dəyər şərti: join cədvəli.field OP value */
+        @SuppressWarnings("unchecked")
+        public JoinSetup andOn(String field, Op op, Object value) {
+            inner.andOn(field, op, value);
+            return this;
+        }
+
+        /** Builder-i tamamlayır, {@link JooqManager}-ə qayıdır. */
+        @SuppressWarnings("unchecked")
+        public JooqManager done() {
+            inner.done();
+            return manager;
+        }
     }
 
     /**
@@ -300,6 +375,89 @@ public class JooqManager {
         return this;
     }
 
+    /**
+     * LEFT JOIN — başqa bir {@link SelectTable} ilə, string field adları (entity join kimi).
+     *
+     * <pre>{@code
+     *   .addLeftJoin(budgetQuery, "b", "f.fkAccountId", "fkAccountId")
+     *   // ON f."fkAccountId" = b."fkAccountId"
+     * }</pre>
+     */
+    public JooqManager addLeftJoin(SelectTable subQuery, String alias,
+                                    String fromField, String toField) {
+        q().leftJoin(subQuery, alias, fromField, toField);
+        return this;
+    }
+
+    /**
+     * INNER JOIN — başqa bir {@link SelectTable} ilə, string field adları ilə.
+     */
+    public JooqManager addInnerJoin(SelectTable subQuery, String alias,
+                                     String fromField, String toField) {
+        q().innerJoin(subQuery, alias, fromField, toField);
+        return this;
+    }
+
+    /**
+     * LEFT JOIN builder — çoxlu ON field cütü + əlavə şərtlər.
+     *
+     * <pre>{@code
+     *   .addLeftJoin(budgetQuery, "b")
+     *       .on("f.fkAccountId", "fkAccountId")
+     *       .on("f.fkCurrencyId", "fkCurrencyId")
+     *       .andOn("status", Op.EQUAl, "A")
+     *       .done()
+     * }</pre>
+     */
+    public SelectJoinSetup addLeftJoin(SelectTable subQuery, String alias) {
+        return new SelectJoinSetup(this, q().leftJoin(subQuery, alias));
+    }
+
+    public SelectJoinSetup addInnerJoin(SelectTable subQuery, String alias) {
+        return new SelectJoinSetup(this, q().innerJoin(subQuery, alias));
+    }
+
+    public final class SelectJoinSetup {
+        private final JooqManager                       manager;
+        private final JooqQuery.SelectJoinBuilder<?>    inner;
+
+        SelectJoinSetup(JooqManager manager, JooqQuery.SelectJoinBuilder<?> inner) {
+            this.manager = manager;
+            this.inner   = inner;
+        }
+
+        public SelectJoinSetup on(String fromField, String toField) {
+            inner.on(fromField, toField);
+            return this;
+        }
+
+        public SelectJoinSetup andOn(String field, Op op, Object value) {
+            inner.andOn(field, op, value);
+            return this;
+        }
+
+        public JooqManager done() {
+            inner.done();
+            return manager;
+        }
+    }
+
+    /**
+     * LEFT JOIN — başqa bir {@link SelectTable} ilə, raw jOOQ ON şərti.
+     */
+    public JooqManager addLeftJoin(SelectTable subQuery, String alias, Condition on) {
+        q().leftJoin(subQuery, alias, on);
+        return this;
+    }
+
+    /**
+     * INNER JOIN — başqa bir {@link SelectTable} ilə, raw jOOQ ON şərti.
+     */
+    public JooqManager addInnerJoin(SelectTable subQuery, String alias, Condition on) {
+        q().innerJoin(subQuery, alias, on);
+        return this;
+    }
+
     // ════════════════════════════════════════════════════════════════════
     //  WHERE
     // ════════════════════════════════════════════════════════════════════
@@ -308,11 +466,11 @@ public class JooqManager {
      * Dinamik filter — null / boş / boş kolleksiya olduqda <b>atlanır</b>.
      *
      * <pre>{@code
-     *   jooq.addFilter("status",  FilterOperations.EQUAl, status);  // null → atlanır
-     *   jooq.addFilter("roleId",  FilterOperations.IN,    roleIds);  // boş  → atlanır
+     *   jooq.addFilter("status",  Op.EQUAl, status);  // null → atlanır
+     *   jooq.addFilter("roleId",  Op.IN,    roleIds);  // boş  → atlanır
      * }</pre>
      */
-    public JooqManager addFilter(String field, FilterOperations op, Object value) {
+    public JooqManager addFilter(String field, Op op, Object value) {
         q().filter(field, op, value);
         updateFilters.add(new UpdateFilterRow(field, op, value)); // UPDATE üçün saxlanır
         return this;
@@ -326,7 +484,7 @@ public class JooqManager {
      *   jooq.addFilter(USERS.AGE,    GREATER_THAN, 18)
      * }</pre>
      */
-    public <V> JooqManager addFilter(Field<V> field, FilterOperations op, Object value) {
+    public <V> JooqManager addFilter(Field<V> field, Op op, Object value) {
         q().filter(field, op, value);
         return this;
     }
@@ -345,24 +503,55 @@ public class JooqManager {
     }
 
     /**
-     * Xarici {@link GlobalFilter} builder-dən gələn filterlər.
+     * Filter — {@link Filters} fluent builder ilə.
      *
      * <pre>{@code
-     *   jooq.addGlobalFilter(
-     *       GlobalFilter.of()
+     *   jooq.addFilter(
+     *       Filters.of()
      *           .equal("status", "ACTIVE")
-     *           .like("name", name)
+     *           .like("name",    name)
+     *           .greaterThan("o.amount", "100")
      *   );
      * }</pre>
      */
-    public JooqManager addGlobalFilter(GlobalFilter globalFilter) {
-        q().globalFilter(globalFilter);
+    public JooqManager addFilter(Filters dto) {
+        q().globalFilter(dto);
         return this;
     }
 
-    /** Xam {@code Map<String, Map<String,String>>} formatında global filter. */
-    public JooqManager addGlobalFilter(Map<String, Map<String, String>> map) {
-        q().globalFilter(map);
+    /**
+     * Filter — tək field üçün {@code Map<String, String>} ilə.
+     *
+     * <p>{@code field} null / boş, {@code filters} null / boş olduqda atlanır.
+     * Map daxilindəki null key, null və ya boş value avtomatik atlanır.
+     *
+     * <pre>{@code
+     *   jooq.addFilter("o.amount", Map.of("greaterThan", "100", "lessThan", "500"));
+     *   jooq.addFilter("u.status", Map.of("equal",  "ACTIVE"));
+     *   jooq.addFilter("roleId",   Map.of("in",     "1,2,3"));
+     * }</pre>
+     *
+     * @param field   sahə adı: {@code "alias.field"} və ya {@code "field"} formatında
+     * @param filters əməliyyat adı → String dəyər cütləri
+     */
+    public JooqManager addFilter(String field, Map<String, String> filters) {
+        q().globalFilter(field, filters);
+        return this;
+    }
+
+    /**
+     * Filter — field-first {@code Map<String, Map<String,String>>} strukturu.
+     *
+     * <p>Birbaşa JSON request body-dən gələn struktur üçün uygundur:
+     * outer key = field adı, inner key = əməliyyat, inner value = dəyər.
+     *
+     * <pre>{@code
+     *   // JSON: {"price": {"like": "10"}, "status": {"equal": "ACTIVE"}}
+     *   jooq.addFilter(request.getFilterMap());
+     * }</pre>
+     */
+    public JooqManager addFilter(Map<String, Map<String, String>> fieldMap) {
+        q().globalFilter(fieldMap);
         return this;
     }
 
@@ -443,32 +632,120 @@ public class JooqManager {
         return this;
     }
 
-    /** Aqreqat funksiya (SUM, COUNT, AVG, MIN, MAX). */
-    public JooqManager addAggFunction(GroupFunction fn, String field, String alias,
-                                      Integer round,
-                                      FilterOperations havingOp, Object havingVal,
-                                      String orderDir) {
-        q().agg(fn, field, alias, round, havingOp, havingVal, orderDir);
+    // ════════════════════════════════════════════════════════════════════
+    //  AGREQATlar — SUM / COUNT / AVG / MIN / MAX
+    //
+    //  HAVING üçün bu metodlarda parametr yoxdur.
+    //  Bunun əvəzinə addHavingFilter(alias, Map<String,String>) istifadə edin:
+    //
+    //    jooq.addAggFunction(SUM, "t.totalPrice", "totalPrice");
+    //    jooq.addHavingFilter("totalPrice", Map.of("greaterThan", "1000"));
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * Sadə aqreqat funksiya.
+     *
+     * <pre>{@code
+     *   jooq.addAggFunction(SUM,   "t.totalPrice", "totalPrice");
+     *   jooq.addAggFunction(COUNT, "t.id",         "cnt");
+     *   jooq.addAggFunction(AVG,   "t.amount",     "avgAmount");
+     * }</pre>
+     */
+    public JooqManager addAggFunction(Agg fn, String field, String alias) {
+        q().agg(fn, field, alias);
         return this;
     }
 
-    /** Riyazi əməliyyatlı aqreqat: SUM(f1 * f2). */
-    public JooqManager addAggFunctionWithMath(GroupFunction fn,
+    /**
+     * Aqreqat funksiya — onluq yuvarlama ilə.
+     *
+     * <pre>{@code
+     *   jooq.addAggFunction(SUM, "t.totalPrice", "totalPrice", 2);  // ROUND(SUM(...), 2)
+     * }</pre>
+     */
+    public JooqManager addAggFunction(Agg fn, String field, String alias, Integer round) {
+        q().agg(fn, field, alias, round);
+        return this;
+    }
+
+    /**
+     * Aqreqat funksiya — ORDER BY istiqaməti ilə.
+     *
+     * <pre>{@code
+     *   jooq.addAggFunction(SUM, "t.totalPrice", "totalPrice", "DESC");
+     * }</pre>
+     *
+     * @param orderDir "ASC" və ya "DESC"
+     */
+    public JooqManager addAggFunction(Agg fn, String field, String alias, String orderDir) {
+        q().agg(fn, field, alias, null, orderDir);
+        return this;
+    }
+
+    /**
+     * Aqreqat funksiya — yuvarlama + ORDER BY ilə.
+     *
+     * <pre>{@code
+     *   jooq.addAggFunction(SUM, "t.totalPrice", "totalPrice", 2, "DESC");
+     * }</pre>
+     */
+    public JooqManager addAggFunction(Agg fn, String field, String alias,
+                                      Integer round, String orderDir) {
+        q().agg(fn, field, alias, round, orderDir);
+        return this;
+    }
+
+    /**
+     * Riyazi ifadəli aqreqat: {@code SUM(field * mathField)}.
+     *
+     * <pre>{@code
+     *   jooq.addAggFunctionWithMath(SUM, "t.price", MULTIPLY, "t.qty", "totalAmount");
+     * }</pre>
+     */
+    public JooqManager addAggFunctionWithMath(Agg fn,
                                               String field, MathOperation mathOp, String mathField,
-                                              String alias, Integer round,
-                                              FilterOperations havingOp, Object havingVal,
-                                              String orderDir) {
-        q().aggWithMath(fn, field, mathOp, mathField, alias, round, havingOp, havingVal, orderDir);
+                                              String alias) {
+        q().aggWithMath(fn, field, mathOp, mathField, alias);
         return this;
     }
 
-    /** ComputedField üzərindəki aqreqat: SUM((price*qty) - discount). */
-    public JooqManager addAggFunctionOnComputed(GroupFunction fn,
-                                                ComputedField expr,
-                                                String alias, Integer round,
-                                                FilterOperations havingOp, Object havingVal,
-                                                String orderDir) {
-        q().aggOnComputed(fn, expr, alias, round, havingOp, havingVal, orderDir);
+    /**
+     * Riyazi ifadəli aqreqat — yuvarlama ilə.
+     *
+     * <pre>{@code
+     *   jooq.addAggFunctionWithMath(SUM, "t.price", MULTIPLY, "t.qty", "totalAmount", 2);
+     * }</pre>
+     */
+    public JooqManager addAggFunctionWithMath(Agg fn,
+                                              String field, MathOperation mathOp, String mathField,
+                                              String alias, Integer round) {
+        q().aggWithMath(fn, field, mathOp, mathField, alias, round);
+        return this;
+    }
+
+    /**
+     * {@link ComputedField} üzərindəki aqreqat: {@code SUM((price * qty) - discount)}.
+     *
+     * <pre>{@code
+     *   ComputedField expr = ComputedField.of("t.price").multiply("t.qty").as("totalAmount");
+     *   jooq.addAggFunctionOnComputed(SUM, expr, "totalAmount");
+     * }</pre>
+     */
+    public JooqManager addAggFunctionOnComputed(Agg fn, ComputedField expr, String alias) {
+        q().aggOnComputed(fn, expr, alias);
+        return this;
+    }
+
+    /**
+     * {@link ComputedField} üzərindəki aqreqat — yuvarlama ilə.
+     *
+     * <pre>{@code
+     *   jooq.addAggFunctionOnComputed(SUM, expr, "totalAmount", 2);
+     * }</pre>
+     */
+    public JooqManager addAggFunctionOnComputed(Agg fn, ComputedField expr,
+                                                String alias, Integer round) {
+        q().aggOnComputed(fn, expr, alias, round);
         return this;
     }
 
@@ -489,15 +766,71 @@ public class JooqManager {
         return this;
     }
 
+    /**
+     * HAVING filter — aggregat alias üçün {@code Map<String, String>} ilə.
+     *
+     * <p>Null, boş map və boş dəyərlər atlanır.
+     *
+     * <pre>{@code
+     *   // globalFilter-dən götürüb set et:
+     *   jooq.addHavingFilter("totalPrice", dto.getFilters().remove("totalPrice"));
+     *
+     *   // Birbaşa:
+     *   jooq.addHavingFilter("totalPrice", Map.of("greaterThan", "1000"));
+     * }</pre>
+     */
+    /**
+     * HAVING filter — aggregat alias üçün {@code Map<String, String>} ilə.
+     *
+     * <pre>{@code
+     *   jooq.addHavingFilter("totalPrice", Map.of("greaterThan", "1000"));
+     *   jooq.addHavingFilter("cnt",        Map.of("between",     "5,50"));
+     * }</pre>
+     */
+    public JooqManager addHavingFilter(String field, Map<String, String> filters) {
+        q().havingFilter(field, filters);
+        return this;
+    }
+
+    /**
+     * HAVING filter — GROUP BY sahəsi üçün əməliyyat + dəyər ilə.
+     *
+     * <p>Aqreqat funksiyasız GROUP BY-da olan sahəyə HAVING şərti tətbiq edir.
+     * Null dəyər və ya boş string olduqda atlanır.
+     *
+     * <pre>{@code
+     *   jooq.addHavingFilter("t.operationType", Op.EQUAl,        "SELL");
+     *   jooq.addHavingFilter("t.status",        Op.NOT_EQUAL,     "PASSIVE");
+     *   jooq.addHavingFilter("t.amount",        Op.GREATER_THAN,  100);
+     *   jooq.addHavingFilter("t.category",      Op.IN,            List.of("A","B"));
+     * }</pre>
+     *
+     * @param field sahə adı: {@code "alias.field"} və ya {@code "field"} formatında
+     * @param op    filter əməliyyatı
+     * @param value filter dəyəri (null / boş string → atlanır)
+     */
+    public JooqManager addHavingFilter(String field, Op op, Object value) {
+        q().havingFilter(field, op, value);
+        return this;
+    }
+
     // ════════════════════════════════════════════════════════════════════
     //  CASE WHEN
     // ════════════════════════════════════════════════════════════════════
 
-    /** Sadə CASE WHEN ... THEN ... ELSE ... END AS alias. */
-    public JooqManager addCaseColumn(String field, FilterOperations op,
+    /** CASE WHEN — tam parametrlər (ELSE ilə). */
+    public JooqManager addCaseColumn(String field, Op op,
                                      Object whenVal, Object thenVal,
                                      Object elseVal, String alias) {
         q().caseWhen(field, op, whenVal, thenVal, elseVal, alias);
+        return this;
+    }
+
+    /** CASE WHEN — ELSE olmadan (null qaytarır). */
+    public JooqManager addCaseColumn(String field, Op op,
+                                     Object whenVal, Object thenVal,
+                                     String alias) {
+        q().caseWhen(field, op, whenVal, thenVal, null, alias);
         return this;
     }
 
@@ -527,6 +860,24 @@ public class JooqManager {
      * }</pre>
      */
     public JooqManager addOrderBy(Map<String, String> sorts) {
+        q().orderBy(sorts);
+        return this;
+    }
+
+    /**
+     * ORDER BY — {@code List<Map<String, String>>} ilə.
+     *
+     * <p>Hər map-in tək entry-si: key = field adı, value = "ASC" və ya "DESC".
+     * Sıralama siyahıdakı ardıcıllığa görə tətbiq olunur.
+     *
+     * <pre>{@code
+     *   jooq.addOrderBy(List.of(
+     *       Map.of("u.createdAt", "DESC"),
+     *       Map.of("u.name",      "ASC")
+     *   ));
+     * }</pre>
+     */
+    public JooqManager addOrderBy(List<Map<String, String>> sorts) {
         q().orderBy(sorts);
         return this;
     }
@@ -568,9 +919,18 @@ public class JooqManager {
         return this;
     }
 
-    /** Səhifələməni söndürür — bütün nəticəni qaytarır. */
+    /** Səhifələməni söndürür — bütün nəticəni qaytarır, COUNT işləmir. */
     public JooqManager noPagination() {
         q().noPagination();
+        return this;
+    }
+
+    /**
+     * Pagination olmadan yalnız COUNT sorğusunu aktiv edir.
+     * LIMIT/OFFSET tətbiq olunmur, amma {@link #getLastRowCount()} dəyər qaytarır.
+     */
+    public JooqManager withCount() {
+        q().withCount();
         return this;
     }
 
@@ -585,10 +945,27 @@ public class JooqManager {
     public SelectTable execute() {
         JooqQuery<?> q = q();
         try {
-            return q.execute(dsl);
+            SelectTable result = q.execute(dsl);
+            lastRowCount = result.getRowCount();
+            return result;
         } finally {
             reset();
         }
+    }
+
+    /**
+     * Son icra edilən sorğunun ümumi sətir sayını qaytarır (pagination üçün).
+     *
+     * <pre>{@code
+     *   List<MyDto> list = jooq
+     *       .setMainTable(...)
+     *       .setPage(0, 20)
+     *       .fetchMapper(mapper);
+     *   int total = jooq.getLastRowCount();
+     * }</pre>
+     */
+    public int getLastRowCount() {
+        return lastRowCount;
     }
 
     /**
@@ -596,7 +973,7 @@ public class JooqManager {
      *
      * <pre>{@code
      *   jooq.setMainTable(User.class, "u");
-     *   jooq.addFilter("id", FilterOperations.EQUAl, userId);
+     *   jooq.addFilter("id", Op.EQUAl, userId);
      *   int rows = jooq.update("status", "INACTIVE");
      * }</pre>
      */
@@ -643,6 +1020,83 @@ public class JooqManager {
     }
 
     /**
+     * Execute edib {@link RecordMapper} ilə çevirərək list qaytarır.
+     *
+     * <pre>{@code
+     *   List<MyDto> list = jooq
+     *       .setMainTable(WarehouseFlow.class, "t")
+     *       .addColumns("t.id", "t1.productName")
+     *       .fetchMapper(r -> new MyDto(
+     *           r.get("id", String.class),
+     *           r.get("product_name", String.class)
+     *       ));
+     * }</pre>
+     */
+    public <V> List<V> fetchMapper(RecordMapper<Record, V> mapper) {
+        return new SelectFetchJooq<V>().fetchMapper(execute(), mapper).getList();
+    }
+
+    /**
+     * Execute edib {@link SelectTable} vasitəsilə {@link RecordMapper} ilə list qaytarır.
+     */
+    public <V> List<V> fetchMapper(SelectTable selectTable, RecordMapper<Record, V> mapper) {
+        return new SelectFetchJooq<V>().fetchMapper(selectTable, mapper).getList();
+    }
+
+    /**
+     * Execute edib {@code List<Map<String,Object>>} qaytarır.
+     * Null dəyərlər {@code ""} ilə əvəzlənir — JSON-da field silinmir.
+     *
+     * <pre>{@code
+     *   List<Map<String, Object>> rows = jooq
+     *       .setMainTable(WarehouseFlow.class, "t")
+     *       .addColumns("t.id", "t.productName", "t.price")
+     *       .fetchMapsNullSafe();
+     *   // → [{id: "...", productName: "", price: 55.0}, ...]
+     * }</pre>
+     */
+    public List<Map<String, Object>> fetchMapsNullSafe() {
+        List<Map<String, Object>> list = new SelectFetchJooq<>().fetchMaps(execute()).getList();
+        return list.stream()
+                .filter(Objects::nonNull)
+                .map(JooqManager::replaceNulls)
+                .toList();
+    }
+
+    /** Map-dəki null dəyərləri {@code ""} ilə əvəzləyir */
+    private static Map<String, Object> replaceNulls(Map<String, Object> row) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        row.forEach((k, v) -> result.put(k, v == null ? "" : v));
+        return result;
+    }
+
+    /**
+     * Sorğu nəticəsini {@code Map<String, Object>}-ə birləşdirir.
+     *
+     * <p>Nəticə sətirləri {@code "key"} və {@code "value"} sütunlarına sahib olmalıdır.
+     * Eyni key varsa <b>sonuncu</b> dəyər saxlanılır.
+     *
+     * <pre>{@code
+     *   Map<String, Object> map = jooq
+     *       .setMainTable(Config.class, "c")
+     *       .addColumns("c.key", "c.value")
+     *       .fetchMergedMap();
+     *   // → {"theme": "dark", "lang": "az", ...}
+     * }</pre>
+     */
+    public Map<String, Object> fetchMergedMap() {
+        List<Map<String, Object>> list = new SelectFetchJooq<>().fetchMaps(execute()).getList();
+        return list.stream()
+                .filter(Objects::nonNull)
+                .filter(m -> m.containsKey("key") && m.containsKey("value"))
+                .collect(Collectors.toMap(
+                        m -> String.valueOf(m.get("key")),
+                        m -> m.get("value"),
+                        (v1, v2) -> v2
+                ));
+    }
+
+    /**
      * Execute edib entity list qaytarır.
      *
      * <pre>{@code
@@ -672,29 +1126,68 @@ public class JooqManager {
     // ════════════════════════════════════════════════════════════════════
 
     /**
-     * Əməliyyat adını (String) {@link FilterOperations}-a çevirir.
-     * {@code addGlobalFilter} üçün daxili yardımçı.
+     * Əməliyyat adını (String) {@link Op}-a çevirir.
+     * {@code addFilter} üçün daxili yardımçı.
      */
-    public static FilterOperations parseOperationPublic(String name) {
+    public static Op parseOperationPublic(String name) {
         if (name == null) return null;
         return switch (name.trim().toLowerCase()) {
-            case "equal", "eq", "equals"                             -> FilterOperations.EQUAl;
-            case "notequal", "ne", "not_equal", "noteq"              -> FilterOperations.NOT_EQUAL;
-            case "greaterthan", "gt"                                 -> FilterOperations.GREATER_THAN;
-            case "greaterthanorequal", "gte", "greaterthanorequalto" -> FilterOperations.GREATER_THAN_OR_EQUAL_TO;
-            case "lessthan", "lt"                                    -> FilterOperations.LESS_THAN;
-            case "lessthanorequal", "lte", "lessthanorequalto"       -> FilterOperations.LESS_THAN_OR_EQUAL_TO;
-            case "like"                                              -> FilterOperations.LIKE;
-            case "startwith", "startswith", "starts"                 -> FilterOperations.START_WITH;
-            case "endwith", "endswith", "ends"                       -> FilterOperations.END_WITH;
-            case "in"                                                -> FilterOperations.IN;
-            case "notin", "not_in"                                   -> FilterOperations.NOT_IN;
-            case "between"                                           -> FilterOperations.BETWEEN;
-            case "isnull", "isempty", "is_null", "is_empty"         -> FilterOperations.IS_EMPTY;
+            case "equal", "eq", "equals"                             -> Op.EQUAl;
+            case "notequal", "ne", "not_equal", "noteq"              -> Op.NOT_EQUAL;
+            case "greaterthan", "gt"                                 -> Op.GREATER_THAN;
+            case "greaterthanorequal", "gte", "greaterthanorequalto" -> Op.GREATER_THAN_OR_EQUAL_TO;
+            case "lessthan", "lt"                                    -> Op.LESS_THAN;
+            case "lessthanorequal", "lte", "lessthanorequalto"       -> Op.LESS_THAN_OR_EQUAL_TO;
+            case "like"                                              -> Op.LIKE;
+            case "startwith", "startswith", "starts"                 -> Op.START_WITH;
+            case "endwith", "endswith", "ends"                       -> Op.END_WITH;
+            case "in"                                                -> Op.IN;
+            case "notin", "not_in"                                   -> Op.NOT_IN;
+            case "between"                                           -> Op.BETWEEN;
+            case "isnull", "isempty", "is_null", "is_empty"         -> Op.IS_EMPTY;
             case "isnotnull", "isnotempty", "is_not_null",
-                 "is_not_empty"                                      -> FilterOperations.IS_NOT_EMPTY;
-            case "regexp", "regex"                                   -> FilterOperations.REGEXP;
-            case "notregexp", "notregex", "not_regexp"               -> FilterOperations.NOT_REGEXP;
+                 "is_not_empty"                                      -> Op.IS_NOT_EMPTY;
+            case "regexp", "regex"                                   -> Op.REGEXP;
+            case "notregexp", "notregex", "not_regexp"               -> Op.NOT_REGEXP;
+
+            // ─── ROUND müqayisə əməliyyatları ─────────────────────────────
+            // WHERE ROUND(field, scale) OP value
+            // Scale 0 — tam ədədə yuvarlama
+            case "equalround0",                "eqround0"            -> Op.EQUAL_ROUND_0;
+            case "notequalround0",             "neround0"            -> Op.NOT_EQUAL_ROUND_0;
+            case "greaterthanround0",          "gtround0"            -> Op.GREATER_THAN_ROUND_0;
+            case "greaterthanorequaltoround0", "gteround0"           -> Op.GREATER_THAN_OR_EQUAL_TO_ROUND_0;
+            case "lessthanround0",             "ltround0"            -> Op.LESS_THAN_ROUND_0;
+            case "lessthanorequaltoround0",    "lteround0"           -> Op.LESS_THAN_OR_EQUAL_TO_ROUND_0;
+            // Scale 1
+            case "equalround1",                "eqround1"            -> Op.EQUAL_ROUND_1;
+            case "notequalround1",             "neround1"            -> Op.NOT_EQUAL_ROUND_1;
+            case "greaterthanround1",          "gtround1"            -> Op.GREATER_THAN_ROUND_1;
+            case "greaterthanorequaltoround1", "gteround1"           -> Op.GREATER_THAN_OR_EQUAL_TO_ROUND_1;
+            case "lessthanround1",             "ltround1"            -> Op.LESS_THAN_ROUND_1;
+            case "lessthanorequaltoround1",    "lteround1"           -> Op.LESS_THAN_OR_EQUAL_TO_ROUND_1;
+            // Scale 2
+            case "equalround2",                "eqround2"            -> Op.EQUAL_ROUND_2;
+            case "notequalround2",             "neround2"            -> Op.NOT_EQUAL_ROUND_2;
+            case "greaterthanround2",          "gtround2"            -> Op.GREATER_THAN_ROUND_2;
+            case "greaterthanorequaltoround2", "gteround2"           -> Op.GREATER_THAN_OR_EQUAL_TO_ROUND_2;
+            case "lessthanround2",             "ltround2"            -> Op.LESS_THAN_ROUND_2;
+            case "lessthanorequaltoround2",    "lteround2"           -> Op.LESS_THAN_OR_EQUAL_TO_ROUND_2;
+            // Scale 3
+            case "equalround3",                "eqround3"            -> Op.EQUAL_ROUND_3;
+            case "notequalround3",             "neround3"            -> Op.NOT_EQUAL_ROUND_3;
+            case "greaterthanround3",          "gtround3"            -> Op.GREATER_THAN_ROUND_3;
+            case "greaterthanorequaltoround3", "gteround3"           -> Op.GREATER_THAN_OR_EQUAL_TO_ROUND_3;
+            case "lessthanround3",             "ltround3"            -> Op.LESS_THAN_ROUND_3;
+            case "lessthanorequaltoround3",    "lteround3"           -> Op.LESS_THAN_OR_EQUAL_TO_ROUND_3;
+            // Scale 4
+            case "equalround4",                "eqround4"            -> Op.EQUAL_ROUND_4;
+            case "notequalround4",             "neround4"            -> Op.NOT_EQUAL_ROUND_4;
+            case "greaterthanround4",          "gtround4"            -> Op.GREATER_THAN_ROUND_4;
+            case "greaterthanorequaltoround4", "gteround4"           -> Op.GREATER_THAN_OR_EQUAL_TO_ROUND_4;
+            case "lessthanround4",             "ltround4"            -> Op.LESS_THAN_ROUND_4;
+            case "lessthanorequaltoround4",    "lteround4"           -> Op.LESS_THAN_OR_EQUAL_TO_ROUND_4;
+
             default -> null;
         };
     }
