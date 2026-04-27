@@ -5,7 +5,7 @@ import org.jooq.Record;
 import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
 import az.mbm.jooqsqlgenerate.core.SelectTable;
-import az.mbm.jooqsqlgenerate.enums.FilterOperations;
+import az.mbm.jooqsqlgenerate.enums.Op;
 import az.mbm.jooqsqlgenerate.enums.MathOperation;
 import az.mbm.jooqsqlgenerate.spec.Specification;
 import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
@@ -69,8 +69,9 @@ public class SelectQueryBuilder<T> {
     private final List<Field<?>>          rawSelectFields = new ArrayList<>(); // birbaşa jOOQ Field
 
     // ─── JOIN ─────────────────────────────────────────────────────────────
-    private final List<JoinConfig>   joins         = new ArrayList<>();
-    private final List<SubQueryJoin> subQueryJoins = new ArrayList<>();
+    private final List<JoinConfig>              joins                  = new ArrayList<>();
+    private final List<SubQueryJoin>            subQueryJoins          = new ArrayList<>();
+    private final List<ConditionedEntityJoin>   conditionedEntityJoins = new ArrayList<>();
 
     // ─── WHERE ───────────────────────────────────────────────────────────
     private Specification<T> whereSpec = null;
@@ -81,10 +82,10 @@ public class SelectQueryBuilder<T> {
     private record SubQueryInEntry(List<String> outerFields, SubQueryIn sub) {}
 
     // ─── Global filter — alias.field ilə join cədvəlinə qədər çatan WHERE filterlər ──
-    private final List<GlobalFilterEntry> globalFilterEntries = new ArrayList<>();
+    private final List<FiltersEntry> globalFilterEntries = new ArrayList<>();
 
-    private record GlobalFilterEntry(String aliasAndField,
-                                     az.mbm.jooqsqlgenerate.enums.FilterOperations op,
+    private record FiltersEntry(String aliasAndField,
+                                     az.mbm.jooqsqlgenerate.enums.Op op,
                                      Object value) {}
 
     // ─── HAVING əlavəsi (computed alias filterlər üçün) ───────────────────
@@ -104,7 +105,8 @@ public class SelectQueryBuilder<T> {
     private boolean distinct   = false;
     private int     pageNumber = 0;
     private int     pageSize   = 50;
-    private boolean paginate   = true;
+    private boolean paginate   = false;  // yalnız page() çağrılanda aktiv olur
+    private boolean countOnly  = false;  // pagination olmadan yalnız COUNT
 
     // ════════════════════════════════════════════════════════════════════
     //  Daxili record-lar
@@ -135,7 +137,7 @@ public class SelectQueryBuilder<T> {
             JoinType         joinType,
             String           fromField,
             String           toField,
-            FilterOperations condOp) {}
+            Op condOp) {}
 
     /** Subquery JOIN konfiqurasiyası */
     private record SubQueryJoin(
@@ -143,6 +145,16 @@ public class SelectQueryBuilder<T> {
             String    subAlias,
             String    subField,
             String    mainField) {}
+
+    /**
+     * Çoxlu field cütü + əlavə value şərtləri olan entity JOIN.
+     * Tam Condition kənarda qurulub buraya verilir.
+     */
+    private record ConditionedEntityJoin(
+            Class<?> entity,
+            String   alias,
+            JoinType joinType,
+            Condition on) {}
 
     // ════════════════════════════════════════════════════════════════════
     //  Static factory (giriş nöqtəsi)
@@ -249,13 +261,13 @@ public class SelectQueryBuilder<T> {
      *           ComputedField.expr("o.price").multiply("o.qty"),
      *           ComputedField.expr("o.tax")
      *       ).as("grandTotal"),
-     *       FilterOperations.GREATER_THAN, 1000
+     *       Op.GREATER_THAN, 1000
      *   )
      *
      *   // netAmount BETWEEN 500 AND 2000
      *   .computedColumn(
      *       ComputedField.of("o.amount").subtract("o.discount").as("netAmount"),
-     *       FilterOperations.BETWEEN, new Object[]{500, 2000}
+     *       Op.BETWEEN, new Object[]{500, 2000}
      *   )
      *
      *   // marginPct >= 15  (çox hissəli ifadə + filter)
@@ -264,7 +276,7 @@ public class SelectQueryBuilder<T> {
      *           ComputedField.expr("o.price").multiply("o.qty"),
      *           ComputedField.expr("o.bonus")
      *       ).as("totalRevenue"),
-     *       FilterOperations.GREATER_THAN_OR_EQUAL_TO, 5000
+     *       Op.GREATER_THAN_OR_EQUAL_TO, 5000
      *   )
      * }</pre>
      *
@@ -274,7 +286,7 @@ public class SelectQueryBuilder<T> {
      */
     @SuppressWarnings("unchecked")
     public SelectQueryBuilder<T> computedColumn(ComputedField cf,
-                                                FilterOperations op,
+                                                Op op,
                                                 Object value) {
         if (cf == null) return this;
         computedChain.add(cf);
@@ -291,7 +303,7 @@ public class SelectQueryBuilder<T> {
      *
      * <pre>{@code
      *   .caseColumn(
-     *       CaseBuilder.when("status", FilterOperations.EQUAl, "ACTIVE").then("Aktiv")
+     *       CaseBuilder.when("status", Op.EQUAl, "ACTIVE").then("Aktiv")
      *                  .otherwise("Naməlum").as("statusLabel")
      *   )
      * }</pre>
@@ -439,6 +451,21 @@ public class SelectQueryBuilder<T> {
         return this;
     }
 
+    /**
+     * LEFT JOIN — tam Condition ilə (çoxlu field cütü + əlavə şərtlər üçün).
+     * Condition kənarda ({@link JooqQuery}) qurulub buraya verilir.
+     */
+    public SelectQueryBuilder<T> leftJoinWithCondition(Class<?> entity, String alias, Condition on) {
+        conditionedEntityJoins.add(new ConditionedEntityJoin(entity, alias, JoinType.LEFT_OUTER_JOIN, on));
+        return this;
+    }
+
+    /** INNER JOIN — tam Condition ilə. */
+    public SelectQueryBuilder<T> innerJoinWithCondition(Class<?> entity, String alias, Condition on) {
+        conditionedEntityJoins.add(new ConditionedEntityJoin(entity, alias, JoinType.JOIN, on));
+        return this;
+    }
+
     // ─── JoinOnBuilder ────────────────────────────────────────────────────
 
     public static class JoinOnBuilder<F> {
@@ -470,7 +497,7 @@ public class SelectQueryBuilder<T> {
         public SelectQueryBuilder<?> equalsField(String toField) {
             ((SelectQueryBuilder) parent).joins.add(new JoinConfig(
                     fromClass, fromAlias, toClass, toAlias,
-                    joinType, fromField, toField, FilterOperations.EQUAl));
+                    joinType, fromField, toField, Op.EQUAl));
             return parent;
         }
     }
@@ -509,7 +536,7 @@ public class SelectQueryBuilder<T> {
      *   .inSubQuery(List.of("userId"),
      *       SubQueryIn.from(Order.class, "o")
      *           .select("o.userId")
-     *           .filter("status", FilterOperations.EQUAl, "PAID"))
+     *           .filter("status", Op.EQUAl, "PAID"))
      * }</pre>
      *
      * <p>Composite sahə üçün:
@@ -536,17 +563,17 @@ public class SelectQueryBuilder<T> {
      * Tip uyğunlaşması (String → Integer, və s.) avtomatik edilir.
      *
      * <pre>{@code
-     *   .globalWhereFilter("status",    FilterOperations.EQUAl,        "ACTIVE")
-     *   .globalWhereFilter("o.amount",  FilterOperations.GREATER_THAN, "100")  // join cədvəli
-     *   .globalWhereFilter("c.country", FilterOperations.IN,           "AZ,TR")
+     *   .globalWhereFilter("status",    Op.EQUAl,        "ACTIVE")
+     *   .globalWhereFilter("o.amount",  Op.GREATER_THAN, "100")  // join cədvəli
+     *   .globalWhereFilter("c.country", Op.IN,           "AZ,TR")
      * }</pre>
      */
     public SelectQueryBuilder<T> globalWhereFilter(
             String aliasAndField,
-            az.mbm.jooqsqlgenerate.enums.FilterOperations op,
+            az.mbm.jooqsqlgenerate.enums.Op op,
             Object value) {
         if (aliasAndField != null && !aliasAndField.isBlank() && op != null && value != null)
-            globalFilterEntries.add(new GlobalFilterEntry(aliasAndField, op, value));
+            globalFilterEntries.add(new FiltersEntry(aliasAndField, op, value));
         return this;
     }
 
@@ -621,7 +648,7 @@ public class SelectQueryBuilder<T> {
      *   .aggregate(
      *       AggregateBuilder.groupBy("u.status")
      *           .sum("o.amount").round(2)
-     *               .having(FilterOperations.GREATER_THAN, 500)
+     *               .having(Op.GREATER_THAN, 500)
      *               .orderDesc()
      *               .as("totalAmount").done()
      *           .count("o.id").as("orderCount").done()
@@ -676,9 +703,17 @@ public class SelectQueryBuilder<T> {
         return this;
     }
 
-    /** Sayfalama olmadan bütün nəticəni gətirir */
+    /** Sayfalama olmadan bütün nəticəni gətirir, COUNT işləmir. */
     public SelectQueryBuilder<T> noPagination() {
-        this.paginate = false;
+        this.paginate  = false;
+        this.countOnly = false;
+        return this;
+    }
+
+    /** Pagination olmadan yalnız COUNT-u aktiv edir. */
+    public SelectQueryBuilder<T> withCount() {
+        this.paginate  = false;
+        this.countOnly = true;
         return this;
     }
 
@@ -698,6 +733,16 @@ public class SelectQueryBuilder<T> {
 
         Map<String, EntityTable<?>> tableMap = new LinkedHashMap<>();
         tableMap.put(tableAlias, mainTable);
+
+        // JOIN entity-lərini əvvəlcədən tableMap-ə əlavə et —
+        // buildSelectFields() JOIN alias-larını tanısın deyə
+        for (JoinConfig j : joins) {
+            tableMap.computeIfAbsent(j.fromAlias(), a -> new EntityTable<>(j.fromClass(), a));
+            tableMap.computeIfAbsent(j.toAlias(),   a -> new EntityTable<>(j.toClass(), a));
+        }
+        for (ConditionedEntityJoin j : conditionedEntityJoins) {
+            tableMap.computeIfAbsent(j.alias(), a -> new EntityTable<>(j.entity(), a));
+        }
 
         // Addım 1 — SELECT sahələri
         List<SelectFieldOrAsterisk> selectFields = buildSelectFields(mainTable, tableMap);
@@ -725,9 +770,9 @@ public class SelectQueryBuilder<T> {
         // Addım 8 — ORDER BY tətbiqi
         SelectSeekStepN<Record> ordered = afterGroupBy.orderBy(allOrderFields);
 
-        // Addım 9 — COUNT (pagination üçün)
+        // Addım 9 — COUNT (pagination və ya withCount() üçün)
         int rowCount = 0;
-        if (paginate) {
+        if (paginate || countOnly) {
             rowCount = buildCount(dsl, mainTable, whereCondition, afterGroupBy);
         }
 
@@ -757,10 +802,18 @@ public class SelectQueryBuilder<T> {
 
         List<SelectFieldOrAsterisk> fields = new ArrayList<>();
 
-        // Sadə sütunlar
+        // Sadə sütunlar — user camelCase yazmışsa AS "camelCase" əlavə olunur
+        // Məs: "t1.productName" → "t1"."product_name" AS "productName"
         for (String col : columns) {
-            EntityTable<?> t = tableMap.getOrDefault(aliasPart(col), mainTable);
-            fields.add(t.getField(fieldPart(col)));
+            EntityTable<?> t         = tableMap.getOrDefault(aliasPart(col), mainTable);
+            String         fieldName = fieldPart(col);
+            Field<?>       f         = t.getField(fieldName);
+            // DB sütun adı ilə user-in yazdığı ad fərqlidirsə alias əlavə et
+            if (!f.getName().equals(fieldName)) {
+                fields.add(f.as(fieldName));
+            } else {
+                fields.add(f);
+            }
         }
 
         // Özəl alias verilmiş sütunlar: "t1.fieldName" AS "outputAlias"
@@ -769,11 +822,16 @@ public class SelectQueryBuilder<T> {
             fields.add(t.getField(fieldPart(sa.aliasAndField())).as(sa.outputAlias()));
         }
 
-        // GROUP BY sütunlar
-        if (aggregator != null) {
+        // GROUP BY sahələri — yalnız heç bir explicit SELECT sütunu verilmədikdə
+        // (addColumns çağrılmayıbsa) GROUP BY sahələri SELECT-ə avtomatik əlavə olunur
+        if (columns.isEmpty() && selectAsCols.isEmpty() && rawSelectFields.isEmpty()
+                && aggregator != null) {
             for (String gf : aggregator.getGroupByFields()) {
-                EntityTable<?> t = tableMap.getOrDefault(aliasPart(gf), mainTable);
-                fields.add(t.getField(fieldPart(gf)));
+                EntityTable<?> t  = tableMap.getOrDefault(aliasPart(gf), mainTable);
+                String fieldName  = fieldPart(gf);
+                Field<?>       f  = t.getField(fieldName);
+                if (!f.getName().equals(fieldName)) fields.add(f.as(fieldName));
+                else                                fields.add(f);
             }
         }
 
@@ -845,6 +903,17 @@ public class SelectQueryBuilder<T> {
                 default               -> query.join(toTable.getTable()).on(on);
             };
         }
+        // ConditionedEntityJoin — tam Condition ilə entity JOIN-lər
+        for (ConditionedEntityJoin j : conditionedEntityJoins) {
+            EntityTable<?> toTable = new EntityTable<>(j.entity(), j.alias());
+            tableMap.put(j.alias(), toTable);
+            query = switch (j.joinType()) {
+                case LEFT_OUTER_JOIN  -> query.leftJoin(toTable.getTable()).on(j.on());
+                case RIGHT_OUTER_JOIN -> query.rightJoin(toTable.getTable()).on(j.on());
+                default               -> query.join(toTable.getTable()).on(j.on());
+            };
+        }
+
         return query;
     }
 
@@ -872,7 +941,7 @@ public class SelectQueryBuilder<T> {
         // Global filter — alias.field → tableMap-dən resolve edilir
         // Xüsusi hal: filter sahəsi bir ComputedField alias-ına uyğun gəlirsə,
         // ifadənin özü WHERE-ə genişləndirilir (HAVING deyil).
-        for (GlobalFilterEntry gf : globalFilterEntries) {
+        for (FiltersEntry gf : globalFilterEntries) {
             int dot = gf.aliasAndField().indexOf('.');
             String plainName = (dot > 0)
                     ? gf.aliasAndField().substring(dot + 1)
@@ -985,7 +1054,7 @@ public class SelectQueryBuilder<T> {
         SelectHavingStep<Record> grouped = conditioned.groupBy(new ArrayList<>(groupFieldMap.values()));
 
         // HAVING = aggregate HAVING + extraHaving + rawHavings
-        Condition aggHaving = AggregateBuilder.buildHaving(aggregator.getAggFields(), mainTable);
+        Condition aggHaving = AggregateBuilder.buildHaving(aggregator.getAggFields(), mainTable, tableMap);
         Condition allHaving = (aggHaving != null && extraHaving != null) ? aggHaving.and(extraHaving)
                             : (aggHaving  != null) ? aggHaving
                             : extraHaving;
