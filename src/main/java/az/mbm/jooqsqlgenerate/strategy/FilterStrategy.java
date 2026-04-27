@@ -11,7 +11,7 @@ import org.jooq.Field;
  *
  * <p>Yeni dizayn: hər filtr öz {@link Condition}-ını özü bilir.
  * Yeni filtr növü əlavə etmək üçün yalnız
- * {@link FilterStrategies#register(az.mbm.jooqsqlgenerate.enums.FilterOperations, FilterStrategy)}
+ * {@link FilterStrategies#register(az.mbm.jooqsqlgenerate.enums.Op, FilterStrategy)}
  * çağırmaq kifayətdir — mövcud kodu dəyişmək lazım deyil (Open/Closed Principle).
  *
  * @see FilterStrategies
