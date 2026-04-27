@@ -1,6 +1,5 @@
 package az.mbm.jooqsqlgenerate.core;
 
-import org.jooq.DSLContext;
 import org.jooq.Record;
 import org.jooq.RecordMapper;
 
@@ -80,12 +79,14 @@ public class SelectFetchJooq<V> {
 
     /**
      * Dinamik sorğular üçün — nəticəni {@code Map<String,Object>} siyahısı kimi qaytarır.
+     * Field adları DB-nin native formatındadır (snake_case).
      */
     public SelectFetchMapResponse fetchMaps(SelectTable sel) {
         var list  = sel.getSelectTable().fetchMaps();
         int count = sel.getRowCount() == 0 ? list.size() : sel.getRowCount();
         return new SelectFetchMapResponse(list, count);
     }
+
 
     /**
      * @deprecated fetchMaps ilə eynidir. Köhnə imza saxlanılmışdır.
