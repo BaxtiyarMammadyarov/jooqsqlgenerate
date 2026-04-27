@@ -3,7 +3,7 @@ package az.mbm.jooqsqlgenerate.strategy;
 import org.jooq.DataType;
 import org.jooq.Field;
 import org.jooq.impl.DSL;
-import az.mbm.jooqsqlgenerate.enums.FilterOperations;
+import az.mbm.jooqsqlgenerate.enums.Op;
 
 import java.util.Arrays;
 import java.util.Collection;
@@ -12,7 +12,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * STRATEGY REGISTRY — {@link FilterOperations} → {@link FilterStrategy} xəritəsi
+ * STRATEGY REGISTRY — {@link Op} → {@link FilterStrategy} xəritəsi
  *
  * <p>Bütün filter əməliyyatları statik blokda qeydiyyatdan keçir.
  * Xarici kod {@link #register} ilə yeni əməliyyat əlavə edə bilər
@@ -20,68 +20,68 @@ import java.util.stream.Collectors;
  *
  * <pre>{@code
  *   // Yeni filter növü əlavə etmək:
- *   FilterStrategies.register(FilterOperations.MY_OP,
+ *   FilterStrategies.register(Op.MY_OP,
  *       (field, val) -> field.contains(val.toString()));
  * }</pre>
  */
 public final class FilterStrategies {
 
-    private static final Map<FilterOperations, FilterStrategy> REGISTRY =
-            new EnumMap<>(FilterOperations.class);
+    private static final Map<Op, FilterStrategy> REGISTRY =
+            new EnumMap<>(Op.class);
 
     static {
         // ─── Bərabərlik ──────────────────────────────────────────────────
-        register(FilterOperations.EQUAl,
+        register(Op.EQUAl,
                 (field, val) -> field.eq(coerced(field, val)));
 
-        register(FilterOperations.NOT_EQUAL,
+        register(Op.NOT_EQUAL,
                 (field, val) -> field.ne(coerced(field, val)));
 
         // ─── Müqayisə ────────────────────────────────────────────────────
-        register(FilterOperations.GREATER_THAN,
+        register(Op.GREATER_THAN,
                 (field, val) -> field.greaterThan(coerced(field, val)));
 
-        register(FilterOperations.GREATER_THAN_OR_EQUAL_TO,
+        register(Op.GREATER_THAN_OR_EQUAL_TO,
                 (field, val) -> field.greaterOrEqual(coerced(field, val)));
 
-        register(FilterOperations.LESS_THAN,
+        register(Op.LESS_THAN,
                 (field, val) -> field.lessThan(coerced(field, val)));
 
-        register(FilterOperations.LESS_THAN_OR_EQUAL_TO,
+        register(Op.LESS_THAN_OR_EQUAL_TO,
                 (field, val) -> field.lessOrEqual(coerced(field, val)));
 
         // ─── Null yoxlaması — tip uyğunlaşması tələb olunmur ─────────────
-        register(FilterOperations.IS_EMPTY,
+        register(Op.IS_EMPTY,
                 (field, val) -> field.isNull());
 
-        register(FilterOperations.IS_NOT_EMPTY,
+        register(Op.IS_NOT_EMPTY,
                 (field, val) -> field.isNotNull());
 
         // ─── LIKE — VARCHAR tipi gözlənilir, çevrilmə yoxdur ────────────
-        register(FilterOperations.LIKE,
+        register(Op.LIKE,
                 (field, val) -> field.like("%" + val + "%"));
 
-        register(FilterOperations.START_WITH,
+        register(Op.START_WITH,
                 (field, val) -> field.like(val + "%"));
 
-        register(FilterOperations.END_WITH,
+        register(Op.END_WITH,
                 (field, val) -> field.like("%" + val));
 
         // ─── IN / NOT IN — null elementlər çıxarılır, qalan tip uyğunlaşdırılır
-        register(FilterOperations.IN, (field, val) -> {
+        register(Op.IN, (field, val) -> {
             Collection<?> col = filterNulls(toCollection(val));
             if (col.isEmpty()) return DSL.falseCondition(); // heç nə uyğun gəlmir
             return field.in(coercedList(field, col));
         });
 
-        register(FilterOperations.NOT_IN, (field, val) -> {
+        register(Op.NOT_IN, (field, val) -> {
             Collection<?> col = filterNulls(toCollection(val));
             if (col.isEmpty()) return DSL.trueCondition();
             return field.notIn(coercedList(field, col));
         });
 
         // ─── BETWEEN — hər iki hədd field tipinə uyğunlaşdırılır ─────────
-        register(FilterOperations.BETWEEN, (field, val) -> {
+        register(Op.BETWEEN, (field, val) -> {
             if (val instanceof Object[] arr && arr.length == 2) {
                 // Object[]{from, to} formatı
                 return field.between(coerced(field, arr[0]), coerced(field, arr[1]));
@@ -95,11 +95,88 @@ public final class FilterStrategies {
         });
 
         // ─── REGEXP — string pattern ──────────────────────────────────────
-        register(FilterOperations.REGEXP,
+        register(Op.REGEXP,
                 (field, val) -> field.likeRegex(val.toString()));
 
-        register(FilterOperations.NOT_REGEXP,
+        register(Op.NOT_REGEXP,
                 (field, val) -> DSL.not(field.likeRegex(val.toString())));
+
+        // ─── ROUND müqayisə əməliyyatları ─────────────────────────────────
+        // ROUND(field, scale) OP value — hesablanmayan sütunlar üçün
+        //
+        // Nümunə:
+        //   FilterStrategies.get(Op.GREATER_THAN_ROUND_2).apply(priceField, "9.50")
+        //   → WHERE ROUND(price, 2) > 9.50
+
+        // Scale 0 — tam ədədə yuvarlama
+        register(Op.EQUAL_ROUND_0,
+                (field, val) -> rounded(field, 0).eq(coerced(field, val)));
+        register(Op.NOT_EQUAL_ROUND_0,
+                (field, val) -> rounded(field, 0).ne(coerced(field, val)));
+        register(Op.GREATER_THAN_ROUND_0,
+                (field, val) -> rounded(field, 0).greaterThan(coerced(field, val)));
+        register(Op.GREATER_THAN_OR_EQUAL_TO_ROUND_0,
+                (field, val) -> rounded(field, 0).greaterOrEqual(coerced(field, val)));
+        register(Op.LESS_THAN_ROUND_0,
+                (field, val) -> rounded(field, 0).lessThan(coerced(field, val)));
+        register(Op.LESS_THAN_OR_EQUAL_TO_ROUND_0,
+                (field, val) -> rounded(field, 0).lessOrEqual(coerced(field, val)));
+
+        // Scale 1
+        register(Op.EQUAL_ROUND_1,
+                (field, val) -> rounded(field, 1).eq(coerced(field, val)));
+        register(Op.NOT_EQUAL_ROUND_1,
+                (field, val) -> rounded(field, 1).ne(coerced(field, val)));
+        register(Op.GREATER_THAN_ROUND_1,
+                (field, val) -> rounded(field, 1).greaterThan(coerced(field, val)));
+        register(Op.GREATER_THAN_OR_EQUAL_TO_ROUND_1,
+                (field, val) -> rounded(field, 1).greaterOrEqual(coerced(field, val)));
+        register(Op.LESS_THAN_ROUND_1,
+                (field, val) -> rounded(field, 1).lessThan(coerced(field, val)));
+        register(Op.LESS_THAN_OR_EQUAL_TO_ROUND_1,
+                (field, val) -> rounded(field, 1).lessOrEqual(coerced(field, val)));
+
+        // Scale 2
+        register(Op.EQUAL_ROUND_2,
+                (field, val) -> rounded(field, 2).eq(coerced(field, val)));
+        register(Op.NOT_EQUAL_ROUND_2,
+                (field, val) -> rounded(field, 2).ne(coerced(field, val)));
+        register(Op.GREATER_THAN_ROUND_2,
+                (field, val) -> rounded(field, 2).greaterThan(coerced(field, val)));
+        register(Op.GREATER_THAN_OR_EQUAL_TO_ROUND_2,
+                (field, val) -> rounded(field, 2).greaterOrEqual(coerced(field, val)));
+        register(Op.LESS_THAN_ROUND_2,
+                (field, val) -> rounded(field, 2).lessThan(coerced(field, val)));
+        register(Op.LESS_THAN_OR_EQUAL_TO_ROUND_2,
+                (field, val) -> rounded(field, 2).lessOrEqual(coerced(field, val)));
+
+        // Scale 3
+        register(Op.EQUAL_ROUND_3,
+                (field, val) -> rounded(field, 3).eq(coerced(field, val)));
+        register(Op.NOT_EQUAL_ROUND_3,
+                (field, val) -> rounded(field, 3).ne(coerced(field, val)));
+        register(Op.GREATER_THAN_ROUND_3,
+                (field, val) -> rounded(field, 3).greaterThan(coerced(field, val)));
+        register(Op.GREATER_THAN_OR_EQUAL_TO_ROUND_3,
+                (field, val) -> rounded(field, 3).greaterOrEqual(coerced(field, val)));
+        register(Op.LESS_THAN_ROUND_3,
+                (field, val) -> rounded(field, 3).lessThan(coerced(field, val)));
+        register(Op.LESS_THAN_OR_EQUAL_TO_ROUND_3,
+                (field, val) -> rounded(field, 3).lessOrEqual(coerced(field, val)));
+
+        // Scale 4
+        register(Op.EQUAL_ROUND_4,
+                (field, val) -> rounded(field, 4).eq(coerced(field, val)));
+        register(Op.NOT_EQUAL_ROUND_4,
+                (field, val) -> rounded(field, 4).ne(coerced(field, val)));
+        register(Op.GREATER_THAN_ROUND_4,
+                (field, val) -> rounded(field, 4).greaterThan(coerced(field, val)));
+        register(Op.GREATER_THAN_OR_EQUAL_TO_ROUND_4,
+                (field, val) -> rounded(field, 4).greaterOrEqual(coerced(field, val)));
+        register(Op.LESS_THAN_ROUND_4,
+                (field, val) -> rounded(field, 4).lessThan(coerced(field, val)));
+        register(Op.LESS_THAN_OR_EQUAL_TO_ROUND_4,
+                (field, val) -> rounded(field, 4).lessOrEqual(coerced(field, val)));
     }
 
     private FilterStrategies() {}
@@ -165,7 +242,7 @@ public final class FilterStrategies {
      * Yeni filter strategiyasını qeydiyyatdan keçirir.
      * Mövcud strategiyanın üstünə yazır.
      */
-    public static void register(FilterOperations op, FilterStrategy strategy) {
+    public static void register(Op op, FilterStrategy strategy) {
         REGISTRY.put(op, strategy);
     }
 
@@ -174,7 +251,7 @@ public final class FilterStrategies {
      * @return müvafiq strategiya
      * @throws IllegalArgumentException əgər qeydiyyatda yoxdursa
      */
-    public static FilterStrategy get(FilterOperations op) {
+    public static FilterStrategy get(Op op) {
         FilterStrategy strategy = REGISTRY.get(op);
         if (strategy == null)
             throw new IllegalArgumentException(
@@ -197,9 +274,25 @@ public final class FilterStrategies {
      * SQL-də {@code IN (1, NULL, 3)} yazılanda NULL heç nəyə uyğun gəlmir —
      * FK-sı NULL olan sətirləri gətirmir. Bu metod null elementləri siyahıdan çıxarır.
      *
-     * <p>Null olan FK-ları axtarmaq üçün {@link FilterOperations#IS_EMPTY} istifadə edin.
+     * <p>Null olan FK-ları axtarmaq üçün {@link Op#IS_EMPTY} istifadə edin.
      */
     private static Collection<?> filterNulls(Collection<?> col) {
         return col.stream().filter(java.util.Objects::nonNull).collect(Collectors.toList());
+    }
+
+    /**
+     * Field-i {@code ROUND(field, scale)} ifadəsinə çevirir.
+     *
+     * <p>ROUND əməliyyatları üçün daxili köməkçi metod:
+     * {@code DSL.round(numericField, scale)} çağırır, nəticəni {@code Field<Object>} kimi qaytarır.
+     *
+     * @param field orijinal sahə ({@code Field<Object>})
+     * @param scale onluq rəqəm sayı
+     * @return {@code ROUND(field, scale)} ifadəsi
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static Field<Object> rounded(Field<Object> field, int scale) {
+        return (Field<Object>) (Field<?>) DSL.round(
+                (Field<? extends Number>) (Field<?>) field, scale);
     }
 }
