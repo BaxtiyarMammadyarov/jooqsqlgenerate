@@ -3,7 +3,7 @@ package az.mbm.jooqsqlgenerate.builder;
 import org.jooq.Field;
 import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
-import az.mbm.jooqsqlgenerate.enums.FilterOperations;
+import az.mbm.jooqsqlgenerate.enums.Op;
 import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 
 import java.util.ArrayList;
@@ -16,27 +16,27 @@ import java.util.Objects;
  * <p>Köhnə kodda 11 parametrli bir metod:
  * <pre>{@code
  *   manager.setAndCaseValue("alias", "w1", "u", "status",
- *       "ACTIVE", FilterOperations.EQUAl, "Aktiv", false, null,
- *       FilterOperations.EQUAl, "INACTIVE");
+ *       "ACTIVE", Op.EQUAl, "Aktiv", false, null,
+ *       Op.EQUAl, "INACTIVE");
  * }</pre>
  *
  * <p>Yeni fluent API:
  * <pre>{@code
- *   CaseBuilder.when("status", FilterOperations.EQUAl, "ACTIVE").then("Aktiv")
- *              .andWhen("status", FilterOperations.EQUAl, "INACTIVE").then("Deaktiv")
+ *   CaseBuilder.when("status", Op.EQUAl, "ACTIVE").then("Aktiv")
+ *              .andWhen("status", Op.EQUAl, "INACTIVE").then("Deaktiv")
  *              .otherwise("Naməlum")
  *              .as("statusLabel")
  * }</pre>
  *
- * <p><b>Qeyd:</b> Giriş nöqtəsi üçün statik {@link #when(String, FilterOperations, Object)},
- * zəncir üçün isə instance {@link #andWhen(String, FilterOperations, Object)} istifadə edin.
+ * <p><b>Qeyd:</b> Giriş nöqtəsi üçün statik {@link #when(String, Op, Object)},
+ * zəncir üçün isə instance {@link #andWhen(String, Op, Object)} istifadə edin.
  * Java statik və instance metodun eyni erasure-a sahib ola bilməz — buna görə adlar fərqlidir.
  *
  * @param <T> entity tipi
  */
 public class CaseBuilder<T> {
 
-    private record WhenClause(String field, FilterOperations op, Object whenVal, Object thenVal) {}
+    private record WhenClause(String field, Op op, Object whenVal, Object thenVal) {}
 
     private final List<WhenClause> whenClauses = new ArrayList<>();
     private       Object           elseValue   = null;
@@ -51,7 +51,7 @@ public class CaseBuilder<T> {
      *
      * <pre>{@code CaseBuilder.when("status", EQUAl, "ACTIVE").then("Aktiv") }</pre>
      */
-    public static <T> WhenStep<T> when(String field, FilterOperations op, Object whenValue) {
+    public static <T> WhenStep<T> when(String field, Op op, Object whenValue) {
         CaseBuilder<T> b = new CaseBuilder<>();
         return new WhenStep<>(b, field, op, whenValue);
     }
@@ -70,7 +70,7 @@ public class CaseBuilder<T> {
      * həm statik həm instance metod ola bilməz. Statik {@code when()} giriş
      * nöqtəsi, {@code andWhen()} isə zəncir metodu rolunu oynayır.
      */
-    public WhenStep<T> andWhen(String field, FilterOperations op, Object whenValue) {
+    public WhenStep<T> andWhen(String field, Op op, Object whenValue) {
         return new WhenStep<>(this, field, op, whenValue);
     }
 
@@ -84,7 +84,9 @@ public class CaseBuilder<T> {
     // ─── Alias ───────────────────────────────────────────────────────────
 
     public CaseBuilder<T> as(String alias) {
-        this.alias = Objects.requireNonNull(alias, "CASE alias null ola bilməz");
+        Objects.requireNonNull(alias, "CASE alias null ola bilməz");
+        int dot = alias.indexOf('.');
+        this.alias = dot >= 0 ? alias.substring(dot + 1) : alias;
         return this;
     }
 
@@ -93,10 +95,10 @@ public class CaseBuilder<T> {
     public static class WhenStep<T> {
         private final CaseBuilder<T>   builder;
         private final String           field;
-        private final FilterOperations op;
+        private final Op op;
         private final Object           whenVal;
 
-        WhenStep(CaseBuilder<T> builder, String field, FilterOperations op, Object whenVal) {
+        WhenStep(CaseBuilder<T> builder, String field, Op op, Object whenVal) {
             this.builder = builder;
             this.field   = field;
             this.op      = op;
