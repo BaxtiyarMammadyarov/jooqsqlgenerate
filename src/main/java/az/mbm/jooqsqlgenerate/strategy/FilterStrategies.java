@@ -57,15 +57,20 @@ public final class FilterStrategies {
         register(Op.IS_NOT_EMPTY,
                 (field, val) -> field.isNotNull());
 
-        // ─── LIKE — VARCHAR tipi gözlənilir, çevrilmə yoxdur ────────────
+        // ─── LIKE — Türk əlifbası case-insensitive məntiqilə işləyir ────────
+        // LOWER(REPLACE(REPLACE(field,'İ','i'),'I','i')) LIKE '%val%'
+        // Həm sahə, həm dəyər normallaşdırılır — İ/I fərqi aradan qalxır
         register(Op.LIKE,
-                (field, val) -> field.like("%" + val + "%"));
+                (field, val) -> turkishLower(field)
+                        .like("%" + turkishNormalize(val.toString()) + "%"));
 
         register(Op.START_WITH,
-                (field, val) -> field.like(val + "%"));
+                (field, val) -> turkishLower(field)
+                        .like(turkishNormalize(val.toString()) + "%"));
 
         register(Op.END_WITH,
-                (field, val) -> field.like("%" + val));
+                (field, val) -> turkishLower(field)
+                        .like("%" + turkishNormalize(val.toString())));
 
         // ─── IN / NOT IN — null elementlər çıxarılır, qalan tip uyğunlaşdırılır
         register(Op.IN, (field, val) -> {
@@ -100,6 +105,21 @@ public final class FilterStrategies {
 
         register(Op.NOT_REGEXP,
                 (field, val) -> DSL.not(field.likeRegex(val.toString())));
+
+        // ─── Türk əlifbası case-insensitive LIKE ─────────────────────────
+        // SQL: LOWER(REPLACE(REPLACE(field,'İ','i'),'I','i')) LIKE '%val%'
+        // Həm sahə, həm dəyər normallaşdırılır → İ/I fərqi aradan qalxır
+        register(Op.LIKE_IGNORE_CASE,
+                (field, val) -> turkishLower(field)
+                        .like("%" + turkishNormalize(val.toString()) + "%"));
+
+        register(Op.START_WITH_IGNORE_CASE,
+                (field, val) -> turkishLower(field)
+                        .like(turkishNormalize(val.toString()) + "%"));
+
+        register(Op.END_WITH_IGNORE_CASE,
+                (field, val) -> turkishLower(field)
+                        .like("%" + turkishNormalize(val.toString())));
 
         // ─── ROUND müqayisə əməliyyatları ─────────────────────────────────
         // ROUND(field, scale) OP value — hesablanmayan sütunlar üçün
@@ -278,6 +298,35 @@ public final class FilterStrategies {
      */
     private static Collection<?> filterNulls(Collection<?> col) {
         return col.stream().filter(java.util.Objects::nonNull).collect(Collectors.toList());
+    }
+
+    /**
+     * Türk əlifbasına uyğun case-insensitive normallaşdırma — sahə üçün.
+     *
+     * <p>Yaradılan SQL ifadəsi:
+     * <pre>{@code LOWER(REPLACE(REPLACE(field, 'İ', 'i'), 'I', 'i'))}</pre>
+     *
+     * <p>Türk dilinin problemi: Java/SQL {@code LOWER('İ')} → {@code 'i̇'} (2 bayt)
+     * deyil, {@code 'i'} qaytarmalıdır. {@code REPLACE} ilə açıq dəyişdirmə
+     * verilənlər bazasının locale asılılığını aradan qaldırır.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static Field<String> turkishLower(Field<Object> field) {
+        Field<String> str = (Field<String>) (Field<?>) field;
+        return DSL.lower(
+                DSL.replace(
+                        DSL.replace(str, DSL.inline("İ"), DSL.inline("i")),
+                        DSL.inline("I"), DSL.inline("i")));
+    }
+
+    /**
+     * Türk əlifbasına uyğun case-insensitive normallaşdırma — Java String üçün.
+     *
+     * <p>{@code İ} → {@code i}, {@code I} → {@code i}, sonra {@code toLowerCase()}.
+     * Bu dəyər SQL {@code LIKE} pattern-inə birbaşa bind edilir.
+     */
+    private static String turkishNormalize(String val) {
+        return val.replace("İ", "i").replace("I", "i").toLowerCase();
     }
 
     /**
