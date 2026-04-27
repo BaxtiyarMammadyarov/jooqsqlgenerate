@@ -3,8 +3,8 @@ package az.mbm.jooqsqlgenerate.builder;
 import org.jooq.*;
 import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
-import az.mbm.jooqsqlgenerate.enums.FilterOperations;
-import az.mbm.jooqsqlgenerate.enums.GroupFunction;
+import az.mbm.jooqsqlgenerate.enums.Op;
+import az.mbm.jooqsqlgenerate.enums.Agg;
 import az.mbm.jooqsqlgenerate.enums.MathOperation;
 import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 
@@ -43,14 +43,14 @@ public class AggregateBuilder<T> {
      * {@code tableAlias}/{@code fieldName}/{@code mathOp} nəzərə alınmır.
      */
     public record AggField(
-            GroupFunction    function,
+            Agg    function,
             String           tableAlias,
             String           fieldName,
             MathOperation    mathOp,
             String           mathField,
             String           alias,
             Integer          roundScale,
-            FilterOperations havingOp,
+            Op havingOp,
             Object           havingValue,
             String           orderDirection,
             ComputedField    computedExpr      // null → sadə sahə; non-null → çox sahəli ifadə
@@ -71,11 +71,11 @@ public class AggregateBuilder<T> {
 
     // ─── Sadə aqreqat funksiyaları (tək sahə) ───────────────────────────
 
-    public AggStep<T> sum(String tableAliasAndField)   { return new AggStep<>(this, GroupFunction.SUM,   tableAliasAndField); }
-    public AggStep<T> count(String tableAliasAndField) { return new AggStep<>(this, GroupFunction.COUNT, tableAliasAndField); }
-    public AggStep<T> avg(String tableAliasAndField)   { return new AggStep<>(this, GroupFunction.AVG,   tableAliasAndField); }
-    public AggStep<T> max(String tableAliasAndField)   { return new AggStep<>(this, GroupFunction.MAX,   tableAliasAndField); }
-    public AggStep<T> min(String tableAliasAndField)   { return new AggStep<>(this, GroupFunction.MIN,   tableAliasAndField); }
+    public AggStep<T> sum(String tableAliasAndField)   { return new AggStep<>(this, Agg.SUM,   tableAliasAndField); }
+    public AggStep<T> count(String tableAliasAndField) { return new AggStep<>(this, Agg.COUNT, tableAliasAndField); }
+    public AggStep<T> avg(String tableAliasAndField)   { return new AggStep<>(this, Agg.AVG,   tableAliasAndField); }
+    public AggStep<T> max(String tableAliasAndField)   { return new AggStep<>(this, Agg.MAX,   tableAliasAndField); }
+    public AggStep<T> min(String tableAliasAndField)   { return new AggStep<>(this, Agg.MIN,   tableAliasAndField); }
 
     // ─── ComputedField ilə aqreqat funksiyaları (çox sahə) ──────────────
 
@@ -90,11 +90,11 @@ public class AggregateBuilder<T> {
      *   ).round(2).as("netRevenue").done()
      * }</pre>
      */
-    public AggStep<T> sumOf(ComputedField expr)   { return new AggStep<>(this, GroupFunction.SUM,   expr); }
-    public AggStep<T> countOf(ComputedField expr) { return new AggStep<>(this, GroupFunction.COUNT, expr); }
-    public AggStep<T> avgOf(ComputedField expr)   { return new AggStep<>(this, GroupFunction.AVG,   expr); }
-    public AggStep<T> maxOf(ComputedField expr)   { return new AggStep<>(this, GroupFunction.MAX,   expr); }
-    public AggStep<T> minOf(ComputedField expr)   { return new AggStep<>(this, GroupFunction.MIN,   expr); }
+    public AggStep<T> sumOf(ComputedField expr)   { return new AggStep<>(this, Agg.SUM,   expr); }
+    public AggStep<T> countOf(ComputedField expr) { return new AggStep<>(this, Agg.COUNT, expr); }
+    public AggStep<T> avgOf(ComputedField expr)   { return new AggStep<>(this, Agg.AVG,   expr); }
+    public AggStep<T> maxOf(ComputedField expr)   { return new AggStep<>(this, Agg.MAX,   expr); }
+    public AggStep<T> minOf(ComputedField expr)   { return new AggStep<>(this, Agg.MIN,   expr); }
 
     // ─── Accessor-lar ────────────────────────────────────────────────────
 
@@ -113,6 +113,17 @@ public class AggregateBuilder<T> {
     @SuppressWarnings({"unchecked", "rawtypes"})
     public static Field<?> toJooqField(AggField agg, EntityTable<?> table,
                                        Map<String, EntityTable<?>> tableMap) {
+        return buildAggExpr(agg, table, tableMap).as(agg.alias());
+    }
+
+    /**
+     * Aggregate ifadəsini alias olmadan qurur.
+     * Həm SELECT üçün ({@link #toJooqField}), həm HAVING üçün ({@link #buildHaving}) istifadə olunur.
+     * PostgreSQL HAVING-də alias referansı dəstəkləmir — ifadənin özü lazımdır.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static Field<?> buildAggExpr(AggField agg, EntityTable<?> table,
+                                         Map<String, EntityTable<?>> tableMap) {
         Field<Object> operand;
 
         if (agg.computedExpr() != null) {
@@ -156,16 +167,21 @@ public class AggregateBuilder<T> {
             aggField = DSL.round((Field<? extends Number>) aggField, agg.roundScale());
         }
 
-        return aggField.as(agg.alias());
+        return aggField;
     }
 
-    /** HAVING Condition-larını yığır */
+    /**
+     * HAVING Condition-larını yığır.
+     * PostgreSQL alias-ı HAVING-də tanımadığından aggregate ifadəsinin özü istifadə olunur:
+     * məs. {@code HAVING SUM("totalPrice") > 100} — alias referansı deyil.
+     */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    public static Condition buildHaving(List<AggField> aggFields, EntityTable<?> table) {
+    public static Condition buildHaving(List<AggField> aggFields, EntityTable<?> table,
+                                        Map<String, EntityTable<?>> tableMap) {
         Condition having = null;
         for (AggField agg : aggFields) {
             if (agg.havingOp() == null) continue;
-            Field<Object> f = (Field<Object>) DSL.field(DSL.name(agg.alias()));
+            Field<Object> f = (Field<Object>) buildAggExpr(agg, table, tableMap);
             Condition c = FilterStrategies.get(agg.havingOp()).apply(f, agg.havingValue());
             having = (having == null) ? c : having.and(c);
         }
@@ -178,7 +194,7 @@ public class AggregateBuilder<T> {
 
     public static class AggStep<T> {
         private final AggregateBuilder<T> parent;
-        private final GroupFunction       function;
+        private final Agg       function;
         // Sadə sahə
         private final String              tableAlias;
         private final String              fieldName;
@@ -189,12 +205,12 @@ public class AggregateBuilder<T> {
         // Ümumi
         private       String              alias     = null;
         private       Integer             round     = null;
-        private       FilterOperations    havingOp  = null;
+        private       Op    havingOp  = null;
         private       Object              havingVal = null;
         private       String              orderDir  = null;
 
         /** Sadə sahə konstruktoru */
-        AggStep(AggregateBuilder<T> parent, GroupFunction fn, String tableAliasAndField) {
+        AggStep(AggregateBuilder<T> parent, Agg fn, String tableAliasAndField) {
             this.parent       = parent;
             this.function     = fn;
             this.computedExpr = null;
@@ -204,7 +220,7 @@ public class AggregateBuilder<T> {
         }
 
         /** ComputedField konstruktoru */
-        AggStep(AggregateBuilder<T> parent, GroupFunction fn, ComputedField expr) {
+        AggStep(AggregateBuilder<T> parent, Agg fn, ComputedField expr) {
             this.parent       = parent;
             this.function     = fn;
             this.computedExpr = expr;
@@ -212,9 +228,15 @@ public class AggregateBuilder<T> {
             this.fieldName    = "";
         }
 
-        /** SELECT-dəki alias — mütləq tələb olunur */
+        /** SELECT-dəki alias — mütləq tələb olunur.
+         *  "t.totalPrice" kimi prefix avtomatik silinir → "totalPrice" saxlanır. */
         public AggStep<T> as(String alias) {
-            this.alias = alias;
+            if (alias != null) {
+                int dot = alias.indexOf('.');
+                this.alias = dot >= 0 ? alias.substring(dot + 1) : alias;
+            } else {
+                this.alias = null;
+            }
             return this;
         }
 
@@ -244,7 +266,7 @@ public class AggregateBuilder<T> {
 
         // ─── HAVING ─────────────────────────────────────────────────────
 
-        public AggStep<T> having(FilterOperations op, Object value) {
+        public AggStep<T> having(Op op, Object value) {
             this.havingOp  = op;
             this.havingVal = value;
             return this;
