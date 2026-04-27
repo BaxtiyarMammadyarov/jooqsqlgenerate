@@ -67,8 +67,8 @@ az.mbm.jooqsqlgenerate
 │   └── FilterStrategies.java ← Bütün filterlərin qeydiyyatı (Strategy Pattern)
 │
 └── enums/
-    ├── FilterOperations.java          ← EQUAl, LIKE, IN, BETWEEN, ...
-    ├── FilterOperationConstants.java  ← String sabitlər (Map üçün)
+    ├── Op.java                    ← EQUAl, LIKE, IN, BETWEEN, ROUND variantları...
+    ├── FilterOperationConstants.java  ← String sabitlər (Map / globalFilter üçün)
     ├── GroupFunction.java             ← SUM, COUNT, AVG, MIN, MAX
     ├── MathOperation.java             ← PLUS, MINUS, MULTIPLY, DIVIDE
     └── ...
@@ -95,7 +95,7 @@ birinci sorğunun filterləri ikinci sorğuya da tətbiq olunurdu.
 hər sorğu üçün yeni nümunə yaradılır. Bütün state (sütunlar, filterlər, join-lər)
 yalnız həmin nümunəyə aiddir.
 
-**İki rejim var:**
+**Üç rejim var:**
 
 ```
 Entity Mode          →  JooqQuery.from(User.class, "u")
@@ -153,6 +153,61 @@ otomatik yönləndirilir:
 Bu qaydalar həm **WHERE**, həm də **HAVING** üçün eyni cür işləyir — computed sütun
 filterlərində alias prefix yazılsa belə (`"t.averageCost"`), yalnız field hissəsi
 (`"averageCost"`) HAVING yoxlamasında istifadə olunur.
+
+---
+
+### 1.1. `selectRound()` — ROUND ilə Sütun Seçimi
+
+`selectRound()` metodu SELECT-ə `ROUND(field, scale) AS alias` sütunu əlavə edir
+**VƏ** həmin alias-a tətbiq edilən hər filterin WHERE-də də ROUND ilə işlənməsini
+avtomatik təmin edir.
+
+```java
+public JooqQuery<T> selectRound(String fieldRef, int scale, String alias)
+```
+
+**Necə işləyir?**
+
+1. `selectRound("o.amount", 2, "roundedAmount")` çağrılanda:
+   - SELECT-ə `ROUND(o.amount, 2) AS rounded_amount` əlavə olunur
+   - Daxili `roundedAliasMap`-ə `"roundedAmount" → {fieldRef, scale}` yazılır
+
+2. Sonradan `.filter("roundedAmount", Op.GREATER_THAN, 100)` çağrılanda:
+   - Sistem `roundedAliasMap`-dən həmin alias-ı tapır
+   - WHERE-ə `ROUND(o.amount, 2) > 100` yazır — `rounded_amount > 100` DEYİL
+
+**Nümunə:**
+
+```java
+JooqQuery.from(Order.class, "o")
+    .select("o.id", "o.status")
+    .selectRound("o.amount", 2, "roundedAmount")   // ROUND(o.amount, 2) AS rounded_amount
+    .filter("roundedAmount", Op.GREATER_THAN, 100)  // WHERE ROUND(o.amount, 2) > 100
+    .execute(dsl);
+```
+
+Yaranan SQL:
+```sql
+SELECT o.id, o.status, ROUND(o.amount, 2) AS rounded_amount
+FROM orders o
+WHERE ROUND(o.amount, 2) > 100
+```
+
+**Xəbərdarlıq — ikiqat ROUND:**
+
+`selectRound()` ilə seçilmiş bir sütuna `Op.EQUAL_ROUND_2` kimi ROUND op tətbiq etmə —
+bu `ROUND(ROUND(field, 2), 2)` yaradır. `selectRound` ilə birlikdə sadə `Op.EQUAl`,
+`Op.GREATER_THAN` kimi adi op-lar istifadə et:
+
+```java
+// DÜZGÜN:
+.selectRound("o.amount", 2, "roundedAmount")
+.filter("roundedAmount", Op.GREATER_THAN, 100)   // → ROUND(o.amount,2) > 100
+
+// YANLIŞ:
+.selectRound("o.amount", 2, "roundedAmount")
+.filter("roundedAmount", Op.GREATER_THAN_ROUND_2, 100)  // → ROUND(ROUND(o.amount,2),2) > 100
+```
 
 ---
 
@@ -347,6 +402,9 @@ HAVING COUNT(o.id) > 5
 ORDER BY SUM(o.amount) DESC
 ```
 
+> **Qeyd:** `AggregateBuilder`-dəki `.round(scale)` aqreqat funksiyaya (SUM, AVG...) tətbiq
+> olunur. Bu, `selectRound()` metodundan fərqlidir — `selectRound()` adi sütunu yuvarlayır.
+
 ---
 
 ### 8. `Filter<T>` — Dinamik WHERE Builder
@@ -381,7 +439,7 @@ Specification filter = Filter.of()
 **Niyə yaradıldı?**
 
 Bəzi hallarda filterlər `Map<String, Map<String, String>>` strukturunda gəlir
-(REST body, konfigurasiya faylı, başqa mikroservis). Bu xam map ilə işləmək
+(REST body, konfiqurasiya faylı, başqa mikroservis). Bu xam map ilə işləmək
 çatışmaz, `GlobalFilter` onu fluent builder-ə çevirir:
 
 ```java
@@ -422,34 +480,92 @@ jooq.addGlobalFilter(base.merge(user));
 
 `GlobalFilter` daxilən `Map<String, Map<String, String>>` işlədir, burada açar kimi
 `"equal"`, `"like"`, `"greaterThan"` kimi sətirlər istifadə olunur. Bu sətirləri
-hər dəfə əllə yazmaq əvəzinə sabit olaraq saxlanılmışdır:
+hər dəfə əllə yazmaq əvəzinə sabit olaraq saxlanılmışdır.
+
+**Əsas sabitlər:**
 
 ```java
-// Əvvəl:
-map.put("equal", ...)   // typo riski: "equall" yazsan, runtime xətası
+import static az.mbm.jooqsqlgenerate.enums.FilterOperationConstants.*;
 
-// İndi:
-map.put(FilterOperationConstants.EQUAl, ...)  // compile zamanı yoxlanılır
+// map.put("equal", ...)   → typo riski: "equall" yazsan, runtime xətası
+// map.put(EQUAl, ...)     → compile zamanı yoxlanılır
 ```
+
+**ROUND sabitlər (həndəsə dəqiqliyi üçün):**
+
+Xam `Map` ilə global filter istifadə edərkən ROUND əməliyyatları üçün sabitlər:
+
+```java
+// Scale 0 — tam ədədə yuvarlama
+FilterOperationConstants.EQUAL_ROUND_0
+FilterOperationConstants.GREATER_THAN_ROUND_0
+FilterOperationConstants.LESS_THAN_ROUND_0
+// ...
+
+// Scale 2 — qiymət / məbləğ üçün (ən çox istifadə olunur)
+FilterOperationConstants.EQUAL_ROUND_2
+FilterOperationConstants.NOT_EQUAL_ROUND_2
+FilterOperationConstants.GREATER_THAN_ROUND_2
+FilterOperationConstants.GREATER_THAN_OR_EQUAL_TO_ROUND_2
+FilterOperationConstants.LESS_THAN_ROUND_2
+FilterOperationConstants.LESS_THAN_OR_EQUAL_TO_ROUND_2
+// ... Scale 1, 3, 4 üçün də eyni pattern
+```
+
+Cəmi **30 ROUND sabiti** mövcuddur: 6 əməliyyat × 5 miqyas (0–4).
 
 ---
 
-### 11. `FilterOperations` — Filter Əməliyyatlarının Enum-u
+### 11. `Op` — Filter Əməliyyatlarının Enum-u
 
-**Fayl:** `enums/FilterOperations.java`
+**Fayl:** `enums/Op.java`
 
 **Niyə yaradıldı?**
 
-Bütün filter növlərini (bərabərlik, müqayisə, LIKE, IN, BETWEEN, IS NULL...) tip-təhlükəli
-şəkildə ifadə etmək üçün. `"equal"` sətri əvəzinə `FilterOperations.EQUAl` yazırsan —
+Bütün filter növlərini (bərabərlik, müqayisə, LIKE, IN, BETWEEN, IS NULL, ROUND...)
+tip-təhlükəli şəkildə ifadə etmək üçün. `"equal"` sətri əvəzinə `Op.EQUAl` yazırsan —
 yanlış dəyər mümkün deyil.
 
 ```java
-.filter("status", FilterOperations.EQUAl, "ACTIVE")
-.filter("age",    FilterOperations.GREATER_THAN, 18)
-.filter("name",   FilterOperations.LIKE, "Ali")
-.filter("roleId", FilterOperations.IN, List.of(1L, 2L, 3L))
+.filter("status", Op.EQUAl, "ACTIVE")
+.filter("age",    Op.GREATER_THAN, 18)
+.filter("name",   Op.LIKE, "Ali")
+.filter("roleId", Op.IN, List.of(1L, 2L, 3L))
 ```
+
+**ROUND Op-lar (WHERE ROUND(field, scale) OP value):**
+
+Sütunu `selectRound()` ilə seçmədən birbaşa WHERE-də ROUND tətbiq etmək üçün
+(məsələn, hesablanmayan sütunlar üçün global filterdə):
+
+```java
+// WHERE ROUND(price, 2) > 9.99
+.filter("price", Op.GREATER_THAN_ROUND_2, "9.99")
+
+// WHERE ROUND(score, 0) = 5
+.filter("score", Op.EQUAL_ROUND_0, 5)
+```
+
+Mövcud ROUND Op-lar (5 miqyas × 6 əməliyyat = 30 dəyər):
+
+| Op | SQL qarşılığı |
+|---|---|
+| `EQUAL_ROUND_N` | `ROUND(field, N) = value` |
+| `NOT_EQUAL_ROUND_N` | `ROUND(field, N) != value` |
+| `GREATER_THAN_ROUND_N` | `ROUND(field, N) > value` |
+| `GREATER_THAN_OR_EQUAL_TO_ROUND_N` | `ROUND(field, N) >= value` |
+| `LESS_THAN_ROUND_N` | `ROUND(field, N) < value` |
+| `LESS_THAN_OR_EQUAL_TO_ROUND_N` | `ROUND(field, N) <= value` |
+
+`N` = 0, 1, 2, 3 və ya 4. Nümunə: `Op.GREATER_THAN_ROUND_2`, `Op.EQUAL_ROUND_0`.
+
+**`selectRound()` ilə fərqi:**
+
+| | `selectRound()` | `Op.ROUND_N` |
+|---|---|---|
+| SELECT-ə təsir | Bəli — `ROUND(field, N) AS alias` əlavə edir | Xeyr |
+| WHERE-ə təsir | Alias-a filter tətbiq edildikdə | Birbaşa, həmişə |
+| Nə vaxt istifadə et | Yuvarlama nəticəsini göstərmək + filter lazımdırsa | Yalnız WHERE-də ROUND lazımdırsa |
 
 ---
 
@@ -459,21 +575,25 @@ yanlış dəyər mümkün deyil.
 
 **Niyə yaradıldı?**
 
-**Strategy Pattern** tətbiqi. Hər `FilterOperations` dəyərinə müvafiq `FilterStrategy`
+**Strategy Pattern** tətbiqi. Hər `Op` dəyərinə müvafiq `FilterStrategy`
 (bir funksiyadır: `(Field, value) → Condition`) bağlıdır. Yeni filter növü əlavə etmək
 üçün mövcud kodu dəyişmək lazım deyil — sadəcə qeydiyyata əlavə edirsən (Open/Closed
 Principle):
 
 ```java
 // Daxili qeydiyyat (sinif ilk dəfə yüklənəndə bir dəfə işlənir):
-register(FilterOperations.EQUAl,         (field, val) -> field.eq(coerced(field, val)));
-register(FilterOperations.LIKE,          (field, val) -> field.like("%" + val + "%"));
-register(FilterOperations.IN,            (field, val) -> field.in(coercedList(field, val)));
-register(FilterOperations.BETWEEN,       (field, val) -> field.between(...));
-// ... digərləri
+register(Op.EQUAl,    (field, val) -> field.eq(coerced(field, val)));
+register(Op.LIKE,     (field, val) -> field.like("%" + val + "%"));
+register(Op.IN,       (field, val) -> field.in(coercedList(field, val)));
+register(Op.BETWEEN,  (field, val) -> field.between(...));
+
+// ROUND variantları — ROUND(field, scale) OP value:
+register(Op.GREATER_THAN_ROUND_2,
+    (field, val) -> DSL.round((Field<? extends Number>) field, 2).greaterThan(coerced(field, val)));
+// ... skala 0, 1, 3, 4 üçün eyni
 
 // Xarici kod yeni əməliyyat əlavə edə bilər:
-FilterStrategies.register(FilterOperations.MY_CUSTOM_OP,
+FilterStrategies.register(Op.MY_CUSTOM_OP,
     (field, val) -> field.contains(val.toString()));
 ```
 
@@ -495,9 +615,9 @@ kimi ifadələr lazım olduqda:
 ```java
 JooqQuery.from(USERS, "u")
     .caseWhen(
-        CaseBuilder.when("u.status", FilterOperations.EQUAl, "ACTIVE")
+        CaseBuilder.when("u.status", Op.EQUAl, "ACTIVE")
             .then("Aktiv")
-            .when("u.status", FilterOperations.EQUAl, "BANNED")
+            .when("u.status", Op.EQUAl, "BANNED")
             .then("Qadağalı")
             .otherwise("Bilinməyən")
             .as("statusLabel")
@@ -540,7 +660,7 @@ JooqQuery.from(User.class, "u")
     .inSubQuery("u.id",
         SubQueryIn.from(Order.class, "o")
             .select("o.userId")
-            .filter("status", FilterOperations.EQUAl, "PAID")
+            .filter("status", Op.EQUAl, "PAID")
     )
     .execute(dsl);
 ```
@@ -571,7 +691,7 @@ JooqQuery.from(User.class, "u")
     .exists(
         ExistsSpec.exists(Order.class)
             .joinField("userId", "u", "id")   // o.user_id = u.id
-            .filter("status", FilterOperations.EQUAl, "PAID")
+            .filter("status", Op.EQUAl, "PAID")
     )
     .execute(dsl);
 ```
@@ -606,8 +726,8 @@ Bu, Composite Pattern-dir — şərtlər bir-birinə AND/OR/NOT ilə zəncirlən
 ```java
 SelectTable result = JooqQuery.from(User.class, "u")
     .select("u.id", "u.firstName", "u.email", "u.status")
-    .filter("status", FilterOperations.EQUAl, status)    // null-sa atlanır
-    .filter("firstName", FilterOperations.LIKE, name)    // null-sa atlanır
+    .filter("status", Op.EQUAl, status)       // null-sa atlanır
+    .filter("firstName", Op.LIKE, name)       // null-sa atlanır
     .orderBy("u.createdAt", "DESC")
     .page(0, 20)
     .execute(dsl);
@@ -640,7 +760,7 @@ SelectTable result = JooqQuery.from(USERS, "u")
 // String adlar da işləyir: "firstName" → USERS.FIRST_NAME avtomatik tapılır
 JooqQuery.from(USERS, "u")
     .select("id", "firstName", "status")        // camelCase → snake_case çevrilir
-    .filter("firstName", FilterOperations.LIKE, searchName)
+    .filter("firstName", Op.LIKE, searchName)
     .groupBy("department")
     .orderBy("createdAt", "DESC")
     .page(0, 20)
@@ -664,7 +784,7 @@ SelectTable finalResult = JooqQuery.from(activeUsers, "sub")
     .select("id", "name", "department")
     .select(ORDERS.AMOUNT)
     .leftJoin(ORDERS, "o", sub.field("id", Long.class).eq(ORDERS.USER_ID))
-    .filter("name", FilterOperations.LIKE, searchName)
+    .filter("name", Op.LIKE, searchName)
     .filter(ORDERS.AMOUNT.greaterThan(BigDecimal.valueOf(500)))
     .orderBy("name", "ASC")
     .page(pageNumber, pageSize)
@@ -694,7 +814,48 @@ JooqQuery.from(User.class, "u")
     .groupBy("u.department", "u.status")
     .agg(GroupFunction.SUM,   "o.amount", "totalAmount", 2, null, null, "DESC")
     .agg(GroupFunction.COUNT, "o.id",     "orderCount",  0,
-         FilterOperations.GREATER_THAN, 5, null)   // HAVING COUNT > 5
+         Op.GREATER_THAN, 5, null)   // HAVING COUNT > 5
+    .execute(dsl);
+```
+
+### selectRound — Yuvarlama ilə SELECT + Filter
+
+```java
+// Entity mode
+JooqQuery.from(Order.class, "o")
+    .select("o.id", "o.status")
+    .selectRound("o.unitCost",  2, "cost")     // ROUND(o.unit_cost, 2) AS cost
+    .selectRound("o.quantity",  0, "qty")      // ROUND(o.quantity, 0)  AS qty
+    .filter("cost", Op.GREATER_THAN, 9.99)     // WHERE ROUND(o.unit_cost, 2) > 9.99
+    .filter("qty",  Op.EQUAl, 10)             // WHERE ROUND(o.quantity, 0) = 10
+    .page(0, 20)
+    .execute(dsl);
+```
+
+Yaranan SQL:
+```sql
+SELECT o.id, o.status,
+       ROUND(o.unit_cost, 2) AS cost,
+       ROUND(o.quantity, 0)  AS qty
+FROM orders o
+WHERE ROUND(o.unit_cost, 2) > 9.99
+  AND ROUND(o.quantity, 0) = 10
+LIMIT 20 OFFSET 0
+```
+
+### Global filter ilə ROUND Op
+
+```java
+import static az.mbm.jooqsqlgenerate.enums.FilterOperationConstants.*;
+
+// Xam Map ilə (REST body-dən gəlibsə)
+Map<String, Map<String, String>> globalFilter = Map.of(
+    GREATER_THAN_ROUND_2, Map.of("price", "9.50"),   // WHERE ROUND(price,2) > 9.50
+    EQUAL_ROUND_0,        Map.of("score", "5")        // WHERE ROUND(score,0) = 5
+);
+
+JooqQuery.from(Product.class, "p")
+    .globalFilter(globalFilter)
     .execute(dsl);
 ```
 
@@ -709,8 +870,10 @@ JooqQuery.from(User.class, "u")
 | Hot reload zamanı ClassLoader leak | `WeakHashMap` zəif referansla GC-ə imkan verir |
 | Yeni filter növü əlavə etmək | `FilterStrategies.register()` — mövcud kodu dəyişmədən |
 | Null parametrlər üçün if yığını | `Filter` sinfi null/boş dəyərləri avtomatik atlar |
-| String `"equal"` yazı xətası riski | `FilterOperationConstants` + `FilterOperations` enum |
+| String `"equal"` yazı xətası riski | `FilterOperationConstants` + `Op` enum |
 | Sorğu üzərindən sorğu | `SelectTable.asTable()` + `JooqQuery.from(SelectTable, alias)` |
 | Tip-təhlükəsiz sorğular | Generated mode — `USERS.FIRST_NAME`, compile zamanı yoxlanılır |
 | JOIN cədvəlinə filter yazmaq | `filter("t1.field", op, value)` — alias avtomatik həll edilir |
 | HAVING-də alias prefix | `filter("t.computedAlias", op, value)` — prefix stripped, HAVING-ə düşür |
+| SELECT-də ROUND + filter uyğunluğu | `selectRound(field, scale, alias)` — filter-də ROUND avtomatik tətbiq olunur |
+| WHERE-də ROUND, SELECT-siz | `Op.GREATER_THAN_ROUND_2` kimi ROUND Op-lar — 30 variant (skala 0–4) |
