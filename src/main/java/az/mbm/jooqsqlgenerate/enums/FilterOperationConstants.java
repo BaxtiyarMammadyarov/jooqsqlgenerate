@@ -1,7 +1,7 @@
 package az.mbm.jooqsqlgenerate.enums;
 
 /**
- * {@link JooqManager#addGlobalFilter} metodunda istifadə üçün filter əməliyyat adları.
+ * {@link JooqManager#addFilters} metodunda istifadə üçün filter əməliyyat adları.
  *
  * <p>Bu konstantlar {@code Map<String, Map<String, String>>} strukturunun <em>açar</em>
  * (operation key) hissəsində istifadə olunur:
@@ -18,10 +18,10 @@ package az.mbm.jooqsqlgenerate.enums;
  *       BETWEEN,            Map.of("createdAt", "2024-01-01,2024-12-31")
  *   );
  *
- *   jooq.addGlobalFilter(globalFilter);
+ *   jooq.addFilters(globalFilter);
  * }</pre>
  *
- * <p>Hər bir constant {@code parseOperation()} tərəfindən {@link FilterOperations}-a çevrilir.
+ * <p>Hər bir constant {@code parseOperation()} tərəfindən {@link Op}-a çevrilir.
  */
 public final class FilterOperationConstants {
 
@@ -97,4 +97,91 @@ public final class FilterOperationConstants {
 
     /** {@code WHERE field NOT REGEXP pattern} */
     public static final String NOT_REGEXP               = "notRegexp";
+
+    // ─── ROUND müqayisə əməliyyatları ────────────────────────────────────
+    //
+    // Hesablanmayan sütunlara ROUND(field, N) tətbiq edərək müqayisə edir.
+    // Global filter map-lərdə açar kimi istifadə olunur:
+    //
+    //   .globalFilter("totalPrice", Map.of(GREATER_THAN_ROUND_2, "100"))
+    //   // → WHERE ROUND(total_price, 2) > 100
+    //
+    //   .globalFilter("unitCost", Map.of(EQUAL_ROUND_2, "9.99"))
+    //   // → WHERE ROUND(unit_cost, 2) = 9.99
+
+    // ── Scale 0 — tam ədədə yuvarlama ────────────────────────────────────
+    // ROUND(0.4, 0) = 0  |  ROUND(0.6, 0) = 1  |  ROUND(1.5, 0) = 2
+
+    /** {@code WHERE ROUND(field, 0) = value} */
+    public static final String EQUAL_ROUND_0                    = "equalRound0";
+    /** {@code WHERE ROUND(field, 0) != value} */
+    public static final String NOT_EQUAL_ROUND_0                = "notEqualRound0";
+    /** {@code WHERE ROUND(field, 0) > value} */
+    public static final String GREATER_THAN_ROUND_0             = "greaterThanRound0";
+    /** {@code WHERE ROUND(field, 0) >= value} */
+    public static final String GREATER_THAN_OR_EQUAL_TO_ROUND_0 = "greaterThanOrEqualToRound0";
+    /** {@code WHERE ROUND(field, 0) < value} */
+    public static final String LESS_THAN_ROUND_0                = "lessThanRound0";
+    /** {@code WHERE ROUND(field, 0) <= value} */
+    public static final String LESS_THAN_OR_EQUAL_TO_ROUND_0    = "lessThanOrEqualToRound0";
+
+    // ── Scale 1 ──────────────────────────────────────────────────────────
+
+    /** {@code WHERE ROUND(field, 1) = value} */
+    public static final String EQUAL_ROUND_1                    = "equalRound1";
+    /** {@code WHERE ROUND(field, 1) != value} */
+    public static final String NOT_EQUAL_ROUND_1                = "notEqualRound1";
+    /** {@code WHERE ROUND(field, 1) > value} */
+    public static final String GREATER_THAN_ROUND_1             = "greaterThanRound1";
+    /** {@code WHERE ROUND(field, 1) >= value} */
+    public static final String GREATER_THAN_OR_EQUAL_TO_ROUND_1 = "greaterThanOrEqualToRound1";
+    /** {@code WHERE ROUND(field, 1) < value} */
+    public static final String LESS_THAN_ROUND_1                = "lessThanRound1";
+    /** {@code WHERE ROUND(field, 1) <= value} */
+    public static final String LESS_THAN_OR_EQUAL_TO_ROUND_1    = "lessThanOrEqualToRound1";
+
+    // ── Scale 2 (qiymət / məbləğ üçün ən çox istifadə olunur) ───────────
+
+    /** {@code WHERE ROUND(field, 2) = value} */
+    public static final String EQUAL_ROUND_2                    = "equalRound2";
+    /** {@code WHERE ROUND(field, 2) != value} */
+    public static final String NOT_EQUAL_ROUND_2                = "notEqualRound2";
+    /** {@code WHERE ROUND(field, 2) > value} */
+    public static final String GREATER_THAN_ROUND_2             = "greaterThanRound2";
+    /** {@code WHERE ROUND(field, 2) >= value} */
+    public static final String GREATER_THAN_OR_EQUAL_TO_ROUND_2 = "greaterThanOrEqualToRound2";
+    /** {@code WHERE ROUND(field, 2) < value} */
+    public static final String LESS_THAN_ROUND_2                = "lessThanRound2";
+    /** {@code WHERE ROUND(field, 2) <= value} */
+    public static final String LESS_THAN_OR_EQUAL_TO_ROUND_2    = "lessThanOrEqualToRound2";
+
+    // ── Scale 3 ──────────────────────────────────────────────────────────
+
+    /** {@code WHERE ROUND(field, 3) = value} */
+    public static final String EQUAL_ROUND_3                    = "equalRound3";
+    /** {@code WHERE ROUND(field, 3) != value} */
+    public static final String NOT_EQUAL_ROUND_3                = "notEqualRound3";
+    /** {@code WHERE ROUND(field, 3) > value} */
+    public static final String GREATER_THAN_ROUND_3             = "greaterThanRound3";
+    /** {@code WHERE ROUND(field, 3) >= value} */
+    public static final String GREATER_THAN_OR_EQUAL_TO_ROUND_3 = "greaterThanOrEqualToRound3";
+    /** {@code WHERE ROUND(field, 3) < value} */
+    public static final String LESS_THAN_ROUND_3                = "lessThanRound3";
+    /** {@code WHERE ROUND(field, 3) <= value} */
+    public static final String LESS_THAN_OR_EQUAL_TO_ROUND_3    = "lessThanOrEqualToRound3";
+
+    // ── Scale 4 ──────────────────────────────────────────────────────────
+
+    /** {@code WHERE ROUND(field, 4) = value} */
+    public static final String EQUAL_ROUND_4                    = "equalRound4";
+    /** {@code WHERE ROUND(field, 4) != value} */
+    public static final String NOT_EQUAL_ROUND_4                = "notEqualRound4";
+    /** {@code WHERE ROUND(field, 4) > value} */
+    public static final String GREATER_THAN_ROUND_4             = "greaterThanRound4";
+    /** {@code WHERE ROUND(field, 4) >= value} */
+    public static final String GREATER_THAN_OR_EQUAL_TO_ROUND_4 = "greaterThanOrEqualToRound4";
+    /** {@code WHERE ROUND(field, 4) < value} */
+    public static final String LESS_THAN_ROUND_4                = "lessThanRound4";
+    /** {@code WHERE ROUND(field, 4) <= value} */
+    public static final String LESS_THAN_OR_EQUAL_TO_ROUND_4    = "lessThanOrEqualToRound4";
 }
