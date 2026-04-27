@@ -184,4 +184,24 @@ public final class FilterOperationConstants {
     public static final String LESS_THAN_ROUND_4                = "lessThanRound4";
     /** {@code WHERE ROUND(field, 4) <= value} */
     public static final String LESS_THAN_OR_EQUAL_TO_ROUND_4    = "lessThanOrEqualToRound4";
+
+    // ─── Türk əlifbası case-insensitive LIKE ─────────────────────────────
+    //
+    // LOWER(REPLACE(REPLACE(field,'İ','i'),'I','i')) LIKE '%val%'
+    // Həm sahə, həm filter dəyəri normallaşdırılır.
+    // Türk dilindəki İ/I hərflərini standart LOWER() düzgün idarə etmir,
+    // bu sabitlər DB locale-dan asılı olmayan case-insensitive axtarış üçündür.
+    //
+    // Nümunə:
+    //   .globalFilter("firstName", Map.of(LIKE_IGNORE_CASE, "İlkin"))
+    //   // "ilkin", "İlkin", "ILKIN" — hamısı tapılır
+
+    /** {@code WHERE LOWER(REPLACE(REPLACE(field,'İ','i'),'I','i')) LIKE '%value%'} */
+    public static final String LIKE_IGNORE_CASE          = "likeIgnoreCase";
+
+    /** {@code WHERE LOWER(REPLACE(REPLACE(field,'İ','i'),'I','i')) LIKE 'value%'} */
+    public static final String START_WITH_IGNORE_CASE    = "startWithIgnoreCase";
+
+    /** {@code WHERE LOWER(REPLACE(REPLACE(field,'İ','i'),'I','i')) LIKE '%value'} */
+    public static final String END_WITH_IGNORE_CASE      = "endWithIgnoreCase";
 }
