@@ -1188,6 +1188,11 @@ public class JooqManager {
             case "lessthanround4",             "ltround4"            -> Op.LESS_THAN_ROUND_4;
             case "lessthanorequaltoround4",    "lteround4"           -> Op.LESS_THAN_OR_EQUAL_TO_ROUND_4;
 
+            // ─── Türk əlifbası case-insensitive LIKE ──────────────────────
+            case "likeignorecase",       "like_ignore_case",  "ilike" -> Op.LIKE_IGNORE_CASE;
+            case "startwithignorecase",  "start_with_ignore_case"     -> Op.START_WITH_IGNORE_CASE;
+            case "endwithignorecase",    "end_with_ignore_case"       -> Op.END_WITH_IGNORE_CASE;
+
             default -> null;
         };
     }
