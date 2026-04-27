@@ -3,7 +3,7 @@ package az.mbm.jooqsqlgenerate.builder;
 import org.jooq.*;
 import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
-import az.mbm.jooqsqlgenerate.enums.FilterOperations;
+import az.mbm.jooqsqlgenerate.enums.Op;
 import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 
 import java.util.*;
@@ -17,7 +17,7 @@ import java.util.*;
  *   // Tək sahə: WHERE u.id IN (SELECT o.user_id FROM orders o WHERE o.status = 'PAID')
  *   SubQueryIn.from(Order.class, "o")
  *       .select("o.userId")
- *       .filter("status", FilterOperations.EQUAl, "PAID")
+ *       .filter("status", Op.EQUAl, "PAID")
  *
  *   // Composite: WHERE (u.firstName, u.lastName) IN (SELECT bl.firstName, bl.lastName FROM blacklist bl)
  *   SubQueryIn.from(Blacklist.class, "bl")
@@ -26,9 +26,9 @@ import java.util.*;
  *   // Nested filter: çox şərtli subquery
  *   SubQueryIn.from(Order.class, "o")
  *       .select("o.customerId")
- *       .filter("status",   FilterOperations.EQUAl,        "ACTIVE")
- *       .filter("amount",   FilterOperations.GREATER_THAN,  1000)
- *       .filter("regionId", FilterOperations.IN,            List.of(1, 2, 3))
+ *       .filter("status",   Op.EQUAl,        "ACTIVE")
+ *       .filter("amount",   Op.GREATER_THAN,  1000)
+ *       .filter("regionId", Op.IN,            List.of(1, 2, 3))
  * }</pre>
  */
 public class SubQueryIn {
@@ -39,7 +39,7 @@ public class SubQueryIn {
     private final List<FilterRow> filters    = new ArrayList<>();
     private       boolean       negated      = false;
 
-    private record FilterRow(String field, FilterOperations op, Object value) {}
+    private record FilterRow(String field, Op op, Object value) {}
 
     private SubQueryIn(Class<?> entityClass, String tableAlias) {
         this.entityClass = Objects.requireNonNull(entityClass, "Entity null ola bilməz");
@@ -81,12 +81,12 @@ public class SubQueryIn {
      * Subquery içinə WHERE şərti əlavə edir.
      *
      * <pre>{@code
-     *   .filter("status",   FilterOperations.EQUAl,       "ACTIVE")
-     *   .filter("amount",   FilterOperations.GREATER_THAN, 100)
-     *   .filter("regionId", FilterOperations.IN,           List.of(1, 2, 3))
+     *   .filter("status",   Op.EQUAl,       "ACTIVE")
+     *   .filter("amount",   Op.GREATER_THAN, 100)
+     *   .filter("regionId", Op.IN,           List.of(1, 2, 3))
      * }</pre>
      */
-    public SubQueryIn filter(String field, FilterOperations op, Object value) {
+    public SubQueryIn filter(String field, Op op, Object value) {
         if (field != null && !field.isBlank() && op != null && value != null)
             filters.add(new FilterRow(field, op, value));
         return this;
@@ -171,7 +171,7 @@ public class SubQueryIn {
         for (FilterRow fr : filters) {
             Field<Object> f = (Field<Object>) innerTable.getField(fieldPart(fr.field()));
             Condition     c;
-            if (fr.op() == FilterOperations.IN || fr.op() == FilterOperations.NOT_IN) {
+            if (fr.op() == Op.IN || fr.op() == Op.NOT_IN) {
                 // IN üçün Collection lazımdır
                 Object val = fr.value();
                 if (!(val instanceof Collection)) val = List.of(val);
