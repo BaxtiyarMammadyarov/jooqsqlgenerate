@@ -4,7 +4,7 @@ import org.jooq.Condition;
 import org.jooq.Field;
 import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
-import az.mbm.jooqsqlgenerate.enums.FilterOperations;
+import az.mbm.jooqsqlgenerate.enums.Op;
 import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 
 import java.util.ArrayList;
@@ -16,15 +16,15 @@ import java.util.List;
  * <p>Köhnə kodda:
  * <pre>{@code
  *   manager.setExistsTable("e1", "u", Order.class);
- *   manager.setExistsFilter("e1", "userId", "u.id", FilterOperations.EQUAl, false);
- *   manager.setExistsFilter("e1", "status", "PAID", FilterOperations.EQUAl, true);
+ *   manager.setExistsFilter("e1", "userId", "u.id", Op.EQUAl, false);
+ *   manager.setExistsFilter("e1", "status", "PAID", Op.EQUAl, true);
  * }</pre>
  *
  * <p>Yeni API:
  * <pre>{@code
  *   ExistsSpec.exists(Order.class)
  *       .joinField("userId", "u", "id")         // o.userId = u.id
- *       .filter("status", FilterOperations.EQUAl, "PAID")
+ *       .filter("status", Op.EQUAl, "PAID")
  * }</pre>
  *
  * @param <T> ana cədvəl entity tipi
@@ -38,7 +38,7 @@ public class ExistsSpec<T, E> implements Specification<T> {
     private       boolean            negated     = false;
 
     private record JoinField(String existsField, String mainTableAlias, String mainField) {}
-    private record FilterClause(String field, FilterOperations op, Object value) {}
+    private record FilterClause(String field, Op op, Object value) {}
 
     private ExistsSpec(Class<E> existsEntity) {
         this.existsEntity = existsEntity;
@@ -82,10 +82,10 @@ public class ExistsSpec<T, E> implements Specification<T> {
      * EXISTS sorğusuna literal dəyər filtri əlavə edir.
      *
      * <pre>{@code
-     *   .filter("status", FilterOperations.EQUAl, "PAID")
+     *   .filter("status", Op.EQUAl, "PAID")
      * }</pre>
      */
-    public ExistsSpec<T, E> filter(String field, FilterOperations op, Object value) {
+    public ExistsSpec<T, E> filter(String field, Op op, Object value) {
         filters.add(new FilterClause(field, op, value));
         return this;
     }
