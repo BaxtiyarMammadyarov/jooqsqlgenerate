@@ -3,7 +3,7 @@ package az.mbm.jooqsqlgenerate.builder;
 import org.jooq.*;
 import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
-import az.mbm.jooqsqlgenerate.enums.FilterOperations;
+import az.mbm.jooqsqlgenerate.enums.Op;
 import az.mbm.jooqsqlgenerate.spec.Specification;
 import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 
@@ -40,7 +40,7 @@ import java.util.*;
  *   //         FROM users u WHERE u.id = o.userId) AS buyerRole
  *   SubSelectBuilder.from(User.class, "u2")
  *       .selectCase(
- *           CaseBuilder.when("role", FilterOperations.EQUAl, "ADMIN").then("İdarəçi")
+ *           CaseBuilder.when("role", Op.EQUAl, "ADMIN").then("İdarəçi")
  *                      .otherwise("İstifadəçi")
  *       )
  *       .correlateOn("u2.id", "o.userId")
@@ -77,7 +77,7 @@ public class SubSelectBuilder {
     // ─── Əlavə WHERE filterlər ───────────────────────────────────────────
     private final List<FilterRow> filterRows = new ArrayList<>();
 
-    private record FilterRow(String field, FilterOperations op, Object value) {}
+    private record FilterRow(String field, Op op, Object value) {}
 
     // ─── Nəticə alias ────────────────────────────────────────────────────
     private String alias = null;
@@ -145,8 +145,8 @@ public class SubSelectBuilder {
      *
      * <pre>{@code
      *   .selectCase(
-     *       CaseBuilder.when("status", FilterOperations.EQUAl, "ACTIVE").then("Aktiv")
-     *                  .andWhen("status", FilterOperations.EQUAl, "INACTIVE").then("Deaktiv")
+     *       CaseBuilder.when("status", Op.EQUAl, "ACTIVE").then("Aktiv")
+     *                  .andWhen("status", Op.EQUAl, "INACTIVE").then("Deaktiv")
      *                  .otherwise("Naməlum")
      *   )
      * }</pre>
@@ -184,9 +184,9 @@ public class SubSelectBuilder {
     /**
      * Subquery-yə əlavə WHERE şərti.
      *
-     * <pre>{@code .addFilter("p.active", FilterOperations.EQUAl, true) }</pre>
+     * <pre>{@code .addFilter("p.active", Op.EQUAl, true) }</pre>
      */
-    public SubSelectBuilder addFilter(String field, FilterOperations op, Object value) {
+    public SubSelectBuilder addFilter(String field, Op op, Object value) {
         if (field != null && !field.isBlank() && op != null && value != null)
             filterRows.add(new FilterRow(field, op, value));
         return this;
@@ -202,7 +202,9 @@ public class SubSelectBuilder {
      * <pre>{@code .as("productName") }</pre>
      */
     public SubSelectBuilder as(String alias) {
-        this.alias = Objects.requireNonNull(alias, "SubSelectBuilder alias null ola bilməz");
+        Objects.requireNonNull(alias, "SubSelectBuilder alias null ola bilməz");
+        int dot = alias.indexOf('.');
+        this.alias = dot >= 0 ? alias.substring(dot + 1) : alias;
         return this;
     }
 
