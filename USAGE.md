@@ -128,13 +128,11 @@ task generateJooq {
 Verilənlər bazasına qoşulub sinifləri yarat:
 
 ```bash
-# Mühit dəyişənlərini təyin et (ya da .env faylından yüklə)
 export DB_URL="jdbc:postgresql://localhost:5432/mydb"
 export DB_DRIVER="org.postgresql.Driver"
 export DB_USERNAME="postgres"
 export DB_PASSWORD="secret"
 
-# Task-ı işlət
 ./gradlew generateJooq
 ```
 
@@ -150,7 +148,6 @@ src/main/java/com/example/myapp/domain/jooq/
 │
 ├── tables/records/
 │   ├── UsersRecord.java    ← INSERT/UPDATE üçün
-│   ├── OrdersRecord.java
 │   └── ...
 │
 ├── tables/pojos/
@@ -160,31 +157,10 @@ src/main/java/com/example/myapp/domain/jooq/
 └── Tables.java             ← import static Tables.* üçün
 ```
 
-### 3.5. İstifadə
+### 3.5. Nə vaxt yenidən işlətmək lazımdır?
 
-```java
-import static com.example.myapp.domain.jooq.Tables.*;
-
-// USERS.ID, USERS.FIRST_NAME, USERS.STATUS — tip-təhlükəli sahələr
-JooqQuery.from(USERS, "u")
-    .select(USERS.ID, USERS.FIRST_NAME, USERS.STATUS)
-    .filter(USERS.STATUS.eq("ACTIVE"))
-    .leftJoin(ORDERS, "o", USERS.ID.eq(ORDERS.USER_ID))
-    .page(0, 20)
-    .execute(dsl);
-```
-
-### 3.6. Nə vaxt yenidən işlətmək lazımdır?
-
-`generateJooq` task-ını aşağıdakı hallarda yenidən işlət:
-
-- Yeni cədvəl əlavə ediləndə
-- Mövcud cədvələ yeni sütun əlavə ediləndə
-- Sütun adı dəyişdirilənddə
-- Sütun tipi dəyişdirilndə
-
-> **Vacib:** Verilənlər bazası dəyişikliklərindən sonra `generateJooq` işlətməsən,
-> köhnə siniflərlə işləyəcəksən — sorğular yanlış sütunlara müraciət edə bilər.
+`generateJooq` task-ını aşağıdakı hallarda yenidən işlət: yeni cədvəl əlavə ediləndə,
+mövcud cədvələ yeni sütun əlavə ediləndə, sütun adı dəyişdirilndə, sütun tipi dəyişdirilndə.
 
 ---
 
@@ -206,8 +182,8 @@ public class UserService {
     public SelectTable searchUsers(String status, String name) {
         return JooqQuery.from(User.class, "u")
             .select("u.id", "u.firstName", "u.email")
-            .filter("status", FilterOperations.EQUAl, status)
-            .filter("firstName", FilterOperations.LIKE, name)
+            .filter("status", Op.EQUAl, status)
+            .filter("firstName", Op.LIKE, name)
             .orderBy("u.createdAt", "DESC")
             .page(0, 20)
             .execute(dsl);
@@ -231,8 +207,8 @@ public class UserService {
         JooqManager jooq = ctx.getBean(JooqManager.class); // hər çağrışda yeni nümunə
         jooq.setMainTable(User.class, "u");
         jooq.addColumns("u.id", "u.firstName", "u.email");
-        jooq.addFilter("status", FilterOperations.EQUAl, status);
-        jooq.addFilter("firstName", FilterOperations.LIKE, name);
+        jooq.addFilter("status", Op.EQUAl, status);
+        jooq.addFilter("firstName", Op.LIKE, name);
         jooq.addOrderByDesc("u.createdAt");
         jooq.setPage(0, 20);
         return jooq.execute();
@@ -279,7 +255,7 @@ public class User {
 ```java
 SelectTable result = JooqQuery.from(User.class, "u")
     .select("u.id", "u.firstName", "u.email")
-    .filter("status", FilterOperations.EQUAl, "ACTIVE")
+    .filter("status", Op.EQUAl, "ACTIVE")
     .page(0, 20)
     .execute(dsl);
 
@@ -301,11 +277,11 @@ Və ya daha qısa şəkildə birbaşa `JooqQuery`-dən:
 
 ```java
 List<UserDto> users = JooqQuery.from(User.class, "u")
-    .filter("status", FilterOperations.EQUAl, "ACTIVE")
+    .filter("status", Op.EQUAl, "ACTIVE")
     .fetchInto(dsl, UserDto.class);
 
 List<Map<String, Object>> rows = JooqQuery.from(User.class, "u")
-    .filter("status", FilterOperations.EQUAl, "ACTIVE")
+    .filter("status", Op.EQUAl, "ACTIVE")
     .fetchMaps(dsl);
 ```
 
@@ -314,38 +290,40 @@ List<Map<String, Object>> rows = JooqQuery.from(User.class, "u")
 ## 7. Filter Növləri
 
 ```java
+import az.mbm.jooqsqlgenerate.enums.Op;
+
 JooqQuery.from(User.class, "u")
 
     // Bərabərlik
-    .filter("status",    FilterOperations.EQUAl,                 "ACTIVE")
-    .filter("status",    FilterOperations.NOT_EQUAL,              "BANNED")
+    .filter("status",    Op.EQUAl,                 "ACTIVE")
+    .filter("status",    Op.NOT_EQUAL,              "BANNED")
 
     // Müqayisə
-    .filter("age",       FilterOperations.GREATER_THAN,           18)
-    .filter("age",       FilterOperations.GREATER_THAN_OR_EQUAL_TO, 18)
-    .filter("salary",    FilterOperations.LESS_THAN,              5000)
-    .filter("salary",    FilterOperations.LESS_THAN_OR_EQUAL_TO,  5000)
+    .filter("age",       Op.GREATER_THAN,           18)
+    .filter("age",       Op.GREATER_THAN_OR_EQUAL_TO, 18)
+    .filter("salary",    Op.LESS_THAN,              5000)
+    .filter("salary",    Op.LESS_THAN_OR_EQUAL_TO,  5000)
 
     // Mətn axtarışı
-    .filter("firstName", FilterOperations.LIKE,                   "Ali")    // %Ali%
-    .filter("firstName", FilterOperations.START_WITH,             "Ali")    // Ali%
-    .filter("firstName", FilterOperations.END_WITH,               "li")     // %li
+    .filter("firstName", Op.LIKE,       "Ali")    // %Ali%
+    .filter("firstName", Op.START_WITH, "Ali")    // Ali%
+    .filter("firstName", Op.END_WITH,   "li")     // %li
 
     // Siyahı
-    .filter("roleId",    FilterOperations.IN,      List.of(1L, 2L, 3L))
-    .filter("status",    FilterOperations.NOT_IN,  List.of("DELETED", "BANNED"))
+    .filter("roleId",    Op.IN,      List.of(1L, 2L, 3L))
+    .filter("status",    Op.NOT_IN,  List.of("DELETED", "BANNED"))
 
     // Aralıq
-    .filter("createdAt", FilterOperations.BETWEEN,
+    .filter("createdAt", Op.BETWEEN,
             new Object[]{LocalDate.of(2024,1,1), LocalDate.of(2024,12,31)})
 
     // Boş yoxlaması
-    .filter("deletedAt", FilterOperations.IS_EMPTY,     null)   // IS NULL
-    .filter("deletedAt", FilterOperations.IS_NOT_EMPTY, null)   // IS NOT NULL
+    .filter("deletedAt", Op.IS_EMPTY,     null)   // IS NULL
+    .filter("deletedAt", Op.IS_NOT_EMPTY, null)   // IS NOT NULL
 
     // Regex
-    .filter("phone",     FilterOperations.REGEXP,     "^\\+994")
-    .filter("phone",     FilterOperations.NOT_REGEXP, "^\\+994")
+    .filter("phone",     Op.REGEXP,     "^\\+994")
+    .filter("phone",     Op.NOT_REGEXP, "^\\+994")
 
     .execute(dsl);
 ```
@@ -355,20 +333,19 @@ JooqQuery.from(User.class, "u")
 
 ### Alias prefix ilə filter
 
-`filter()` metodu sahə adının əvvəlindəki `alias.` prefiksini **avtomatik həll edir** —
-alias hansı cədvələ (main, JOIN) aiddirsə həmin `EntityTable`-dan sahə götürülür:
+`filter()` metodu sahə adının əvvəlindəki `alias.` prefiksini **avtomatik həll edir**:
 
 ```java
 JooqQuery.from(WarehouseFlow.class, "t")
     .leftJoin(Product.class, "t1", "fkProductId", "id")
 
     // Main cədvəl — alias ilə və ya onsuz, eyni nəticə:
-    .filter("status",        FilterOperations.EQUAl, "A")
-    .filter("t.status",      FilterOperations.EQUAl, "A")   // eynidir
+    .filter("status",        Op.EQUAl, "A")
+    .filter("t.status",      Op.EQUAl, "A")   // eynidir
 
     // JOIN cədvəli — "t1" alias-ı Product EntityTable-ına yönləndirilir:
-    .filter("t1.fkProductCategoryId", FilterOperations.IN, dto.getFkProductCategoryId())
-    .filter("t1.productName",         FilterOperations.LIKE, dto.getProductName())
+    .filter("t1.fkProductCategoryId", Op.IN,   dto.getFkProductCategoryId())
+    .filter("t1.productName",         Op.LIKE,  dto.getProductName())
 
     .execute(dsl);
 ```
@@ -381,8 +358,8 @@ JooqQuery.from(Order.class, "o")
     .computedColumn(ComputedField.of("o.price").multiply("o.quantity").as("totalAmount"))
 
     // Hər ikisi HAVING-ə düşür:
-    .filter("totalAmount",   FilterOperations.GREATER_THAN, 1000)
-    .filter("o.totalAmount", FilterOperations.GREATER_THAN, 1000)  // eynidir
+    .filter("totalAmount",   Op.GREATER_THAN, 1000)
+    .filter("o.totalAmount", Op.GREATER_THAN, 1000)  // eynidir
 
     .execute(dsl);
 ```
@@ -402,14 +379,11 @@ JooqQuery.from(User.class, "u")
     .innerJoin(Role.class, "r", "u.roleId", "r.id")
 
     // Hər cədvəlin filterlərini birbaşa alias ilə yaz — avtomatik həll olunur:
-    .filter("u.status",  FilterOperations.EQUAl,        "ACTIVE")
-    .filter("o.amount",  FilterOperations.GREATER_THAN,  100)
-    .filter("r.roleKey", FilterOperations.IN,            List.of("ADMIN", "MANAGER"))
+    .filter("u.status",  Op.EQUAl,       "ACTIVE")
+    .filter("o.amount",  Op.GREATER_THAN, 100)
+    .filter("r.roleKey", Op.IN,           List.of("ADMIN", "MANAGER"))
     .execute(dsl);
 ```
-
-> **Köhnə ekvivalent:** `addGlobalFilter(GlobalFilter.of().equal("o.status", "A"))` —
-> bu yazılış hələ işləyir, lakin artıq `filter("o.status", EQUAl, "A")` ilə eynidir.
 
 ---
 
@@ -424,7 +398,7 @@ JooqQuery.from(User.class, "u")
     .agg(GroupFunction.AVG,   "o.amount", "avgAmount",   2,   null, null, null)
     // HAVING COUNT(o.id) > 5:
     .agg(GroupFunction.COUNT, "o.id", "orderCount", 0,
-         FilterOperations.GREATER_THAN, 5, null)
+         Op.GREATER_THAN, 5, null)
     .execute(dsl);
 ```
 
@@ -511,7 +485,132 @@ JooqQuery.from(User.class, "u")
 
 ---
 
-## 13. EXISTS Subquery
+## 13. ROUND ilə Filter
+
+İki fərqli yol var — hansını seçəcəyin nəticəni SELECT-də göstərməyə ehtiyacın olub-olmadığından asılıdır.
+
+### 13.1. `selectRound()` — SELECT + WHERE birlikdə
+
+Yuvarlama nəticəsini həm SELECT-də göstərmək, həm də filterlədikdə istifadə et:
+
+```java
+JooqQuery.from(Order.class, "o")
+    .select("o.id", "o.status")
+    .selectRound("o.unitCost", 2, "cost")     // SELECT ROUND(o.unit_cost, 2) AS cost
+    .selectRound("o.quantity", 0, "qty")      // SELECT ROUND(o.quantity, 0)  AS qty
+    .filter("cost", Op.GREATER_THAN, 9.99)    // WHERE ROUND(o.unit_cost, 2) > 9.99
+    .filter("qty",  Op.EQUAl, 10)            // WHERE ROUND(o.quantity, 0) = 10
+    .page(0, 20)
+    .execute(dsl);
+```
+
+Yaranan SQL:
+```sql
+SELECT o.id, o.status,
+       ROUND(o.unit_cost, 2) AS cost,
+       ROUND(o.quantity, 0)  AS qty
+FROM orders o
+WHERE ROUND(o.unit_cost, 2) > 9.99
+  AND ROUND(o.quantity, 0) = 10
+LIMIT 20 OFFSET 0
+```
+
+`selectRound()` ilə birlikdə **adi** `Op` dəyərləri işlənir:
+
+```java
+.filter("cost", Op.EQUAl,                 9.99)
+.filter("cost", Op.NOT_EQUAL,             9.99)
+.filter("cost", Op.GREATER_THAN,          9.99)
+.filter("cost", Op.GREATER_THAN_OR_EQUAL_TO, 9.99)
+.filter("cost", Op.LESS_THAN,             9.99)
+.filter("cost", Op.LESS_THAN_OR_EQUAL_TO, 9.99)
+.filter("cost", Op.BETWEEN, new Object[]{5.00, 15.00})
+```
+
+> **Xəbərdarlıq — ikiqat ROUND:** `selectRound()` ilə seçilmiş alias-a `Op.EQUAL_ROUND_2`
+> kimi ROUND Op tətbiq etmə — bu `ROUND(ROUND(field,2), 2)` yaradır. `selectRound` ilə
+> adi `Op.EQUAl`, `Op.GREATER_THAN` kimi op-lar işlət.
+
+### 13.2. `Op.ROUND_N` — Yalnız WHERE-də ROUND
+
+SELECT-ə ROUND sütunu əlavə etmədən birbaşa WHERE-də ROUND tətbiq etmək üçün:
+
+```java
+JooqQuery.from(Product.class, "p")
+    .select("p.id", "p.name", "p.price")   // orijinal sütun göstərilir
+    .filter("price", Op.GREATER_THAN_ROUND_2, "9.50")  // WHERE ROUND(p.price, 2) > 9.50
+    .filter("score", Op.EQUAL_ROUND_0,        5)        // WHERE ROUND(p.score, 0) = 5
+    .execute(dsl);
+```
+
+Yaranan SQL:
+```sql
+SELECT p.id, p.name, p.price
+FROM products p
+WHERE ROUND(p.price, 2) > 9.50
+  AND ROUND(p.score, 0) = 5
+```
+
+### 13.3. Global Filter ilə ROUND Op
+
+`Map<String, Map<String, String>>` formatında gələn global filterdə ROUND Op sabitlərini
+`FilterOperationConstants`-dan al:
+
+```java
+import static az.mbm.jooqsqlgenerate.enums.FilterOperationConstants.*;
+
+Map<String, Map<String, String>> globalFilter = new LinkedHashMap<>();
+globalFilter.put(GREATER_THAN_ROUND_2, Map.of("price",    "9.50"));
+globalFilter.put(EQUAL_ROUND_0,        Map.of("score",    "5"));
+globalFilter.put(LESS_THAN_ROUND_1,    Map.of("discount", "0.5"));
+
+JooqQuery.from(Product.class, "p")
+    .globalFilter(globalFilter)
+    .execute(dsl);
+```
+
+---
+
+## 14. ROUND Filter Növlərinin Tam Siyahısı
+
+Cəmi **30 ROUND Op** mövcuddur (6 əməliyyat × 5 miqyas):
+
+| `Op` | `FilterOperationConstants` | SQL | Miqyas |
+|---|---|---|---|
+| `EQUAL_ROUND_0` | `EQUAL_ROUND_0` | `ROUND(field,0) = val` | tam ədəd |
+| `NOT_EQUAL_ROUND_0` | `NOT_EQUAL_ROUND_0` | `ROUND(field,0) != val` | tam ədəd |
+| `GREATER_THAN_ROUND_0` | `GREATER_THAN_ROUND_0` | `ROUND(field,0) > val` | tam ədəd |
+| `GREATER_THAN_OR_EQUAL_TO_ROUND_0` | `GREATER_THAN_OR_EQUAL_TO_ROUND_0` | `ROUND(field,0) >= val` | tam ədəd |
+| `LESS_THAN_ROUND_0` | `LESS_THAN_ROUND_0` | `ROUND(field,0) < val` | tam ədəd |
+| `LESS_THAN_OR_EQUAL_TO_ROUND_0` | `LESS_THAN_OR_EQUAL_TO_ROUND_0` | `ROUND(field,0) <= val` | tam ədəd |
+| `EQUAL_ROUND_1` | `EQUAL_ROUND_1` | `ROUND(field,1) = val` | 1 onluq |
+| `NOT_EQUAL_ROUND_1` | `NOT_EQUAL_ROUND_1` | `ROUND(field,1) != val` | 1 onluq |
+| `GREATER_THAN_ROUND_1` | `GREATER_THAN_ROUND_1` | `ROUND(field,1) > val` | 1 onluq |
+| `GREATER_THAN_OR_EQUAL_TO_ROUND_1` | `GREATER_THAN_OR_EQUAL_TO_ROUND_1` | `ROUND(field,1) >= val` | 1 onluq |
+| `LESS_THAN_ROUND_1` | `LESS_THAN_ROUND_1` | `ROUND(field,1) < val` | 1 onluq |
+| `LESS_THAN_OR_EQUAL_TO_ROUND_1` | `LESS_THAN_OR_EQUAL_TO_ROUND_1` | `ROUND(field,1) <= val` | 1 onluq |
+| `EQUAL_ROUND_2` | `EQUAL_ROUND_2` | `ROUND(field,2) = val` | 2 onluq (qiymət) |
+| `NOT_EQUAL_ROUND_2` | `NOT_EQUAL_ROUND_2` | `ROUND(field,2) != val` | 2 onluq (qiymət) |
+| `GREATER_THAN_ROUND_2` | `GREATER_THAN_ROUND_2` | `ROUND(field,2) > val` | 2 onluq (qiymət) |
+| `GREATER_THAN_OR_EQUAL_TO_ROUND_2` | `GREATER_THAN_OR_EQUAL_TO_ROUND_2` | `ROUND(field,2) >= val` | 2 onluq (qiymət) |
+| `LESS_THAN_ROUND_2` | `LESS_THAN_ROUND_2` | `ROUND(field,2) < val` | 2 onluq (qiymət) |
+| `LESS_THAN_OR_EQUAL_TO_ROUND_2` | `LESS_THAN_OR_EQUAL_TO_ROUND_2` | `ROUND(field,2) <= val` | 2 onluq (qiymət) |
+| `EQUAL_ROUND_3` | `EQUAL_ROUND_3` | `ROUND(field,3) = val` | 3 onluq |
+| `NOT_EQUAL_ROUND_3` | `NOT_EQUAL_ROUND_3` | `ROUND(field,3) != val` | 3 onluq |
+| `GREATER_THAN_ROUND_3` | `GREATER_THAN_ROUND_3` | `ROUND(field,3) > val` | 3 onluq |
+| `GREATER_THAN_OR_EQUAL_TO_ROUND_3` | `GREATER_THAN_OR_EQUAL_TO_ROUND_3` | `ROUND(field,3) >= val` | 3 onluq |
+| `LESS_THAN_ROUND_3` | `LESS_THAN_ROUND_3` | `ROUND(field,3) < val` | 3 onluq |
+| `LESS_THAN_OR_EQUAL_TO_ROUND_3` | `LESS_THAN_OR_EQUAL_TO_ROUND_3` | `ROUND(field,3) <= val` | 3 onluq |
+| `EQUAL_ROUND_4` | `EQUAL_ROUND_4` | `ROUND(field,4) = val` | 4 onluq |
+| `NOT_EQUAL_ROUND_4` | `NOT_EQUAL_ROUND_4` | `ROUND(field,4) != val` | 4 onluq |
+| `GREATER_THAN_ROUND_4` | `GREATER_THAN_ROUND_4` | `ROUND(field,4) > val` | 4 onluq |
+| `GREATER_THAN_OR_EQUAL_TO_ROUND_4` | `GREATER_THAN_OR_EQUAL_TO_ROUND_4` | `ROUND(field,4) >= val` | 4 onluq |
+| `LESS_THAN_ROUND_4` | `LESS_THAN_ROUND_4` | `ROUND(field,4) < val` | 4 onluq |
+| `LESS_THAN_OR_EQUAL_TO_ROUND_4` | `LESS_THAN_OR_EQUAL_TO_ROUND_4` | `ROUND(field,4) <= val` | 4 onluq |
+
+---
+
+## 15. EXISTS Subquery
 
 ```java
 // WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id AND o.status = 'PAID')
@@ -519,7 +618,7 @@ JooqQuery.from(User.class, "u")
     .exists(
         ExistsSpec.exists(Order.class)
             .joinField("userId", "u", "id")
-            .filter("status", FilterOperations.EQUAl, "PAID")
+            .filter("status", Op.EQUAl, "PAID")
     )
     .execute(dsl);
 
@@ -534,7 +633,7 @@ JooqQuery.from(User.class, "u")
 
 ---
 
-## 14. IN Subquery
+## 16. IN Subquery
 
 ```java
 // WHERE u.id IN (SELECT o.userId FROM orders o WHERE o.status = 'PAID')
@@ -542,7 +641,7 @@ JooqQuery.from(User.class, "u")
     .inSubQuery("u.id",
         SubQueryIn.from(Order.class, "o")
             .select("o.userId")
-            .filter("status", FilterOperations.EQUAl, "PAID")
+            .filter("status", Op.EQUAl, "PAID")
     )
     .execute(dsl);
 
@@ -558,15 +657,15 @@ JooqQuery.from(User.class, "u")
 
 ---
 
-## 15. CASE WHEN
+## 17. CASE WHEN
 
 ```java
 JooqQuery.from(User.class, "u")
     .select("u.id", "u.firstName")
     .caseWhen(
-        CaseBuilder.when("u.status", FilterOperations.EQUAl, "ACTIVE")
+        CaseBuilder.when("u.status", Op.EQUAl, "ACTIVE")
             .then("Aktiv")
-            .when("u.status", FilterOperations.EQUAl, "BANNED")
+            .when("u.status", Op.EQUAl, "BANNED")
             .then("Qadağalı")
             .otherwise("Bilinməyən")
             .as("statusLabel")
@@ -576,7 +675,7 @@ JooqQuery.from(User.class, "u")
 
 ---
 
-## 16. Hesablama Sütunları
+## 18. Hesablama Sütunları
 
 ```java
 // (price * quantity) - discount AS netAmount
@@ -590,9 +689,7 @@ JooqQuery.from(Order.class, "o")
     .execute(dsl);
 ```
 
-### 16.1. Bir Neçə Hissəni Toplama — `sumOf()`
-
-Hər hissənin öz riyazi əməliyyatı ola bilər (vurma, bölmə, çıxma):
+### 18.1. Bir Neçə Hissəni Toplama — `sumOf()`
 
 ```java
 // (price * qty) + tax + (shipping - discount) AS grandTotal
@@ -605,39 +702,14 @@ JooqQuery.from(Order.class, "o")
         ).as("grandTotal")
     )
     .execute(dsl);
-
-// Daha mürəkkəb nümunə: (width * height) + (depth * height) + baseArea
-JooqQuery.from(Product.class, "p")
-    .computedColumn(
-        ComputedField.sumOf(
-            ComputedField.expr("p.width").multiply("p.height"),
-            ComputedField.expr("p.depth").multiply("p.height"),
-            ComputedField.expr("p.baseArea")
-        ).as("totalSurface")
-    )
-    .execute(dsl);
-
-// WHERE filter ilə birlikdə
-JooqQuery.from(Order.class, "o")
-    .computedColumn(
-        ComputedField.sumOf(
-            ComputedField.expr("o.price").multiply("o.qty"),
-            ComputedField.expr("o.tax")
-        )
-        .where("o.status", FilterOperations.EQUAl, "ACTIVE")
-        .as("activeTotal")
-    )
-    .execute(dsl);
 ```
 
----
-
-### 16.2. Computed Sütunun Nəticəsinə Filter
+### 18.2. Computed Sütunun Nəticəsinə Filter
 
 Hesablanmış sütunun nəticəsini filterlə — `computedColumn()` üçüncü arqument kimi:
 
 ```java
-// grandTotal > 1000
+// grandTotal > 1000  →  HAVING (ifadə) > 1000
 JooqQuery.from(Order.class, "o")
     .computedColumn(
         ComputedField.sumOf(
@@ -645,44 +717,17 @@ JooqQuery.from(Order.class, "o")
             ComputedField.expr("o.tax"),
             ComputedField.expr("o.shipping").subtract("o.discount")
         ).as("grandTotal"),
-        FilterOperations.GREATER_THAN, 1000
-    )
-    .execute(dsl);
-
-// netAmount BETWEEN 500 AND 2000
-JooqQuery.from(Order.class, "o")
-    .computedColumn(
-        ComputedField.of("o.amount").subtract("o.discount").as("netAmount"),
-        FilterOperations.BETWEEN, new Object[]{500, 2000}
-    )
-    .execute(dsl);
-
-// Bir neçə computed sütun — hər birinin öz filteri
-JooqQuery.from(Order.class, "o")
-    .computedColumn(
-        ComputedField.sumOf(
-            ComputedField.expr("o.price").multiply("o.qty"),
-            ComputedField.expr("o.bonus")
-        ).as("totalRevenue"),
-        FilterOperations.GREATER_THAN_OR_EQUAL_TO, 5000
-    )
-    .computedColumn(
-        ComputedField.of("o.cost").divide("o.qty").as("unitCost"),
-        FilterOperations.LESS_THAN, 100
+        Op.GREATER_THAN, 1000
     )
     .execute(dsl);
 ```
 
-> **Qeyd:** Bu filter `HAVING` kimi işləyir — `WHERE` ilə qarışmır.
+### 18.3. `filter()` ilə Computed Alias Filter (WHERE)
 
-### 16.3. `globalWhereFilter` / `.filter()` ilə Computed Alias Filter
-
-`globalWhereFilter` və ya `.filter()` metodu bir computed sütunun alias-ını aldıqda sistem
-həmin ifadəni taparaq `WHERE`-ə **genişləndirilmiş** formada yazır:
+`filter()` metodu computed sütunun alias-ını aldıqda `WHERE`-ə ifadənin özünü yazır:
 
 ```java
-// Daxili SQL:
-// WHERE (o.price * o.qty) + o.tax > 1000   ← alias deyil, ifadənin özü
+// WHERE (o.price * o.qty) + o.tax > 1000
 JooqQuery.from(Order.class, "o")
     .computedColumn(
         ComputedField.sumOf(
@@ -690,87 +735,29 @@ JooqQuery.from(Order.class, "o")
             ComputedField.expr("o.tax")
         ).as("grandTotal")
     )
-    .filter("grandTotal", FilterOperations.GREATER_THAN, 1000)
-    .execute(dsl);
-
-// globalWhereFilter ilə eyni nəticə:
-JooqQuery.from(Order.class, "o")
-    .computedColumn(
-        ComputedField.of("o.amount").subtract("o.discount").as("netAmount")
-    )
-    .globalWhereFilter("netAmount", FilterOperations.GREATER_THAN_OR_EQUAL_TO, 500)
+    .filter("grandTotal", Op.GREATER_THAN, 1000)
     .execute(dsl);
 ```
 
-> **Fərq:** `computedColumn(..., op, value)` → `HAVING`;
-> `.filter("alias", op, value)` → `WHERE` (ifadə genişləndirilir).
+> **Fərq:** `computedColumn(..., op, value)` → `HAVING`; `.filter("alias", op, value)` → `WHERE`.
 
 ---
 
-### 16.3. WHERE Filteri ilə Hesablama Sütunu (group funksiyasız)
-
-Riyazi ifadəyə şərt əlavə etmək üçün `.where()` istifadə edin.
-Şərt ödənilmədikdə nəticə `NULL` qaytarır:
-
-```sql
--- SQL nəticəsi:
--- CASE WHEN o.status = 'PAID' THEN (o.price - o.discount) ELSE NULL END AS paidNet
-```
-
-```java
-// Tək şərt
-JooqQuery.from(Order.class, "o")
-    .computedColumn(
-        ComputedField.of("o.price")
-            .subtract("o.discount")
-            .where("o.status", FilterOperations.EQUAl, "PAID")
-            .as("paidNet")
-    )
-    .execute(dsl);
-
-// Bir neçə şərt — AND ilə birləşir
-JooqQuery.from(Order.class, "o")
-    .computedColumn(
-        ComputedField.of("o.price")
-            .subtract("o.discount")
-            .where("o.status", FilterOperations.EQUAl,    "PAID")
-            .where("o.type",   FilterOperations.EQUAl,    "SALE")
-            .where("o.amount", FilterOperations.GREATER_THAN, 0)
-            .as("paidSaleNet")
-    )
-    .execute(dsl);
-
-// Çox sahəli ifadə + WHERE filter
-JooqQuery.from(Order.class, "o")
-    .computedColumn(
-        ComputedField.of("o.price")
-            .multiply("o.quantity")
-            .subtract(ComputedField.expr("o.discount").multiply("o.quantity"))
-            .where("o.status", FilterOperations.EQUAl, "ACTIVE")
-            .as("activeLineTotal")
-    )
-    .execute(dsl);
-```
-
----
-
-## 17. Derived Table — Sorğu Üzərindən Sorğu
-
-Bir sorğunun nəticəsini başqa sorğunun cədvəli kimi istifadə et:
+## 19. Derived Table — Sorğu Üzərindən Sorğu
 
 ```java
 // Addım 1 — daxili sorğu (mütləq noPagination() olmalıdır)
 SelectTable activeUsers = JooqQuery.from(User.class, "u")
     .select("u.id", "u.firstName", "u.department")
-    .filter("status", FilterOperations.EQUAl, "ACTIVE")
+    .filter("status", Op.EQUAl, "ACTIVE")
     .noPagination()
     .execute(dsl);
 
 // Addım 2 — daxili sorğu üzərindən yeni sorğu
 SelectTable result = JooqQuery.from(activeUsers, "sub")
     .select("id", "firstName", "department")
-    .filter("firstName", FilterOperations.LIKE, searchName)
-    .filter("department", FilterOperations.EQUAl, dept)
+    .filter("firstName", Op.LIKE, searchName)
+    .filter("department", Op.EQUAl, dept)
     .orderBy("firstName", "ASC")
     .page(pageNumber, pageSize)
     .execute(dsl);
@@ -778,11 +765,7 @@ SelectTable result = JooqQuery.from(activeUsers, "sub")
 
 ---
 
-## 18. jOOQ Code Generation ilə (Generated Mode)
-
-Layihəndə `generateJooq` task-ı konfiqurasiya edilibsə verilənlər bazası sxemindən
-`Tables.USERS`, `USERS.ID`, `USERS.FIRST_NAME` kimi siniflər yaranır. Bu rejimdə
-tip-təhlükəli sorğular yazmaq mümkündür:
+## 20. Generated Mode ilə (Type-safe)
 
 ```java
 import static com.example.jooq.Tables.*;
@@ -801,7 +784,7 @@ JooqQuery.from(USERS, "u")
 // Və ya string adlar da işləyir (dinamik sorğular üçün)
 JooqQuery.from(USERS, "u")
     .select("id", "firstName", "status")     // → USERS.ID, USERS.FIRST_NAME, USERS.STATUS
-    .filter("firstName", FilterOperations.LIKE, searchName)
+    .filter("firstName", Op.LIKE, searchName)
     .groupBy("department")
     .orderBy("createdAt", "DESC")
     .page(0, 20)
@@ -810,7 +793,7 @@ JooqQuery.from(USERS, "u")
 
 ---
 
-## 19. Tam Nümunə — REST Endpoint
+## 21. Tam Nümunə — REST Endpoint
 
 ```java
 @RestController
@@ -830,11 +813,9 @@ public class UserController {
     ) {
         SelectTable result = JooqQuery.from(User.class, "u")
             .select("u.id", "u.firstName", "u.lastName", "u.email", "u.department")
-            .filter("u.status",     FilterOperations.EQUAl, status)     // null → atlanır
-            .filter("u.firstName",  FilterOperations.LIKE,  name)        // null → atlanır
-            .filter("u.department", FilterOperations.EQUAl, department)  // null → atlanır
-            // JOIN cədvəlinə filter — "r." alias-ı avtomatik Role EntityTable-ına həll edilir:
-            // .filter("r.roleKey", FilterOperations.IN, roles)
+            .filter("u.status",     Op.EQUAl, status)     // null → atlanır
+            .filter("u.firstName",  Op.LIKE,  name)        // null → atlanır
+            .filter("u.department", Op.EQUAl, department)  // null → atlanır
             .orderBy("u.createdAt", "DESC")
             .page(page, size)
             .execute(dsl);
@@ -857,7 +838,9 @@ public class UserController {
 
 ## Filter Növlərinin Sürətli İstinadı
 
-| `FilterOperations` | SQL qarşılığı | Nümunə dəyər |
+### Əsas filterlər
+
+| `Op` | SQL qarşılığı | Nümunə dəyər |
 |---|---|---|
 | `EQUAl` | `= value` | `"ACTIVE"` |
 | `NOT_EQUAL` | `!= value` | `"BANNED"` |
@@ -875,3 +858,25 @@ public class UserController {
 | `IS_NOT_EMPTY` | `IS NOT NULL` | `null` |
 | `REGEXP` | `REGEXP pattern` | `"^\\+994"` |
 | `NOT_REGEXP` | `NOT REGEXP pattern` | `"^\\+994"` |
+
+### ROUND filterlər (qısa)
+
+| Nümunə `Op` | SQL | Miqyas |
+|---|---|---|
+| `EQUAL_ROUND_0` | `ROUND(field,0) = val` | tam ədəd |
+| `NOT_EQUAL_ROUND_0` | `ROUND(field,0) != val` | tam ədəd |
+| `GREATER_THAN_ROUND_2` | `ROUND(field,2) > val` | 2 onluq |
+| `GREATER_THAN_OR_EQUAL_TO_ROUND_2` | `ROUND(field,2) >= val` | 2 onluq |
+| `LESS_THAN_ROUND_2` | `ROUND(field,2) < val` | 2 onluq |
+| `LESS_THAN_OR_EQUAL_TO_ROUND_2` | `ROUND(field,2) <= val` | 2 onluq |
+| `EQUAL_ROUND_4` | `ROUND(field,4) = val` | 4 onluq |
+
+Tam siyahı üçün bölmə 14-ə bax. Mövcud miqyaslar: **0, 1, 2, 3, 4**.
+
+### `selectRound()` vs `Op.ROUND_N` — hansını seçim?
+
+| Sual | Cavab |
+|---|---|
+| Yuvarlama nəticəsini **göstərməli** + filterlə? | `selectRound(field, scale, alias)` + adi `Op` |
+| Yalnız WHERE-də ROUND lazımdır, SELECT-ə gərək yox? | `Op.EQUAL_ROUND_2` (və s.) birbaşa `filter()`-ə ver |
+| Global Map filterdə ROUND lazımdır? | `FilterOperationConstants.GREATER_THAN_ROUND_2` açarı ilə |
