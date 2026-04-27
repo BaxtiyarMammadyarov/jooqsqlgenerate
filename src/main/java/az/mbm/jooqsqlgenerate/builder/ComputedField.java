@@ -4,7 +4,7 @@ import org.jooq.Condition;
 import org.jooq.Field;
 import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
-import az.mbm.jooqsqlgenerate.enums.FilterOperations;
+import az.mbm.jooqsqlgenerate.enums.Op;
 import az.mbm.jooqsqlgenerate.enums.MathOperation;
 import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 
@@ -73,7 +73,7 @@ public class ComputedField {
      * Bir neçə {@code .where()} AND ilə birləşir.
      */
     private record FilterClause(String tableAlias, String fieldName,
-                                FilterOperations op, Object value) {}
+                                Op op, Object value) {}
 
     private final String             firstTableAlias;
     private final String             firstFieldName;
@@ -149,7 +149,7 @@ public class ComputedField {
      *       ComputedField.expr("o.price").multiply("o.qty"),
      *       ComputedField.expr("o.tax")
      *   )
-     *   .where("o.status", FilterOperations.EQUAl, "ACTIVE")
+     *   .where("o.status", Op.EQUAl, "ACTIVE")
      *   .as("activeTotal")
      * }</pre>
      *
@@ -264,8 +264,8 @@ public class ComputedField {
      *   //      ELSE NULL END AS paidNet
      *   ComputedField.of("o.price")
      *       .subtract("o.discount")
-     *       .where("o.status", FilterOperations.EQUAl, "PAID")
-     *       .where("o.type",   FilterOperations.EQUAl, "SALE")
+     *       .where("o.status", Op.EQUAl, "PAID")
+     *       .where("o.type",   Op.EQUAl, "SALE")
      *       .as("paidNet")
      * }</pre>
      *
@@ -274,7 +274,7 @@ public class ComputedField {
      * @param value               filter dəyəri
      */
     public ComputedField where(String tableAliasAndField,
-                               FilterOperations op,
+                               Op op,
                                Object value) {
         String[] parts = split(tableAliasAndField);
         filterClauses.add(new FilterClause(parts[0], parts[1], op, value));
@@ -289,7 +289,9 @@ public class ComputedField {
      * <pre>{@code .as("totalCost") }</pre>
      */
     public ComputedField as(String alias) {
-        this.alias = Objects.requireNonNull(alias, "ComputedField alias null ola bilməz");
+        Objects.requireNonNull(alias, "ComputedField alias null ola bilməz");
+        int dot = alias.indexOf('.');
+        this.alias = dot >= 0 ? alias.substring(dot + 1) : alias;
         return this;
     }
 
