@@ -7,7 +7,7 @@ plugins {
 
 // ─── Layihə məlumatları ───────────────────────────────────────────────────────
 group   = "az.mbm"
-version = "1.0.2"
+version = "1.0.7"
 
 // ─── Java versiyası ───────────────────────────────────────────────────────────
 java {
@@ -65,7 +65,7 @@ publishing {
 
             groupId    = "az.mbm"
             artifactId = "jooq-sql-generate"
-            version    = "1.0.2"
+            version    = "1.0.7"
 
             pom {
                 name        = "jooq-sql-generate"
