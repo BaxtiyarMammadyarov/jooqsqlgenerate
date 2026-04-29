@@ -107,6 +107,8 @@ public class SelectQueryBuilder<T> {
     private int     pageSize   = 50;
     private boolean paginate   = false;  // yalnız page() çağrılanda aktiv olur
     private boolean countOnly  = false;  // pagination olmadan yalnız COUNT
+    private boolean skipCount  = false;  // pagination var, amma COUNT işləməsin
+    private boolean onlyCount  = false;  // yalnız COUNT işləsin, əsas data sorğusu icra edilməsin
 
     // ════════════════════════════════════════════════════════════════════
     //  Daxili record-lar
@@ -717,6 +719,25 @@ public class SelectQueryBuilder<T> {
         return this;
     }
 
+    /**
+     * Pagination aktiv olur (LIMIT/OFFSET işləyir), lakin COUNT sorğusu atlanır.
+     * rowCount = -1 qaytarılır. Excel export kimi ssenarilərdə COUNT lazım olmadıqda istifadə et.
+     */
+    public SelectQueryBuilder<T> skipCount() {
+        this.skipCount = true;
+        return this;
+    }
+
+    /**
+     * Yalnız COUNT sorğusu icra edilir, əsas data sorğusu işləmir.
+     * Sətir sayını öyrənmək lazım olduqda, data lazım olmadıqda istifadə et.
+     * rowCount = ümumi sətir sayı, result = boş siyahı.
+     */
+    public SelectQueryBuilder<T> onlyCount() {
+        this.onlyCount = true;
+        return this;
+    }
+
     // ════════════════════════════════════════════════════════════════════
     //  BUILD — Template Method Pattern
     //  Hər addım ayrı private metod — test edilə bilər
@@ -771,9 +792,16 @@ public class SelectQueryBuilder<T> {
         SelectSeekStepN<Record> ordered = afterGroupBy.orderBy(allOrderFields);
 
         // Addım 9 — COUNT (pagination və ya withCount() üçün)
+        // skipCount=true olduqda COUNT sorğusu işləmir, rowCount = -1 qaytarılır
+        // onlyCount=true olduqda yalnız COUNT işləyir, əsas sorğu icra edilmir
         int rowCount = 0;
-        if (paginate || countOnly) {
+        if (onlyCount) {
             rowCount = buildCount(dsl, mainTable, whereCondition, afterGroupBy);
+            return new SelectTable(dsl.selectZero().where(DSL.falseCondition()), rowCount);
+        } else if ((paginate || countOnly) && !skipCount) {
+            rowCount = buildCount(dsl, mainTable, whereCondition, afterGroupBy);
+        } else if (skipCount) {
+            rowCount = -1;
         }
 
         // Addım 10 — LIMIT / OFFSET
@@ -802,9 +830,18 @@ public class SelectQueryBuilder<T> {
 
         List<SelectFieldOrAsterisk> fields = new ArrayList<>();
 
+        // selectAsCols-da olan source field-lər — bunlar columns-dan çıxarılacaq
+        // eyni field həm columns, həm selectAsCols-da olarsa SELECT-də dublikat olmasın
+        Set<String> selectAsSourceKeys = new HashSet<>();
+        for (SelectAsCol sa : selectAsCols) {
+            selectAsSourceKeys.add(sa.aliasAndField());
+        }
+
         // Sadə sütunlar — user camelCase yazmışsa AS "camelCase" əlavə olunur
         // Məs: "t1.productName" → "t1"."product_name" AS "productName"
+        // selectAsCols-da artıq olan field-lər buradan atılır (dublikat önlənir)
         for (String col : columns) {
+            if (selectAsSourceKeys.contains(col)) continue;
             EntityTable<?> t         = tableMap.getOrDefault(aliasPart(col), mainTable);
             String         fieldName = fieldPart(col);
             Field<?>       f         = t.getField(fieldName);
@@ -822,16 +859,21 @@ public class SelectQueryBuilder<T> {
             fields.add(t.getField(fieldPart(sa.aliasAndField())).as(sa.outputAlias()));
         }
 
-        // GROUP BY sahələri — yalnız heç bir explicit SELECT sütunu verilmədikdə
-        // (addColumns çağrılmayıbsa) GROUP BY sahələri SELECT-ə avtomatik əlavə olunur
-        if (columns.isEmpty() && selectAsCols.isEmpty() && rawSelectFields.isEmpty()
-                && aggregator != null) {
+        // GROUP BY sahələri — SELECT-də olmayan GROUP BY field-ləri avtomatik əlavə olunur
+        // columns və selectAsCols-da artıq olan field-lər atlanır (dublikat önlənir)
+        if (aggregator != null && !aggregator.getGroupByFields().isEmpty()) {
+            Set<String> alreadyInSelect = new HashSet<>();
+            for (String col : columns)       alreadyInSelect.add(col);
+            for (SelectAsCol sa : selectAsCols) alreadyInSelect.add(sa.aliasAndField());
+
             for (String gf : aggregator.getGroupByFields()) {
+                if (alreadyInSelect.contains(gf)) continue;
                 EntityTable<?> t  = tableMap.getOrDefault(aliasPart(gf), mainTable);
                 String fieldName  = fieldPart(gf);
                 Field<?>       f  = t.getField(fieldName);
                 if (!f.getName().equals(fieldName)) fields.add(f.as(fieldName));
                 else                                fields.add(f);
+                alreadyInSelect.add(gf);
             }
         }
 
@@ -1009,7 +1051,7 @@ public class SelectQueryBuilder<T> {
         for (String gf : aggregator.getGroupByFields()) {
             EntityTable<?> t = tableMap.getOrDefault(aliasPart(gf), mainTable);
             Field<?> f = t.getField(fieldPart(gf));
-            groupFieldMap.put(f.getName(), f);
+            groupFieldMap.put(aliasPart(gf) + "." + f.getName(), f);
         }
 
         // ── AUTO GROUP BY: SELECT-dəki qeyri-aggregate sütunlar ─────────
@@ -1021,13 +1063,22 @@ public class SelectQueryBuilder<T> {
         for (AggregateBuilder.AggField af : aggregator.getAggFields())
             aggAliases.add(af.alias());
 
-        // Sadə sütunlar — GROUP BY-a əlavə et
+        // Sadə sütunlar — GROUP BY-a əlavə et (sonuncu qalsın — put)
         for (String col : columns) {
             String fieldName = fieldPart(col);
             if (!aggAliases.contains(fieldName)) {
                 EntityTable<?> t = tableMap.getOrDefault(aliasPart(col), mainTable);
                 Field<?> f = t.getField(fieldName);
-                groupFieldMap.putIfAbsent(f.getName(), f);
+                groupFieldMap.put(aliasPart(col) + "." + f.getName(), f);
+            }
+        }
+
+        // selectAsCols sütunları da GROUP BY-a əlavə et — sonuncu qalsın (put)
+        for (SelectAsCol sa : selectAsCols) {
+            if (!aggAliases.contains(sa.outputAlias())) {
+                EntityTable<?> t = tableMap.getOrDefault(aliasPart(sa.aliasAndField()), mainTable);
+                Field<?> f = t.getField(fieldPart(sa.aliasAndField()));
+                groupFieldMap.put(aliasPart(sa.aliasAndField()) + "." + f.getName(), f);
             }
         }
 
@@ -1037,8 +1088,8 @@ public class SelectQueryBuilder<T> {
             EntityTable<?> t2 = tableMap.getOrDefault(cc.tableAlias2(), mainTable);
             Field<?> f1 = t1.getField(cc.field1());
             Field<?> f2 = t2.getField(cc.field2());
-            groupFieldMap.putIfAbsent(f1.getName(), f1);
-            groupFieldMap.putIfAbsent(f2.getName(), f2);
+            groupFieldMap.putIfAbsent(cc.tableAlias1() + "." + f1.getName(), f1);
+            groupFieldMap.putIfAbsent(cc.tableAlias2() + "." + f2.getName(), f2);
         }
 
         // Çox sahəli computed sütunlar (ComputedField) — alias ilə GROUP BY
