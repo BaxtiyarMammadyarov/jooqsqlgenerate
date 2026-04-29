@@ -934,6 +934,17 @@ public class JooqManager {
         return this;
     }
 
+    public JooqManager skipCount() {
+        q().skipCount();
+        return this;
+    }
+
+    /** Yalnız COUNT sorğusu icra edilir, əsas data sorğusu işləmir. {@link #getLastRowCount()} ilə sayı al. */
+    public JooqManager onlyCount() {
+        q().onlyCount();
+        return this;
+    }
+
     // ════════════════════════════════════════════════════════════════════
     //  EXECUTE
     // ════════════════════════════════════════════════════════════════════
