@@ -1,882 +1,866 @@
-# jooqsqlgenerate — İstifadə Qaydası
+# jooq-sql-generate — İstifadəçi Təlimatı
 
-> Bu sənəd kitabxananı öz layihənə əlavə edib ilk sorğunu necə yazacağını izah edir.
-
----
-
-## 1. Quraşdırma
-
-### Maven (~/.m2) üzərindən
-
-Kitabxananı lokal Maven repo-ya yayımla:
-
-```bash
-./gradlew publishToMavenLocal
-```
-
-Sonra öz layihənin `build.gradle.kts`-inə əlavə et:
-
-```kotlin
-repositories {
-    mavenLocal()
-    mavenCentral()
-}
-
-dependencies {
-    implementation("az.mbm:jooq-sql-generate:1.0.0")
-}
-```
-
----
-
-## 2. Ön Şərtlər
-
-Öz layihəndə bunlar olmalıdır:
-
-```kotlin
-// build.gradle.kts
-dependencies {
-    implementation("org.springframework.boot:spring-boot-starter-jooq")
-    implementation("org.jooq:jooq")
-    implementation("jakarta.persistence:jakarta.persistence-api:3.1.0")
-}
-```
-
-Spring Boot `DSLContext`-i avtomatik yaradır — əlavə konfiqurasiya lazım deyil.
-
----
-
-## 3. jOOQ Kod Generasiyası (Generated Mode üçün)
-
-Generated mode istifadə edəcəksənsə verilənlər bazası sxemindən avtomatik sinif yaratmaq
-lazımdır. Bunun üçün `generateJooq` Gradle task-ı konfiqurasiya edilir.
-
-> **Qeyd:** Entity mode işlədirsənsə bu bölməni keçə bilərsən.
-
-### 3.1. `build.gradle`-ə task əlavə et
-
-```groovy
-// build.gradle (Groovy DSL)
-import org.jooq.codegen.GenerationTool
-import org.jooq.meta.jaxb.*
-
-task generateJooq {
-    doLast {
-        // Verilənlər bazası məlumatları mühit dəyişənlərindən oxunur
-        String dbUrl       = System.getenv("DB_URL")       // jdbc:postgresql://host:5432/mydb
-        String dbDriver    = System.getenv("DB_DRIVER")    // org.postgresql.Driver
-        String dbUsername  = System.getenv("DB_USERNAME")
-        String dbPassword  = System.getenv("DB_PASSWORD")
-
-        Configuration configuration = GenerationTool.load(
-            new File('src/main/resources/jooq-config.xml')
-        )
-        configuration.withJdbc(
-            new Jdbc()
-                .withProperties(new Property().withKey("dialect").withValue("POSTGRES"))
-                .withDriver(dbDriver)
-                .withUrl(dbUrl)
-                .withUser(dbUsername)
-                .withPassword(dbPassword)
-        )
-        GenerationTool.generate(configuration)
-    }
-}
-```
-
-### 3.2. `jooq-config.xml` yarat
-
-`src/main/resources/jooq-config.xml` faylını aşağıdakı kimi konfiqurasiya et:
+## Maven / Gradle asılılığı
 
 ```xml
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<configuration>
-    <generator>
-        <database>
-            <!-- PostgreSQL üçün -->
-            <name>org.jooq.meta.postgres.PostgresDatabase</name>
-
-            <!-- Bir və ya bir neçə sxema -->
-            <schemata>
-                <schema>
-                    <inputSchema>public</inputSchema>
-                </schema>
-                <schema>
-                    <inputSchema>backlog</inputSchema>   <!-- əlavə sxema varsa -->
-                </schema>
-            </schemata>
-        </database>
-
-        <generate>
-            <pojos>true</pojos>     <!-- POJO sinifləri (DTO kimi istifadə oluna bilər) -->
-            <daos>true</daos>       <!-- DAO sinifləri -->
-            <records>true</records> <!-- Record sinifləri (UsersRecord, OrdersRecord...) -->
-        </generate>
-
-        <target>
-            <!-- Yaradılan siniflərin yerləşəcəyi paket -->
-            <packageName>com.example.myapp.domain.jooq</packageName>
-            <!-- Yaradılan siniflərin yazılacağı qovluq -->
-            <directory>src/main/java</directory>
-        </target>
-    </generator>
-</configuration>
+<!-- Maven -->
+<dependency>
+    <groupId>az.mbm</groupId>
+    <artifactId>jooq-sql-generate</artifactId>
+    <version>1.0.3</version>
+</dependency>
 ```
 
-### 3.3. Kodu yenilə
-
-Verilənlər bazasına qoşulub sinifləri yarat:
-
-```bash
-export DB_URL="jdbc:postgresql://localhost:5432/mydb"
-export DB_DRIVER="org.postgresql.Driver"
-export DB_USERNAME="postgres"
-export DB_PASSWORD="secret"
-
-./gradlew generateJooq
+```kotlin
+// Gradle
+implementation("az.mbm:jooq-sql-generate:1.0.3")
 ```
-
-### 3.4. Yaranan struktur
-
-```
-src/main/java/com/example/myapp/domain/jooq/
-│
-├── tables/
-│   ├── Users.java          ← Tables.USERS
-│   ├── Orders.java         ← Tables.ORDERS
-│   └── ...
-│
-├── tables/records/
-│   ├── UsersRecord.java    ← INSERT/UPDATE üçün
-│   └── ...
-│
-├── tables/pojos/
-│   ├── Users.java          ← DTO kimi istifadə oluna bilər
-│   └── ...
-│
-└── Tables.java             ← import static Tables.* üçün
-```
-
-### 3.5. Nə vaxt yenidən işlətmək lazımdır?
-
-`generateJooq` task-ını aşağıdakı hallarda yenidən işlət: yeni cədvəl əlavə ediləndə,
-mövcud cədvələ yeni sütun əlavə ediləndə, sütun adı dəyişdirilndə, sütun tipi dəyişdirilndə.
 
 ---
 
-## 4. İki İstifadə Üsulu
+## 1. Giriş — JooqQuery
 
-Kitabxananın iki fərqli giriş nöqtəsi var. Hansını seçəcəyin layihənin quruluşundan asılıdır.
-
-### Üsul A — `JooqQuery` (Tövsiyə olunan)
-
-Spring bean deyil, hər sorğu üçün yeni nümunə yaradılır. Servisə yalnız `DSLContext` inject edilir.
+`JooqQuery` hər sorğu üçün yeni nümunə yaradılan, Spring-dən asılı olmayan sorğu builderidir.
+Servisdə yalnız `DSLContext` inject edilir — singleton, thread-safe.
 
 ```java
 @Service
 @RequiredArgsConstructor
-public class UserService {
+public class OrderService {
 
     private final DSLContext dsl;
 
-    public SelectTable searchUsers(String status, String name) {
-        return JooqQuery.from(User.class, "u")
-            .select("u.id", "u.firstName", "u.email")
-            .filter("status", Op.EQUAl, status)
-            .filter("firstName", Op.LIKE, name)
-            .orderBy("u.createdAt", "DESC")
+    public SelectTable getOrders(String status) {
+        return JooqQuery.from(Order.class, "o")
+            .select("o.id", "o.orderNo", "o.status", "o.totalPrice")
+            .filter("o.status", Op.EQUAl, status)
+            .orderBy("o.createdAt", "DESC")
             .page(0, 20)
             .execute(dsl);
     }
 }
 ```
 
-### Üsul B — `JooqManager` (Köhnə layihələr üçün)
+### 1.1 Giriş nöqtələri
 
-Spring `@Prototype` bean-dir. Singleton servisə inject etmə — hər zaman `ApplicationContext`-dən götür.
-
-```java
-@Service
-@RequiredArgsConstructor
-public class UserService {
-
-    private final DSLContext            dsl;
-    private final ApplicationContext    ctx;
-
-    public SelectTable searchUsers(String status, String name) {
-        JooqManager jooq = ctx.getBean(JooqManager.class); // hər çağrışda yeni nümunə
-        jooq.setMainTable(User.class, "u");
-        jooq.addColumns("u.id", "u.firstName", "u.email");
-        jooq.addFilter("status", Op.EQUAl, status);
-        jooq.addFilter("firstName", Op.LIKE, name);
-        jooq.addOrderByDesc("u.createdAt");
-        jooq.setPage(0, 20);
-        return jooq.execute();
-    }
-}
-```
-
----
-
-## 5. Entity Sinifini Hazırla
-
-Entity mode istifadə edirsənsə JPA annotasiyaları lazımdır:
-
-```java
-@Table(name = "users", schema = "public")
-public class User {
-
-    @Column(name = "user_id")
-    private Long id;
-
-    @Column(name = "first_name")
-    private String firstName;
-
-    @Column(name = "last_name")
-    private String lastName;
-
-    private String email;    // annotasiya yoxsa sütun adı = "email"
-
-    private String status;
-
-    @Column(name = "created_at")
-    private LocalDateTime createdAt;
-}
-```
-
-> **Qeyd:** `@Entity` annotasiyası məcburi deyil — yalnız `@Table` və `@Column` oxunur.
-
----
-
-## 6. Nəticəni Almaq
-
-`execute()` `SelectTable` qaytarır. Onu `SelectFetchJooq` ilə istənilən formata çevir:
-
-```java
-SelectTable result = JooqQuery.from(User.class, "u")
-    .select("u.id", "u.firstName", "u.email")
-    .filter("status", Op.EQUAl, "ACTIVE")
-    .page(0, 20)
-    .execute(dsl);
-
-// DTO / Entity siyahısı kimi
-List<UserDto> users = new SelectFetchJooq<UserDto>()
-    .fetchCast(result, UserDto.class)
-    .getList();
-
-// Ümumi sətir sayı (pagination üçün)
-int totalCount = result.getRowCount();
-
-// Map siyahısı kimi (DTO olmadan)
-List<Map<String, Object>> rows = new SelectFetchJooq<>()
-    .fetchMaps(result)
-    .getList();
-```
-
-Və ya daha qısa şəkildə birbaşa `JooqQuery`-dən:
-
-```java
-List<UserDto> users = JooqQuery.from(User.class, "u")
-    .filter("status", Op.EQUAl, "ACTIVE")
-    .fetchInto(dsl, UserDto.class);
-
-List<Map<String, Object>> rows = JooqQuery.from(User.class, "u")
-    .filter("status", Op.EQUAl, "ACTIVE")
-    .fetchMaps(dsl);
-```
-
----
-
-## 7. Filter Növləri
-
-```java
-import az.mbm.jooqsqlgenerate.enums.Op;
-
-JooqQuery.from(User.class, "u")
-
-    // Bərabərlik
-    .filter("status",    Op.EQUAl,                 "ACTIVE")
-    .filter("status",    Op.NOT_EQUAL,              "BANNED")
-
-    // Müqayisə
-    .filter("age",       Op.GREATER_THAN,           18)
-    .filter("age",       Op.GREATER_THAN_OR_EQUAL_TO, 18)
-    .filter("salary",    Op.LESS_THAN,              5000)
-    .filter("salary",    Op.LESS_THAN_OR_EQUAL_TO,  5000)
-
-    // Mətn axtarışı
-    .filter("firstName", Op.LIKE,       "Ali")    // %Ali%
-    .filter("firstName", Op.START_WITH, "Ali")    // Ali%
-    .filter("firstName", Op.END_WITH,   "li")     // %li
-
-    // Siyahı
-    .filter("roleId",    Op.IN,      List.of(1L, 2L, 3L))
-    .filter("status",    Op.NOT_IN,  List.of("DELETED", "BANNED"))
-
-    // Aralıq
-    .filter("createdAt", Op.BETWEEN,
-            new Object[]{LocalDate.of(2024,1,1), LocalDate.of(2024,12,31)})
-
-    // Boş yoxlaması
-    .filter("deletedAt", Op.IS_EMPTY,     null)   // IS NULL
-    .filter("deletedAt", Op.IS_NOT_EMPTY, null)   // IS NOT NULL
-
-    // Regex
-    .filter("phone",     Op.REGEXP,     "^\\+994")
-    .filter("phone",     Op.NOT_REGEXP, "^\\+994")
-
-    .execute(dsl);
-```
-
-> **Null qaydası:** `value` null və ya boş sətirdirsə həmin filter **avtomatik atlanır** —
-> əlavə `if` yazmağa ehtiyac yoxdur.
-
-### Alias prefix ilə filter
-
-`filter()` metodu sahə adının əvvəlindəki `alias.` prefiksini **avtomatik həll edir**:
-
-```java
-JooqQuery.from(WarehouseFlow.class, "t")
-    .leftJoin(Product.class, "t1", "fkProductId", "id")
-
-    // Main cədvəl — alias ilə və ya onsuz, eyni nəticə:
-    .filter("status",        Op.EQUAl, "A")
-    .filter("t.status",      Op.EQUAl, "A")   // eynidir
-
-    // JOIN cədvəli — "t1" alias-ı Product EntityTable-ına yönləndirilir:
-    .filter("t1.fkProductCategoryId", Op.IN,   dto.getFkProductCategoryId())
-    .filter("t1.productName",         Op.LIKE,  dto.getProductName())
-
-    .execute(dsl);
-```
-
-Bu qaydalar **HAVING** üçün də eynidir — computed sütun filterlərini alias prefix ilə
-yaza bilərsən, prefix stripped olunub yalnız alias adı HAVING yoxlamasında istifadə edilir:
-
-```java
-JooqQuery.from(Order.class, "o")
-    .computedColumn(ComputedField.of("o.price").multiply("o.quantity").as("totalAmount"))
-
-    // Hər ikisi HAVING-ə düşür:
-    .filter("totalAmount",   Op.GREATER_THAN, 1000)
-    .filter("o.totalAmount", Op.GREATER_THAN, 1000)  // eynidir
-
-    .execute(dsl);
-```
-
----
-
-## 8. JOIN
-
+**Entity mode** — JPA `@Entity` sinfi ilə (reflection + cache):
 ```java
 JooqQuery.from(User.class, "u")
-    .select("u.id", "u.firstName", "o.amount", "o.createdAt")
-
-    // LEFT JOIN
-    .leftJoin(Order.class, "o", "u.id", "o.userId")
-
-    // INNER JOIN
-    .innerJoin(Role.class, "r", "u.roleId", "r.id")
-
-    // Hər cədvəlin filterlərini birbaşa alias ilə yaz — avtomatik həll olunur:
-    .filter("u.status",  Op.EQUAl,       "ACTIVE")
-    .filter("o.amount",  Op.GREATER_THAN, 100)
-    .filter("r.roleKey", Op.IN,           List.of("ADMIN", "MANAGER"))
-    .execute(dsl);
 ```
 
----
-
-## 9. GROUP BY və Aqreqat Funksiyalar
-
+**Generated mode** — jOOQ generated `Table<?>` ilə (tip-təhlükəli, compile xətası):
 ```java
-JooqQuery.from(User.class, "u")
-    .leftJoin(Order.class, "o", "u.id", "o.userId")
-    .groupBy("u.department", "u.status")
-    .agg(GroupFunction.SUM,   "o.amount", "totalAmount", 2,   null, null, "DESC")
-    .agg(GroupFunction.COUNT, "o.id",     "orderCount",  0,   null, null, null)
-    .agg(GroupFunction.AVG,   "o.amount", "avgAmount",   2,   null, null, null)
-    // HAVING COUNT(o.id) > 5:
-    .agg(GroupFunction.COUNT, "o.id", "orderCount", 0,
-         Op.GREATER_THAN, 5, null)
-    .execute(dsl);
+import static com.example.jooq.Tables.*;
+
+JooqQuery.from(USERS, "u")
 ```
 
----
-
-## 10. Dinamik Sıralama
-
+**Derived table mode** — başqa bir `SelectTable` nəticəsindən:
 ```java
-// Tək sahə
-JooqQuery.from(User.class, "u")
-    .orderBy("u.createdAt", "DESC")
-    .execute(dsl);
-
-// Çox sahə — Map ilə
-Map<String, String> sorts = new LinkedHashMap<>();
-sorts.put("u.lastName",  "ASC");
-sorts.put("u.firstName", "ASC");
-sorts.put("u.createdAt", "DESC");
-
-JooqQuery.from(User.class, "u")
-    .orderBy(sorts)
-    .execute(dsl);
-```
-
----
-
-## 11. Pagination
-
-```java
-// Səhifə 0, hər səhifədə 20 sətir
-JooqQuery.from(User.class, "u")
-    .page(0, 20)
-    .execute(dsl);
-
-// Bütün nəticəni qaytar (pagination olmadan)
-JooqQuery.from(User.class, "u")
+SelectTable sub = JooqQuery.from(Order.class, "o")
+    .select("o.id", "o.userId", "o.totalPrice")
+    .filter("o.status", Op.EQUAl, "ACTIVE")
     .noPagination()
     .execute(dsl);
 
-// Ümumi sətir sayını al
-SelectTable result = JooqQuery.from(User.class, "u").page(0, 20).execute(dsl);
-int total = result.getRowCount();   // COUNT(*) nəticəsi
+JooqQuery.from(sub, "s")
+    .select("s.id", "s.totalPrice")
+    .filter("s.totalPrice", Op.GREATER_THAN, 1000)
+    .execute(dsl);
+// → SELECT s.id, s.total_price
+//   FROM (SELECT o.id, o.user_id, o.total_price FROM orders o WHERE ...) s
+//   WHERE s.total_price > 1000
 ```
 
 ---
 
-## 12. GlobalFilter — Xarici Filterlər
+## 2. SELECT
 
-REST body-dən və ya konfiqurasiyadan `Map<String, Map<String, String>>` formatında gələn
-filterlər üçün:
+### 2.1 Sadə sütunlar
 
 ```java
-// Fluent builder ilə qur
-GlobalFilter filter = GlobalFilter.of()
-    .equal("status", "ACTIVE")
-    .like("firstName", searchName)
-    .greaterThan("salary", "3000")
-    .between("createdAt", "2024-01-01", "2024-12-31")
-    .in("roleId", "1", "2", "3")
-    .isNull("deletedAt");
-
 JooqQuery.from(User.class, "u")
-    .globalFilter(filter)
+    .select("u.id", "u.firstName", "u.email", "u.status")
     .execute(dsl);
+// → SELECT u."id", u."first_name", u."email", u."status" FROM users u
+```
 
-// Xam Map ilə (başqa sistemdən gəlibsə)
-Map<String, Map<String, String>> rawFilter = externalService.getFilters();
+String siyahı ilə:
+```java
+List<String> cols = List.of("u.id", "u.firstName", "u.email");
+JooqQuery.from(User.class, "u").select(cols).execute(dsl);
+```
 
-JooqQuery.from(User.class, "u")
-    .globalFilter(rawFilter)
+### 2.2 selectAs — özəl alias
+
+Eyni sütun adına sahib join cədvəllərini fərqləndirmək üçün:
+```java
+JooqQuery.from(Task.class, "t")
+    .selectAs("propertyValue.propertyValue",     "propertyValue")
+    .selectAs("propertyValueType.propertyValue", "propertyValueType")
+    .selectAs("fkCashItemTypeKey.propertyValue", "cashItemTypeValue")
     .execute(dsl);
 ```
 
-Bazis filteri bütün sorğulara tətbiq etmək üçün `merge()` istifadə et:
+> **Qeyd:** Eyni source field həm `select(...)`, həm `selectAs(...)` ilə əlavə edildikdə
+> SELECT-də dublikat sütun yaranmır — `selectAs` versiyası (aliasla olan) qalır, `select`-dəki atlanır.
 
-```java
-GlobalFilter base = GlobalFilter.of().equal("tenantId", currentTenantId);
-GlobalFilter user = GlobalFilter.of().like("name", searchName);
-
-JooqQuery.from(User.class, "u")
-    .globalFilter(base.merge(user))
-    .execute(dsl);
-```
-
----
-
-## 13. ROUND ilə Filter
-
-İki fərqli yol var — hansını seçəcəyin nəticəni SELECT-də göstərməyə ehtiyacın olub-olmadığından asılıdır.
-
-### 13.1. `selectRound()` — SELECT + WHERE birlikdə
-
-Yuvarlama nəticəsini həm SELECT-də göstərmək, həm də filterlədikdə istifadə et:
+### 2.3 DISTINCT
 
 ```java
 JooqQuery.from(Order.class, "o")
-    .select("o.id", "o.status")
-    .selectRound("o.unitCost", 2, "cost")     // SELECT ROUND(o.unit_cost, 2) AS cost
-    .selectRound("o.quantity", 0, "qty")      // SELECT ROUND(o.quantity, 0)  AS qty
-    .filter("cost", Op.GREATER_THAN, 9.99)    // WHERE ROUND(o.unit_cost, 2) > 9.99
-    .filter("qty",  Op.EQUAl, 10)            // WHERE ROUND(o.quantity, 0) = 10
-    .page(0, 20)
+    .select("o.customerId", "o.status")
+    .distinct()
     .execute(dsl);
+// → SELECT DISTINCT o."customer_id", o."status" FROM orders o
 ```
 
-Yaranan SQL:
-```sql
-SELECT o.id, o.status,
-       ROUND(o.unit_cost, 2) AS cost,
-       ROUND(o.quantity, 0)  AS qty
-FROM orders o
-WHERE ROUND(o.unit_cost, 2) > 9.99
-  AND ROUND(o.quantity, 0) = 10
-LIMIT 20 OFFSET 0
-```
+### 2.4 computedColumn — riyazi ifadə sütunu
 
-`selectRound()` ilə birlikdə **adi** `Op` dəyərləri işlənir:
-
+İki sahə arasında `+`, `-`, `*`, `/`:
 ```java
-.filter("cost", Op.EQUAl,                 9.99)
-.filter("cost", Op.NOT_EQUAL,             9.99)
-.filter("cost", Op.GREATER_THAN,          9.99)
-.filter("cost", Op.GREATER_THAN_OR_EQUAL_TO, 9.99)
-.filter("cost", Op.LESS_THAN,             9.99)
-.filter("cost", Op.LESS_THAN_OR_EQUAL_TO, 9.99)
-.filter("cost", Op.BETWEEN, new Object[]{5.00, 15.00})
+JooqQuery.from(Order.class, "o")
+    .select("o.id", "o.price", "o.qty")
+    .computedColumn("lineTotal", "o", MathOperation.MULTIPLY, "price", "o", "qty")
+    .execute(dsl);
+// → SELECT ..., (o."price" * o."qty") AS "lineTotal"
 ```
 
-> **Xəbərdarlıq — ikiqat ROUND:** `selectRound()` ilə seçilmiş alias-a `Op.EQUAL_ROUND_2`
-> kimi ROUND Op tətbiq etmə — bu `ROUND(ROUND(field,2), 2)` yaradır. `selectRound` ilə
-> adi `Op.EQUAl`, `Op.GREATER_THAN` kimi op-lar işlət.
-
-### 13.2. `Op.ROUND_N` — Yalnız WHERE-də ROUND
-
-SELECT-ə ROUND sütunu əlavə etmədən birbaşa WHERE-də ROUND tətbiq etmək üçün:
-
+Mürəkkəb çox sahəli ifadə (`ComputedField`):
 ```java
-JooqQuery.from(Product.class, "p")
-    .select("p.id", "p.name", "p.price")   // orijinal sütun göstərilir
-    .filter("price", Op.GREATER_THAN_ROUND_2, "9.50")  // WHERE ROUND(p.price, 2) > 9.50
-    .filter("score", Op.EQUAL_ROUND_0,        5)        // WHERE ROUND(p.score, 0) = 5
-    .execute(dsl);
-```
-
-Yaranan SQL:
-```sql
-SELECT p.id, p.name, p.price
-FROM products p
-WHERE ROUND(p.price, 2) > 9.50
-  AND ROUND(p.score, 0) = 5
-```
-
-### 13.3. Global Filter ilə ROUND Op
-
-`Map<String, Map<String, String>>` formatında gələn global filterdə ROUND Op sabitlərini
-`FilterOperationConstants`-dan al:
-
-```java
-import static az.mbm.jooqsqlgenerate.enums.FilterOperationConstants.*;
-
-Map<String, Map<String, String>> globalFilter = new LinkedHashMap<>();
-globalFilter.put(GREATER_THAN_ROUND_2, Map.of("price",    "9.50"));
-globalFilter.put(EQUAL_ROUND_0,        Map.of("score",    "5"));
-globalFilter.put(LESS_THAN_ROUND_1,    Map.of("discount", "0.5"));
-
-JooqQuery.from(Product.class, "p")
-    .globalFilter(globalFilter)
-    .execute(dsl);
-```
-
----
-
-## 14. ROUND Filter Növlərinin Tam Siyahısı
-
-Cəmi **30 ROUND Op** mövcuddur (6 əməliyyat × 5 miqyas):
-
-| `Op` | `FilterOperationConstants` | SQL | Miqyas |
-|---|---|---|---|
-| `EQUAL_ROUND_0` | `EQUAL_ROUND_0` | `ROUND(field,0) = val` | tam ədəd |
-| `NOT_EQUAL_ROUND_0` | `NOT_EQUAL_ROUND_0` | `ROUND(field,0) != val` | tam ədəd |
-| `GREATER_THAN_ROUND_0` | `GREATER_THAN_ROUND_0` | `ROUND(field,0) > val` | tam ədəd |
-| `GREATER_THAN_OR_EQUAL_TO_ROUND_0` | `GREATER_THAN_OR_EQUAL_TO_ROUND_0` | `ROUND(field,0) >= val` | tam ədəd |
-| `LESS_THAN_ROUND_0` | `LESS_THAN_ROUND_0` | `ROUND(field,0) < val` | tam ədəd |
-| `LESS_THAN_OR_EQUAL_TO_ROUND_0` | `LESS_THAN_OR_EQUAL_TO_ROUND_0` | `ROUND(field,0) <= val` | tam ədəd |
-| `EQUAL_ROUND_1` | `EQUAL_ROUND_1` | `ROUND(field,1) = val` | 1 onluq |
-| `NOT_EQUAL_ROUND_1` | `NOT_EQUAL_ROUND_1` | `ROUND(field,1) != val` | 1 onluq |
-| `GREATER_THAN_ROUND_1` | `GREATER_THAN_ROUND_1` | `ROUND(field,1) > val` | 1 onluq |
-| `GREATER_THAN_OR_EQUAL_TO_ROUND_1` | `GREATER_THAN_OR_EQUAL_TO_ROUND_1` | `ROUND(field,1) >= val` | 1 onluq |
-| `LESS_THAN_ROUND_1` | `LESS_THAN_ROUND_1` | `ROUND(field,1) < val` | 1 onluq |
-| `LESS_THAN_OR_EQUAL_TO_ROUND_1` | `LESS_THAN_OR_EQUAL_TO_ROUND_1` | `ROUND(field,1) <= val` | 1 onluq |
-| `EQUAL_ROUND_2` | `EQUAL_ROUND_2` | `ROUND(field,2) = val` | 2 onluq (qiymət) |
-| `NOT_EQUAL_ROUND_2` | `NOT_EQUAL_ROUND_2` | `ROUND(field,2) != val` | 2 onluq (qiymət) |
-| `GREATER_THAN_ROUND_2` | `GREATER_THAN_ROUND_2` | `ROUND(field,2) > val` | 2 onluq (qiymət) |
-| `GREATER_THAN_OR_EQUAL_TO_ROUND_2` | `GREATER_THAN_OR_EQUAL_TO_ROUND_2` | `ROUND(field,2) >= val` | 2 onluq (qiymət) |
-| `LESS_THAN_ROUND_2` | `LESS_THAN_ROUND_2` | `ROUND(field,2) < val` | 2 onluq (qiymət) |
-| `LESS_THAN_OR_EQUAL_TO_ROUND_2` | `LESS_THAN_OR_EQUAL_TO_ROUND_2` | `ROUND(field,2) <= val` | 2 onluq (qiymət) |
-| `EQUAL_ROUND_3` | `EQUAL_ROUND_3` | `ROUND(field,3) = val` | 3 onluq |
-| `NOT_EQUAL_ROUND_3` | `NOT_EQUAL_ROUND_3` | `ROUND(field,3) != val` | 3 onluq |
-| `GREATER_THAN_ROUND_3` | `GREATER_THAN_ROUND_3` | `ROUND(field,3) > val` | 3 onluq |
-| `GREATER_THAN_OR_EQUAL_TO_ROUND_3` | `GREATER_THAN_OR_EQUAL_TO_ROUND_3` | `ROUND(field,3) >= val` | 3 onluq |
-| `LESS_THAN_ROUND_3` | `LESS_THAN_ROUND_3` | `ROUND(field,3) < val` | 3 onluq |
-| `LESS_THAN_OR_EQUAL_TO_ROUND_3` | `LESS_THAN_OR_EQUAL_TO_ROUND_3` | `ROUND(field,3) <= val` | 3 onluq |
-| `EQUAL_ROUND_4` | `EQUAL_ROUND_4` | `ROUND(field,4) = val` | 4 onluq |
-| `NOT_EQUAL_ROUND_4` | `NOT_EQUAL_ROUND_4` | `ROUND(field,4) != val` | 4 onluq |
-| `GREATER_THAN_ROUND_4` | `GREATER_THAN_ROUND_4` | `ROUND(field,4) > val` | 4 onluq |
-| `GREATER_THAN_OR_EQUAL_TO_ROUND_4` | `GREATER_THAN_OR_EQUAL_TO_ROUND_4` | `ROUND(field,4) >= val` | 4 onluq |
-| `LESS_THAN_ROUND_4` | `LESS_THAN_ROUND_4` | `ROUND(field,4) < val` | 4 onluq |
-| `LESS_THAN_OR_EQUAL_TO_ROUND_4` | `LESS_THAN_OR_EQUAL_TO_ROUND_4` | `ROUND(field,4) <= val` | 4 onluq |
-
----
-
-## 15. EXISTS Subquery
-
-```java
-// WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id AND o.status = 'PAID')
-JooqQuery.from(User.class, "u")
-    .exists(
-        ExistsSpec.exists(Order.class)
-            .joinField("userId", "u", "id")
-            .filter("status", Op.EQUAl, "PAID")
-    )
-    .execute(dsl);
-
-// NOT EXISTS
-JooqQuery.from(User.class, "u")
-    .exists(
-        ExistsSpec.notExists(Order.class)
-            .joinField("userId", "u", "id")
-    )
-    .execute(dsl);
-```
-
----
-
-## 16. IN Subquery
-
-```java
-// WHERE u.id IN (SELECT o.userId FROM orders o WHERE o.status = 'PAID')
-JooqQuery.from(User.class, "u")
-    .inSubQuery("u.id",
-        SubQueryIn.from(Order.class, "o")
-            .select("o.userId")
-            .filter("status", Op.EQUAl, "PAID")
-    )
-    .execute(dsl);
-
-// WHERE (u.firstName, u.lastName) IN (SELECT bl.firstName, bl.lastName FROM blacklist)
-JooqQuery.from(User.class, "u")
-    .inSubQuery(
-        new String[]{"u.firstName", "u.lastName"},
-        SubQueryIn.from(Blacklist.class, "bl")
-            .select("bl.firstName", "bl.lastName")
-    )
-    .execute(dsl);
-```
-
----
-
-## 17. CASE WHEN
-
-```java
-JooqQuery.from(User.class, "u")
-    .select("u.id", "u.firstName")
-    .caseWhen(
-        CaseBuilder.when("u.status", Op.EQUAl, "ACTIVE")
-            .then("Aktiv")
-            .when("u.status", Op.EQUAl, "BANNED")
-            .then("Qadağalı")
-            .otherwise("Bilinməyən")
-            .as("statusLabel")
-    )
-    .execute(dsl);
-```
-
----
-
-## 18. Hesablama Sütunları
-
-```java
-// (price * quantity) - discount AS netAmount
 JooqQuery.from(Order.class, "o")
     .computedColumn(
         ComputedField.of("o.price")
-            .multiply("o.quantity")
+            .multiply("o.qty")
             .subtract("o.discount")
             .as("netAmount")
     )
     .execute(dsl);
+// → SELECT ((o."price" * o."qty") - o."discount") AS "netAmount"
 ```
 
-### 18.1. Bir Neçə Hissəni Toplama — `sumOf()`
+Filter ilə birlikdə (HAVING-ə çevrilir):
+```java
+.computedColumn(
+    ComputedField.of("o.price").multiply("o.qty").as("lineTotal"),
+    Op.GREATER_THAN, 500
+)
+// → HAVING ((price * qty)) > 500
+```
+
+### 2.5 COALESCE
 
 ```java
-// (price * qty) + tax + (shipping - discount) AS grandTotal
-JooqQuery.from(Order.class, "o")
-    .computedColumn(
-        ComputedField.sumOf(
-            ComputedField.expr("o.price").multiply("o.qty"),
-            ComputedField.expr("o.tax"),
-            ComputedField.expr("o.shipping").subtract("o.discount")
-        ).as("grandTotal")
-    )
+JooqQuery.from(User.class, "u")
+    .coalesce("displayName", "Naməlum", "u.firstName", "u.lastName")
     .execute(dsl);
+// → SELECT COALESCE(u."first_name", u."last_name", 'Naməlum') AS "displayName"
 ```
 
-### 18.2. Computed Sütunun Nəticəsinə Filter
+### 2.6 selectRound — yuvarlama sütunu
 
-Hesablanmış sütunun nəticəsini filterlə — `computedColumn()` üçüncü arqument kimi:
+`selectRound` ilə həmin alias-a `filter()` tətbiq edildikdə avtomatik `WHERE ROUND(field, scale)` yaranır:
+```java
+JooqQuery.from(Order.class, "o")
+    .selectRound("o.totalPrice", 2, "roundedTotal")
+    .filter("roundedTotal", Op.GREATER_THAN, 100)
+    .execute(dsl);
+// → SELECT ROUND(o."total_price", 2) AS "roundedTotal"
+//   WHERE  ROUND(o."total_price", 2) > 100
+```
+
+### 2.7 subSelect — scalar subquery sütunu
 
 ```java
-// grandTotal > 1000  →  HAVING (ifadə) > 1000
-JooqQuery.from(Order.class, "o")
-    .computedColumn(
-        ComputedField.sumOf(
-            ComputedField.expr("o.price").multiply("o.qty"),
-            ComputedField.expr("o.tax"),
-            ComputedField.expr("o.shipping").subtract("o.discount")
-        ).as("grandTotal"),
-        Op.GREATER_THAN, 1000
-    )
+SubSelectBuilder sub = SubSelectBuilder
+    .from(Order.class, "o")
+    .correlateOn("u.id", "userId")
+    .selectField("totalPrice")
+    .as("lastOrderTotal");
+
+JooqQuery.from(User.class, "u")
+    .select("u.id", "u.firstName")
+    .subSelect(sub)
     .execute(dsl);
+// → SELECT u.id, u.first_name,
+//          (SELECT o.total_price FROM orders o WHERE o.user_id = u.id) AS last_order_total
 ```
-
-### 18.3. `filter()` ilə Computed Alias Filter (WHERE)
-
-`filter()` metodu computed sütunun alias-ını aldıqda `WHERE`-ə ifadənin özünü yazır:
-
-```java
-// WHERE (o.price * o.qty) + o.tax > 1000
-JooqQuery.from(Order.class, "o")
-    .computedColumn(
-        ComputedField.sumOf(
-            ComputedField.expr("o.price").multiply("o.qty"),
-            ComputedField.expr("o.tax")
-        ).as("grandTotal")
-    )
-    .filter("grandTotal", Op.GREATER_THAN, 1000)
-    .execute(dsl);
-```
-
-> **Fərq:** `computedColumn(..., op, value)` → `HAVING`; `.filter("alias", op, value)` → `WHERE`.
 
 ---
 
-## 19. Derived Table — Sorğu Üzərindən Sorğu
+## 3. JOIN
+
+### 3.1 Sadə LEFT / INNER JOIN (tək field cütü)
 
 ```java
-// Addım 1 — daxili sorğu (mütləq noPagination() olmalıdır)
-SelectTable activeUsers = JooqQuery.from(User.class, "u")
-    .select("u.id", "u.firstName", "u.department")
-    .filter("status", Op.EQUAl, "ACTIVE")
+JooqQuery.from(Order.class, "o")
+    .select("o.id", "o.orderNo", "u.firstName", "u.email")
+    .leftJoin(User.class, "u", "fkUserId", "id")
+    .execute(dsl);
+// → LEFT JOIN users u ON o."fk_user_id" = u."id"
+```
+
+### 3.2 Builder JOIN — çoxlu ON şərti
+
+```java
+JooqQuery.from(WarehouseFlow.class, "t")
+    .leftJoin(Product.class, "p")
+        .on("fkProductId", "id")          // t.fk_product_id = p.id
+        .on("companyId",   "companyId")    // t.company_id    = p.company_id
+        .andOn("status", Op.EQUAl, "A")   // AND p.status = 'A'
+    .done()
+    .execute(dsl);
+```
+
+### 3.3 onFrom — zəncir JOIN (ikinci cədvəl üçüncüyə)
+
+Birinci → ikinci cədvəl normal leftJoin, ikinci → üçüncü `onFrom()` ilə:
+```java
+JooqQuery.from(Task.class, "t")
+    // 1-ci → 2-ci: normal leftJoin
+    .leftJoin(TaskType.class, "taskType", "fkTaskTypeKey", "taskTypeKey")
+
+    // 2-ci → 3-cü: onFrom ilə taskType-dan
+    .leftJoin(TaskTypeDetail.class, "taskTypeDetail")
+        .onFrom("taskType", "taskTypeKey", "fkTaskTypeKey")
+    .done()
+    .execute(dsl);
+// → LEFT JOIN task_types taskType ON t.fk_task_type_key = taskType.task_type_key
+//   LEFT JOIN task_type_details taskTypeDetail ON taskType.task_type_key = taskTypeDetail.fk_task_type_key
+```
+
+### 3.4 Generated table JOIN (tip-təhlükəli)
+
+```java
+JooqQuery.from(ORDERS, "o")
+    .leftJoin(USERS, "u", ORDERS.USER_ID.eq(USERS.ID))
+    .execute(dsl);
+```
+
+### 3.5 SelectTable JOIN
+
+Başqa bir `SelectTable` nəticəsini join etmək:
+```java
+SelectTable budgetQuery = JooqQuery.from(Budget.class, "b")
+    .select("b.fkAccountId", "b.fkCurrencyId", "b.budgetAmount")
     .noPagination()
     .execute(dsl);
 
-// Addım 2 — daxili sorğu üzərindən yeni sorğu
-SelectTable result = JooqQuery.from(activeUsers, "sub")
-    .select("id", "firstName", "department")
-    .filter("firstName", Op.LIKE, searchName)
-    .filter("department", Op.EQUAl, dept)
-    .orderBy("firstName", "ASC")
-    .page(pageNumber, pageSize)
+JooqQuery.from(Flow.class, "f")
+    .select("f.id", "f.amount")
+    .leftJoin(budgetQuery, "b", "f.fkAccountId", "fkAccountId")
+    .execute(dsl);
+// → LEFT JOIN (SELECT ...) b ON f."fk_account_id" = b."fk_account_id"
+```
+
+Çoxlu ON ilə:
+```java
+.leftJoin(budgetQuery, "b")
+    .on("f.fkAccountId",  "fkAccountId")
+    .on("f.fkCurrencyId", "fkCurrencyId")
+    .andOn("status", Op.EQUAl, "ACTIVE")
+.done()
+```
+
+---
+
+## 4. WHERE — filter
+
+### 4.1 Sadə filter
+
+`null`, boş string, boş kolleksiya olduqda **avtomatik atlanır**:
+```java
+JooqQuery.from(User.class, "u")
+    .filter("u.status",    Op.EQUAl,       status)    // null → atlanır
+    .filter("u.firstName", Op.LIKE,         name)      // boş → atlanır
+    .filter("u.roleId",    Op.IN,           roleIds)   // boş list → atlanır
+    .filter("u.age",       Op.GREATER_THAN, 18)
+    .filter("u.createdAt", Op.BETWEEN,      "2024-01-01,2024-12-31")
+    .execute(dsl);
+```
+
+### 4.2 Bütün filter əməliyyatları (Op enum)
+
+| Op | SQL | Nümunə |
+|---|---|---|
+| `EQUAl` | `= value` | `Op.EQUAl, "ACTIVE"` |
+| `NOT_EQUAL` | `!= value` | `Op.NOT_EQUAL, "BANNED"` |
+| `LIKE` | `LOWER(REPLACE(...)) LIKE '%val%'` | `Op.LIKE, "ali"` |
+| `START_WITH` | Türk-aware `LIKE 'val%'` | `Op.START_WITH, "A"` |
+| `END_WITH` | Türk-aware `LIKE '%val'` | `Op.END_WITH, ".az"` |
+| `LIKE_IGNORE_CASE` | Türk-aware `LIKE '%val%'` | `Op.LIKE_IGNORE_CASE, "İlkin"` |
+| `START_WITH_IGNORE_CASE` | Türk-aware `LIKE 'val%'` | `Op.START_WITH_IGNORE_CASE, "İ"` |
+| `END_WITH_IGNORE_CASE` | Türk-aware `LIKE '%val'` | `Op.END_WITH_IGNORE_CASE, "lı"` |
+| `IN` | `IN (...)` | `Op.IN, List.of(1,2,3)` |
+| `NOT_IN` | `NOT IN (...)` | `Op.NOT_IN, List.of(4,5)` |
+| `BETWEEN` | `BETWEEN a AND b` | `Op.BETWEEN, "100,500"` |
+| `GREATER_THAN` | `> value` | `Op.GREATER_THAN, 100` |
+| `GREATER_THAN_OR_EQUAL_TO` | `>= value` | `Op.GREATER_THAN_OR_EQUAL_TO, 0` |
+| `LESS_THAN` | `< value` | `Op.LESS_THAN, 1000` |
+| `LESS_THAN_OR_EQUAL_TO` | `<= value` | `Op.LESS_THAN_OR_EQUAL_TO, 100` |
+| `IS_EMPTY` | `IS NULL` | `Op.IS_EMPTY, ""` |
+| `IS_NOT_EMPTY` | `IS NOT NULL` | `Op.IS_NOT_EMPTY, ""` |
+| `REGEXP` | `REGEXP pattern` | `Op.REGEXP, "^A.*"` |
+| `NOT_REGEXP` | `NOT REGEXP pattern` | `Op.NOT_REGEXP, "^B"` |
+
+### 4.3 Türk əlifbası case-insensitive LIKE
+
+`Op.LIKE`, `Op.START_WITH`, `Op.END_WITH` default olaraq Türk-aware məntiqilə işləyir:
+```java
+.filter("u.firstName", Op.LIKE, "İlkin")
+// → WHERE LOWER(REPLACE(REPLACE(u."first_name",'İ','i'),'I','i'))
+//         LIKE '%ilkin%'
+// "İlkin", "ilkin", "ILKIN", "iLKİN" — hamısı tapılır
+```
+
+### 4.4 globalFilter — Filters builder ilə
+
+```java
+JooqQuery.from(Order.class, "o")
+    .globalFilter(
+        Filters.of()
+            .equal("o.status",    "ACTIVE")
+            .like("o.orderNo",    orderNo)
+            .greaterThan("o.amount", "100")
+            .between("o.createdAt", "2024-01-01,2024-12-31")
+    )
+    .execute(dsl);
+```
+
+### 4.5 globalFilter — Map ilə (REST sorğularından gəldikdə)
+
+```java
+// Tək field üçün çoxlu əməliyyat
+.globalFilter("o.amount", Map.of(
+    "greaterThan", "100",
+    "lessThan",    "500"
+))
+
+// Bütün field xəritəsi
+.globalFilter(Map.of(
+    "o.status",  Map.of("equal",       "ACTIVE"),
+    "o.orderNo", Map.of("like",        "ORD-2024"),
+    "u.name",    Map.of("likeIgnoreCase", "İlkin")
+))
+```
+
+### 4.6 Birbaşa jOOQ Condition
+
+```java
+.filter(USERS.STATUS.eq("ACTIVE"))
+.filter(USERS.AGE.gt(18).and(USERS.STATUS.ne("BANNED")))
+.rawCondition(DSL.condition("u.created_at > NOW() - INTERVAL '30 days'"))
+```
+
+---
+
+## 5. IN (SELECT ...) — SubQueryIn
+
+### 5.1 Tək sahə
+
+```java
+SubQueryIn activeSub = SubQueryIn.from(Order.class, "o")
+    .select("o.userId")
+    .filter("status",  Op.EQUAl,       "PAID")
+    .filter("amount",  Op.GREATER_THAN, 1000);
+
+JooqQuery.from(User.class, "u")
+    .select("u.id", "u.firstName")
+    .inSubQuery("u.id", activeSub)
+    .execute(dsl);
+// → WHERE u."id" IN (SELECT o."user_id" FROM orders o
+//                     WHERE o."status" = 'PAID' AND o."amount" > 1000)
+```
+
+### 5.2 NOT IN
+
+```java
+SubQueryIn blacklist = SubQueryIn.notFrom(Blacklist.class, "bl")
+    .select("bl.userId");
+
+JooqQuery.from(User.class, "u")
+    .inSubQuery("u.id", blacklist)
+    .execute(dsl);
+// → WHERE u."id" NOT IN (SELECT bl."user_id" FROM blacklist bl)
+```
+
+### 5.3 Composite IN (çoxlu sahə)
+
+```java
+SubQueryIn sub = SubQueryIn.from(Blacklist.class, "bl")
+    .select("bl.firstName", "bl.lastName");
+
+JooqQuery.from(User.class, "u")
+    .inSubQuery(new String[]{"u.firstName", "u.lastName"}, sub)
+    .execute(dsl);
+// → WHERE (u."first_name", u."last_name")
+//         IN (SELECT bl."first_name", bl."last_name" FROM blacklist bl)
+```
+
+---
+
+## 6. EXISTS / NOT EXISTS
+
+```java
+ExistsSpec<Order, ?> hasOrders = ExistsSpec
+    .exists(Order.class, "o")
+    .correlate("u.id", "fkUserId")      // WHERE o.fk_user_id = u.id
+    .filter("status", Op.EQUAl, "PAID");
+
+JooqQuery.from(User.class, "u")
+    .select("u.id", "u.firstName")
+    .exists(hasOrders)
+    .execute(dsl);
+// → WHERE EXISTS (SELECT 1 FROM orders o
+//                  WHERE o."fk_user_id" = u."id" AND o."status" = 'PAID')
+```
+
+---
+
+## 7. GROUP BY + Aqreqat
+
+### 7.1 Sadə agg
+
+```java
+JooqQuery.from(Order.class, "o")
+    .select("o.customerId")
+    .groupBy("o.customerId")
+    .agg(Agg.SUM,   "o.totalPrice", "totalSum",   2,    "DESC")
+    .agg(Agg.COUNT, "o.id",         "orderCount", null, null)
+    .agg(Agg.AVG,   "o.totalPrice", "avgPrice",   2,    null)
+    .execute(dsl);
+// → SELECT o."customer_id",
+//          ROUND(SUM(o."total_price"),2)  AS "totalSum",
+//          COUNT(o."id")                  AS "orderCount",
+//          ROUND(AVG(o."total_price"),2)  AS "avgPrice"
+//   FROM orders o
+//   GROUP BY o."customer_id"
+//   ORDER BY ROUND(SUM(o."total_price"),2) DESC
+```
+
+### 7.2 Riyazi ifadəli agg — SUM(price * qty)
+
+```java
+.aggWithMath(Agg.SUM, "o.price", MathOperation.MULTIPLY, "o.qty", "revenue", 2)
+// → ROUND(SUM(o."price" * o."qty"), 2) AS "revenue"
+```
+
+### 7.3 ComputedField üzərindəki agg — SUM((price * qty) - discount)
+
+```java
+.aggOnComputed(
+    Agg.SUM,
+    ComputedField.of("o.price").multiply("o.qty").subtract("o.discount"),
+    "netRevenue", 2
+)
+// → ROUND(SUM((o."price" * o."qty") - o."discount"), 2) AS "netRevenue"
+```
+
+### 7.4 AggregateBuilder — fluent API
+
+```java
+JooqQuery.from(Order.class, "o")
+    .select("o.customerId")
+    .aggregate(
+        AggregateBuilder.<Order>groupBy("o.customerId")
+            .sum("o.totalPrice").round(2).as("totalSum")
+                .having(Op.GREATER_THAN, 1000)
+            .done()
+            .count("o.id").as("cnt").done()
+    )
+    .execute(dsl);
+// → HAVING ROUND(SUM(total_price),2) > 1000
+```
+
+### 7.5 Set ilə GROUP BY
+
+GROUP BY-da duplikat alias problemi yoxdur — actual sütun ifadəsi istifadə olunur:
+```java
+Set<String> cols = new HashSet<>();
+cols.add("t.fkRequestId");
+cols.add("t.operationDate");
+cols.add("taskType.taskTypeName");
+// ... digər sütunlar
+
+JooqQuery.from(Task.class, "t")
+    .select(new ArrayList<>(cols))
+    .groupBy(new ArrayList<>(cols))
+    .execute(dsl);
+```
+
+### 7.6 selectAs + groupBy — avtomatik SELECT
+
+`groupBy` verildiyi halda, `selectAs` ilə **yalnız bəzi sütunlara** özəl alias vermək mümkündür.
+Qalan GROUP BY sütunları SELECT-ə **avtomatik əlavə** olunur:
+
+```java
+Set<String> groupByCols = new HashSet<>();
+groupByCols.add("t.operationDate");
+groupByCols.add("t.actionType");
+groupByCols.add("cashItemType.propertyValue");   // Properties-dən ilk alias
+groupByCols.add("propertyValueType.propertyValue"); // Properties-dən ikinci alias
+
+JooqQuery.from(CashFlow.class, "t")
+    .addLeftJoin(PropertiesEntity.class, "cashItemType")
+        .onFrom("t", "fkCashItemTypeKey", "propertyKey")
+        .andOn("propertyCode", Op.EQUAl, "madde_novu").done()
+    .addLeftJoin(PropertiesEntity.class, "propertyValueType")
+        .onFrom("t", "actionType", "propertyKey")
+        .andOn("propertyCode", Op.EQUAl, "pul_axisi").done()
+    // Yalnız alias fərqli olan sütunlara selectAs ver:
+    .selectAs("cashItemType.propertyValue",     "cashItemTypeName")
+    .selectAs("propertyValueType.propertyValue","propertyValueType")
+    // Qalan groupBy sütunları (t.operationDate, t.actionType) avtomatik SELECT-ə gəlir
+    .groupBy(new ArrayList<>(groupByCols))
+    .agg(Agg.SUM, "t.totalPrice", "totalPrice")
+    .execute(dsl);
+// → SELECT "cashItemType"."property_value"     AS "cashItemTypeName",
+//          "propertyValueType"."property_value" AS "propertyValueType",
+//          "t"."operation_date",
+//          "t"."action_type",
+//          SUM("t"."total_price") AS "totalPrice"
+//   FROM ... GROUP BY ...
+```
+
+> **Eyni adlı sütunlar (çoxlu Properties join):** Eyni entity fərqli aliaslarla join edildikdə
+> (məs. `cashItemType`, `propertyValueType`, `propertyValue` — hamısı `PropertiesEntity`),
+> GROUP BY hər birini ayrı sütun kimi emal edir. Alias.fieldName açarı istifadə olunur,
+> buna görə `cashItemType.property_value` ilə `propertyValueType.property_value` toqquşmur.
+
+---
+
+## 8. HAVING
+
+```java
+JooqQuery.from(Order.class, "o")
+    .groupBy("o.customerId")
+    .agg(Agg.SUM,   "o.totalPrice", "totalSum", 2, null)
+    .agg(Agg.COUNT, "o.id",         "cnt",      null, null)
+    // agg alias-ı ilə HAVING
+    .havingFilter("totalSum", Map.of("greaterThan", "1000"))
+    .havingFilter("cnt",      Map.of("between",     "5,50"))
+    // birbaşa field ilə HAVING
+    .havingFilter("o.status", Op.NOT_EQUAL, "CANCELLED")
     .execute(dsl);
 ```
 
 ---
 
-## 20. Generated Mode ilə (Type-safe)
+## 9. CASE WHEN
+
+### 9.1 Sadə caseWhen
 
 ```java
-import static com.example.jooq.Tables.*;
-
-// Field-ləri birbaşa ver
-JooqQuery.from(USERS, "u")
-    .select(USERS.ID, USERS.FIRST_NAME, USERS.STATUS)
-    .filter(USERS.STATUS.eq("ACTIVE"))
-    .filter(USERS.AGE.greaterThan(18))
-    .leftJoin(ORDERS, "o", USERS.ID.eq(ORDERS.USER_ID))
-    .select(ORDERS.AMOUNT)
-    .orderBy(USERS.CREATED_AT.desc())
-    .page(0, 20)
+JooqQuery.from(User.class, "u")
+    .select("u.id", "u.firstName")
+    .caseWhen("u.status", Op.EQUAl, "ACTIVE", "Aktiv", "Deaktiv", "statusLabel")
     .execute(dsl);
+// → CASE WHEN u."status" = 'ACTIVE' THEN 'Aktiv' ELSE 'Deaktiv' END AS "statusLabel"
+```
 
-// Və ya string adlar da işləyir (dinamik sorğular üçün)
-JooqQuery.from(USERS, "u")
-    .select("id", "firstName", "status")     // → USERS.ID, USERS.FIRST_NAME, USERS.STATUS
-    .filter("firstName", Op.LIKE, searchName)
-    .groupBy("department")
-    .orderBy("createdAt", "DESC")
-    .page(0, 20)
+### 9.2 CaseBuilder — çox şərtli
+
+```java
+JooqQuery.from(Order.class, "o")
+    .select("o.id", "o.totalPrice")
+    .caseWhen(
+        CaseBuilder.<Order>when("status", Op.EQUAl, "PAID")     .then("Ödənilib")
+                   .andWhen("status", Op.EQUAl, "PENDING")  .then("Gözləyir")
+                   .andWhen("status", Op.EQUAl, "CANCELLED").then("Ləğv edilib")
+                   .otherwise("Naməlum")
+                   .as("statusLabel")
+    )
     .execute(dsl);
 ```
 
 ---
 
-## 21. Tam Nümunə — REST Endpoint
+## 10. ORDER BY
 
 ```java
-@RestController
-@RequestMapping("/api/users")
-@RequiredArgsConstructor
-public class UserController {
+// Sadə
+.orderBy("u.createdAt", "DESC")
+.orderBy("u.firstName", "ASC")
 
-    private final DSLContext dsl;
+// Map ilə
+.orderBy(Map.of(
+    "u.createdAt", "DESC",
+    "u.firstName", "ASC"
+))
 
-    @GetMapping
-    public ResponseEntity<?> search(
-            @RequestParam(required = false) String status,
-            @RequestParam(required = false) String name,
-            @RequestParam(required = false) String department,
-            @RequestParam(defaultValue = "0")  int page,
-            @RequestParam(defaultValue = "20") int size
-    ) {
-        SelectTable result = JooqQuery.from(User.class, "u")
-            .select("u.id", "u.firstName", "u.lastName", "u.email", "u.department")
-            .filter("u.status",     Op.EQUAl, status)     // null → atlanır
-            .filter("u.firstName",  Op.LIKE,  name)        // null → atlanır
-            .filter("u.department", Op.EQUAl, department)  // null → atlanır
-            .orderBy("u.createdAt", "DESC")
-            .page(page, size)
-            .execute(dsl);
+// List<Map> ilə (sıra qorunur)
+.orderBy(List.of(
+    Map.of("u.createdAt", "DESC"),
+    Map.of("u.firstName", "ASC")
+))
 
-        List<UserDto> users = new SelectFetchJooq<UserDto>()
-            .fetchCast(result, UserDto.class)
-            .getList();
+// Generated field ilə
+.orderBy(USERS.CREATED_AT.desc(), USERS.FIRST_NAME.asc())
+```
 
-        return ResponseEntity.ok(Map.of(
-            "data",  users,
-            "total", result.getRowCount(),
-            "page",  page,
-            "size",  size
-        ));
-    }
+---
+
+## 11. Səhifələmə (Pagination)
+
+```java
+.page(0, 20)      // İlk 20 sətir
+.page(1, 20)      // 21–40-cı sətirlar
+.noPagination()   // Bütün nəticəni gətir, COUNT olmadan
+.withCount()      // Yalnız COUNT — siyahı olmadan
+.page(0, 50000).skipCount()  // Pagination var, COUNT sorğusu işləmir (rowCount = -1)
+.onlyCount()      // Yalnız COUNT işləyir, əsas data sorğusu icra edilmir (result = boş)
+```
+
+### skipCount — COUNT olmadan pagination
+
+Excel export kimi ssenarilərdə ümumi sətir sayı lazım deyil, amma LIMIT/OFFSET istifadə etmək lazımdır:
+
+```java
+var result = JooqQuery.from(CashFlow.class, "t")
+    .select("t.id", "t.operationDate")
+    .page(0, 50000)
+    .skipCount()       // COUNT sorğusu işləmir — performans üstünlüyü
+    .execute(dsl);
+
+// result.getTotalCount() → -1 (hesablanmayıb)
+// result.getResult()     → sətirlərin siyahısı (LIMIT tətbiq olunub)
+```
+
+> **Nə zaman istifadə et:** COUNT-un lazım olmadığı, amma böyük dataseti hissə-hissə çəkməyin gərəkdiyi hallarda (Excel export, batch emal və s.).
+
+### onlyCount — data olmadan yalnız sətir sayı
+
+Əsas SELECT sorğusu **heç icra edilmir**, yalnız COUNT işləyir. Sətir sayını əvvəlcədən bilmək lazım olduqda istifadə et:
+
+```java
+// JooqQuery ilə:
+SelectTable result = JooqQuery.from(CashFlow.class, "t")
+    .filter("t.status", Op.EQUAl, "A")
+    .filter("t.operationDate", Op.BETWEEN, "2024-01-01,2024-12-31")
+    .onlyCount()
+    .execute(dsl);
+
+int rowCount = result.getRowCount();  // ← sətir sayı
+// result.getSelectTable() → boş sorğu (fetch edilməməlidir)
+```
+
+```java
+// JooqManager ilə:
+jooqManager.setMainTable(CashFlowEntity.class, "t")
+    .addFilter("t.status", Op.EQUAl, "A")
+    .addFilter("t.operationDate", Op.BETWEEN, "2024-01-01,2024-12-31")
+    .onlyCount()
+    .fetchMapsNullSafe();  // boş siyahı qaytarır
+
+int rowCount = jooqManager.getLastRowCount();  // ← sətir sayı buradadır
+```
+
+> **Nə zaman istifadə et:** Yalnız sətir sayını bilmək lazım olduqda (UI-da göstərmək, limitə yoxlamaq və s.) — əsas data sorğusu işlətmədən.
+
+| Metod | Data | COUNT | rowCount |
+|---|---|---|---|
+| `page(p, s)` | ✓ LIMIT/OFFSET | ✓ | ümumi say |
+| `noPagination()` | ✓ hamısı | ✗ | 0 |
+| `withCount()` | ✓ hamısı | ✓ | ümumi say |
+| `page(p,s).skipCount()` | ✓ LIMIT/OFFSET | ✗ | -1 |
+| `onlyCount()` | ✗ boş | ✓ | ümumi say |
+
+`SelectTable`-dan nəticə oxumaq:
+```java
+SelectTable result = JooqQuery.from(User.class, "u")
+    .select("u.id", "u.firstName")
+    .page(0, 20)
+    .execute(dsl);
+
+long totalCount              = result.getTotalCount();   // bütün sətirlərin sayı
+int  pageCount               = result.getPageCount();    // səhifə sayı
+List<Map<String,Object>> rows = result.getResult();      // cari səhifənin sətirləri
+
+for (Map<String,Object> row : rows) {
+    Long   id   = (Long)   row.get("id");
+    String name = (String) row.get("firstName");
 }
 ```
 
 ---
 
-## Filter Növlərinin Sürətli İstinadı
+## 12. ROUND filter əməliyyatları
 
-### Əsas filterlər
+`selectRound()` olmadan birbaşa `WHERE ROUND(field, scale)` yazmaq üçün:
+```java
+.filter("o.totalPrice", Op.EQUAL_ROUND_2,               "99.99")
+.filter("o.totalPrice", Op.GREATER_THAN_ROUND_2,         "100")
+.filter("o.totalPrice", Op.LESS_THAN_OR_EQUAL_TO_ROUND_2, "500")
+// → WHERE ROUND(o."total_price", 2) = 99.99
+// → WHERE ROUND(o."total_price", 2) > 100
+// → WHERE ROUND(o."total_price", 2) <= 500
+```
 
-| `Op` | SQL qarşılığı | Nümunə dəyər |
-|---|---|---|
-| `EQUAl` | `= value` | `"ACTIVE"` |
-| `NOT_EQUAL` | `!= value` | `"BANNED"` |
-| `GREATER_THAN` | `> value` | `18` |
-| `GREATER_THAN_OR_EQUAL_TO` | `>= value` | `18` |
-| `LESS_THAN` | `< value` | `5000` |
-| `LESS_THAN_OR_EQUAL_TO` | `<= value` | `5000` |
-| `LIKE` | `LIKE '%value%'` | `"Ali"` |
-| `START_WITH` | `LIKE 'value%'` | `"Ali"` |
-| `END_WITH` | `LIKE '%value'` | `"li"` |
-| `IN` | `IN (...)` | `List.of(1L, 2L)` |
-| `NOT_IN` | `NOT IN (...)` | `List.of("X","Y")` |
-| `BETWEEN` | `BETWEEN a AND b` | `new Object[]{1, 100}` |
-| `IS_EMPTY` | `IS NULL` | `null` |
-| `IS_NOT_EMPTY` | `IS NOT NULL` | `null` |
-| `REGEXP` | `REGEXP pattern` | `"^\\+994"` |
-| `NOT_REGEXP` | `NOT REGEXP pattern` | `"^\\+994"` |
+Mövcud scale-lər: `_ROUND_0` (tam ədəd), `_ROUND_1`, `_ROUND_2`, `_ROUND_3`, `_ROUND_4`.
+Hər scale üçün: `EQUAL`, `NOT_EQUAL`, `GREATER_THAN`, `GREATER_THAN_OR_EQUAL_TO`, `LESS_THAN`, `LESS_THAN_OR_EQUAL_TO`.
 
-### ROUND filterlər (qısa)
+---
 
-| Nümunə `Op` | SQL | Miqyas |
-|---|---|---|
-| `EQUAL_ROUND_0` | `ROUND(field,0) = val` | tam ədəd |
-| `NOT_EQUAL_ROUND_0` | `ROUND(field,0) != val` | tam ədəd |
-| `GREATER_THAN_ROUND_2` | `ROUND(field,2) > val` | 2 onluq |
-| `GREATER_THAN_OR_EQUAL_TO_ROUND_2` | `ROUND(field,2) >= val` | 2 onluq |
-| `LESS_THAN_ROUND_2` | `ROUND(field,2) < val` | 2 onluq |
-| `LESS_THAN_OR_EQUAL_TO_ROUND_2` | `ROUND(field,2) <= val` | 2 onluq |
-| `EQUAL_ROUND_4` | `ROUND(field,4) = val` | 4 onluq |
+## 13. FilterOperationConstants — String sabitlər
 
-Tam siyahı üçün bölmə 14-ə bax. Mövcud miqyaslar: **0, 1, 2, 3, 4**.
+`globalFilter(Map)` istifadə edərkən əməliyyat adlarını hardcode etmək əvəzinə sabitlər:
+```java
+import static az.mbm.jooqsqlgenerate.enums.FilterOperationConstants.*;
 
-### `selectRound()` vs `Op.ROUND_N` — hansını seçim?
+.globalFilter("o.amount",  Map.of(GREATER_THAN, "100", LESS_THAN, "500"))
+.globalFilter("u.status",  Map.of(EQUAl, "ACTIVE"))
+.globalFilter("u.name",    Map.of(LIKE, name))
+.globalFilter("u.name",    Map.of(LIKE_IGNORE_CASE, "İlkin"))
+.globalFilter("o.price",   Map.of(EQUAL_ROUND_2, "9.99"))
+```
 
-| Sual | Cavab |
+---
+
+## 14. UPDATE
+
+```java
+int updated = new UpdateQueryBuilder<>(User.class, dsl)
+    .set("status",    "INACTIVE")
+    .set("updatedAt", LocalDateTime.now())
+    .where(Spec.eq("id", userId))
+    .execute();
+```
+
+Çox şərtli WHERE:
+```java
+new UpdateQueryBuilder<>(Order.class, dsl)
+    .set("status", "CANCELLED")
+    .where(Spec.eq("status", "PENDING")
+               .and(Spec.lt("createdAt", LocalDateTime.now().minusDays(30))))
+    .execute();
+```
+
+SQL debug (icrasız):
+```java
+String sql = new UpdateQueryBuilder<>(User.class, dsl)
+    .set("status", "INACTIVE")
+    .where(Spec.eq("id", 1L))
+    .toSQL();
+```
+
+WHERE olmadan UPDATE qadağandır — `IllegalStateException` atır.
+
+---
+
+## 15. Generated mode — jOOQ generated cədvəllər
+
+```java
+import static com.example.jooq.Tables.*;
+
+SelectTable result = JooqQuery.from(USERS, "u")
+    .select(USERS.ID, USERS.FIRST_NAME, USERS.STATUS)
+    .filter(USERS.STATUS.eq("ACTIVE"))
+    .filter(USERS.AGE, Op.GREATER_THAN, 18)
+    .leftJoin(ORDERS, "o", USERS.ID.eq(ORDERS.USER_ID))
+    .groupBy(USERS.DEPARTMENT)
+    .orderBy(USERS.CREATED_AT.desc())
+    .page(0, 20)
+    .execute(dsl);
+```
+
+---
+
+## 16. Tam nümunə — mürəkkəb sorğu
+
+```java
+public SelectTable getTaskReport(TaskFilterRequest req) {
+    return JooqQuery.from(Task.class, "t")
+
+        // SELECT
+        .select("t.fkRequestId", "t.taskNo", "t.operationDate", "t.actionType")
+        .selectAs("taskType.taskTypeName",       "taskTypeName")
+        .selectAs("employee.firstName",           "employeeFirstName")
+        .selectAs("employee.surname",             "employeeSurname")
+        .selectAs("propertyValue.propertyValue",  "propertyValue")
+        .selectAs("propertyValueType.propertyValue", "propertyValueType")
+        .selectRound("t.rate", 4, "roundedRate")
+
+        // JOIN — birinci → ikinci
+        .leftJoin(TaskType.class,     "taskType",     "fkTaskTypeKey",         "taskTypeKey")
+        .leftJoin(Employee.class,     "employee",     "fkCashierId",           "id")
+        .leftJoin(PropertyValue.class,"propertyValue","fkPaymentFeatureKey",   "propertyKey")
+        .leftJoin(PropertyValue.class,"propertyValueType","fkPaymentRootKey",  "propertyKey")
+
+        // JOIN — ikinci → üçüncü (taskType üzərindən)
+        .leftJoin(TaskTypeDetail.class, "taskTypeDetail")
+            .onFrom("taskType", "taskTypeKey", "fkTaskTypeKey")
+        .done()
+
+        // WHERE
+        .filter("t.operationDate", Op.BETWEEN,    req.getDateRange())
+        .filter("t.actionType",    Op.EQUAl,      req.getActionType())
+        .filter("t.fkCashierId",   Op.IN,         req.getCashierIds())
+        .filter("taskType.taskTypeName", Op.LIKE,  req.getTaskTypeName())
+
+        // globalFilter (REST-dən gəlir)
+        .globalFilter(req.getFilters())
+
+        // GROUP BY
+        .groupBy("t.fkRequestId", "t.taskNo", "t.operationDate", "t.actionType",
+                 "taskType.taskTypeName", "employee.firstName", "employee.surname",
+                 "propertyValue.propertyValue", "propertyValueType.propertyValue")
+        .agg(Agg.SUM, "t.rate", "totalRate", 4, "DESC")
+
+        // HAVING
+        .havingFilter("totalRate", Map.of("greaterThan", "0"))
+
+        // ORDER BY + Pagination
+        .orderBy("t.operationDate", "DESC")
+        .page(req.getPage(), req.getSize())
+
+        .execute(dsl);
+}
+```
+
+---
+
+## 17. Qısa referans
+
+### JooqQuery metodları
+
+| Metod | Təsvir |
 |---|---|
-| Yuvarlama nəticəsini **göstərməli** + filterlə? | `selectRound(field, scale, alias)` + adi `Op` |
-| Yalnız WHERE-də ROUND lazımdır, SELECT-ə gərək yox? | `Op.EQUAL_ROUND_2` (və s.) birbaşa `filter()`-ə ver |
-| Global Map filterdə ROUND lazımdır? | `FilterOperationConstants.GREATER_THAN_ROUND_2` açarı ilə |
+| `from(Class, alias)` | Entity mode başlatma |
+| `from(Table, alias)` | Generated mode başlatma |
+| `from(SelectTable, alias)` | Derived table mode |
+| `select(cols...)` | SELECT sütunları |
+| `select(List)` | SELECT — dinamik siyahı |
+| `selectAs(field, alias)` | Özəl alias ilə SELECT |
+| `selectRound(field, scale, alias)` | ROUND SELECT + filter |
+| `distinct()` | SELECT DISTINCT |
+| `computedColumn(...)` | Riyazi ifadə sütunu |
+| `coalesce(alias, def, fields...)` | COALESCE sütunu |
+| `subSelect(SubSelectBuilder)` | Scalar subquery sütunu |
+| `caseWhen(...)` | CASE WHEN sütunu |
+| `leftJoin(entity, alias, from, to)` | Sadə LEFT JOIN |
+| `leftJoin(entity, alias).on(...).done()` | Builder LEFT JOIN |
+| `leftJoin(entity, alias).onFrom(...).done()` | Zəncir JOIN |
+| `leftJoin(Table, alias, Condition)` | Generated LEFT JOIN |
+| `leftJoin(SelectTable, alias, ...)` | SelectTable JOIN |
+| `filter(field, Op, value)` | WHERE filter (null-safe) |
+| `filter(Condition)` | Birbaşa jOOQ şərti |
+| `globalFilter(Filters)` | Filters builder ilə |
+| `globalFilter(field, Map)` | Map ilə çoxlu əməliyyat |
+| `globalFilter(Map<String,Map>)` | Tam field xəritəsi |
+| `inSubQuery(field, SubQueryIn)` | IN (SELECT ...) |
+| `inSubQuery(fields[], SubQueryIn)` | COMPOSITE IN |
+| `exists(ExistsSpec)` | EXISTS / NOT EXISTS |
+| `groupBy(fields...)` | GROUP BY |
+| `agg(Agg, field, alias, round, dir)` | Aqreqat funksiya |
+| `aggWithMath(...)` | Riyazi aqreqat SUM(f1*f2) |
+| `aggOnComputed(...)` | ComputedField aqreqat |
+| `havingFilter(field, Map)` | HAVING filter |
+| `havingFilter(field, Op, value)` | HAVING birbaşa filter |
+| `orderBy(field, dir)` | ORDER BY |
+| `orderBy(Map)` | ORDER BY map ilə |
+| `page(page, size)` | Səhifələmə (0-dan başlayır) |
+| `skipCount()` | Pagination var, COUNT işləmir (rowCount = -1) |
+| `onlyCount()` | Yalnız COUNT işləyir, əsas data sorğusu icra edilmir |
+| `noPagination()` | Bütün nəticə, COUNT olmadan |
+| `withCount()` | Bütün data + COUNT |
+| `execute(dsl)` | Sorğunu icra et |
