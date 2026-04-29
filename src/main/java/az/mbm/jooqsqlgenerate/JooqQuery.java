@@ -106,6 +106,8 @@ public final class JooqQuery<T> {
     private boolean distinct   = false;
     private boolean paginate   = false;  // yalnız setPage() çağrılanda aktiv olur
     private boolean countOnly  = false;  // pagination olmadan yalnız COUNT
+    private boolean skipCount  = false;  // pagination var, amma COUNT işləməsin
+    private boolean onlyCount  = false;  // yalnız COUNT işləsin, əsas data sorğusu icra edilməsin
     private int     pageNumber = 0;
     private int     pageSize   = 50;
 
@@ -1304,6 +1306,18 @@ public final class JooqQuery<T> {
         return this;
     }
 
+    /** Pagination aktiv olur (LIMIT/OFFSET işləyir), lakin COUNT sorğusu atlanır. */
+    public JooqQuery<T> skipCount() {
+        this.skipCount = true;
+        return this;
+    }
+
+    /** Yalnız COUNT sorğusu icra edilir, əsas data sorğusu işləmir. result = boş siyahı. */
+    public JooqQuery<T> onlyCount() {
+        this.onlyCount = true;
+        return this;
+    }
+
     // ════════════════════════════════════════════════════════════════════
     //  EXECUTE
     // ════════════════════════════════════════════════════════════════════
@@ -1555,6 +1569,8 @@ public final class JooqQuery<T> {
         if (paginate)        builder.page(pageNumber, pageSize);
         else if (countOnly)  builder.withCount();
         else                 builder.noPagination();
+        if (skipCount)       builder.skipCount();
+        if (onlyCount)       builder.onlyCount();
 
         return builder.build(dsl);
     }
