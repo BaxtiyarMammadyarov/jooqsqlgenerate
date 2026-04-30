@@ -7,13 +7,13 @@
 <dependency>
     <groupId>az.mbm</groupId>
     <artifactId>jooq-sql-generate</artifactId>
-    <version>1.0.3</version>
+    <version>1.0.8</version>
 </dependency>
 ```
 
 ```kotlin
 // Gradle
-implementation("az.mbm:jooq-sql-generate:1.0.3")
+implementation("az.mbm:jooq-sql-generate:1.0.8")
 ```
 
 ---
@@ -229,7 +229,25 @@ JooqQuery.from(Task.class, "t")
 //   LEFT JOIN task_type_details taskTypeDetail ON taskType.task_type_key = taskTypeDetail.fk_task_type_key
 ```
 
-### 3.4 Generated table JOIN (tip-təhlükəli)
+### 3.4 onFrom — Op ilə operatorlu JOIN şərti
+
+`onFrom()` equality (`=`) əvəzinə istənilən müqayisə operatoru ilə işlədilə bilər:
+
+```java
+jooq.addInnerJoin(RequestEntity.class, "r")
+        .onFrom("t", "fkRequestId", Op.EQUAl,        "id")         // t.fkRequestId = r.id
+        .onFrom("t", "amount",      Op.GREATER_THAN,  "minAmount")  // t.amount > r.minAmount
+        .andOn("status", Op.EQUAl, "A")
+    .done()
+// → INNER JOIN request r
+//       ON t.fk_request_id = r.id
+//      AND t.amount > r.min_amount
+//      AND r.status = 'A'
+```
+
+`onFrom()` dəstəklənən operatorlar: `EQUAl`, `NOT_EQUAL`, `LESS_THAN`, `LESS_THAN_OR_EQUAL_TO`, `GREATER_THAN`, `GREATER_THAN_OR_EQUAL_TO`.
+
+### 3.5 Generated table JOIN (tip-təhlükəli)
 
 ```java
 JooqQuery.from(ORDERS, "o")
@@ -237,7 +255,7 @@ JooqQuery.from(ORDERS, "o")
     .execute(dsl);
 ```
 
-### 3.5 SelectTable JOIN
+### 3.6 SelectTable JOIN
 
 Başqa bir `SelectTable` nəticəsini join etmək:
 ```java
@@ -352,6 +370,109 @@ JooqQuery.from(Order.class, "o")
 .rawCondition(DSL.condition("u.created_at > NOW() - INTERVAL '30 days'"))
 ```
 
+### 4.7 fieldFilter — iki sahə arasında WHERE müqayisəsi
+
+JOIN edilmiş iki cədvəlin sahələrini birbaşa bir-biri ilə müqayisə etmək üçün:
+
+```java
+// t.fk_task_id = f.fk_task_id AND t.total_price > f.total_price
+JooqQuery.from(Task.class, "t")
+    .leftJoin(Flow.class, "f", "fkFlowId", "id")
+    .fieldFilter("t.fkTaskId",   Op.EQUAl,        "f.fkTaskId")
+    .fieldFilter("t.totalPrice", Op.GREATER_THAN,  "f.totalPrice")
+    .execute(dsl);
+// → WHERE t."fk_task_id" = f."fk_task_id"
+//     AND t."total_price" > f."total_price"
+```
+
+`JooqManager` ilə:
+```java
+jooq.addFieldFilter("t.totalPrice", Op.GREATER_THAN_OR_EQUAL_TO, "f.minAmount");
+```
+
+`fieldFilter` dəstəklənən operatorlar: `EQUAl`, `NOT_EQUAL`, `LESS_THAN`, `LESS_THAN_OR_EQUAL_TO`, `GREATER_THAN`, `GREATER_THAN_OR_EQUAL_TO`.
+
+### 4.8 OR qrupu filterlər — addOrOperation
+
+Eyni `conditionAlias` altında toplanan filtrlər AND şərti ilə birləşir; fərqli `conditionAlias`-lar isə OR ilə:
+
+```java
+// (t.status = 'PAID' AND t.amount > 500) OR (t.status = 'REFUND' AND t.amount < 0)
+jooq.addOrOperation("group1", "t", "status",  Map.of("equal", "PAID"))
+    .add("t", "amount", Map.of("greaterThan", "500"))
+    .done()
+    .addOrOperation("group2", "t", "status",  Map.of("equal", "REFUND"))
+    .add("t", "amount", Map.of("lessThan",    "0"))
+    .done();
+// → WHERE (t.status = 'PAID' AND t.amount > 500)
+//      OR (t.status = 'REFUND' AND t.amount < 0)
+```
+
+Yalnız tək şərt:
+```java
+jooq.addOrOperation("cond", "t", "actionType", Map.of("equal", "OUT"))
+    .done();
+```
+
+`Op` enum ilə overload:
+```java
+jooq.addOrOperation("cond", "t", "actionType", Op.EQUAl, "OUT")
+    .done();
+```
+
+### 4.9 Mürəkkəb OR/AND qruplaması — orGroup
+
+`x AND (y OR (z AND f))` formatlı qruplaşdırılmış şərtlər üçün fluent builder:
+
+```java
+// WHERE t.companyId = 5
+//   AND (
+//         (t.operationDate BETWEEN '2024-01-01' AND '2024-03-31')
+//      OR (t.operationDate BETWEEN '2024-07-01' AND '2024-09-30')
+//      OR (t.status = 'ACTIVE' AND t.amount > 1000)
+//       )
+jooq.addFilter("t.companyId", Op.EQUAl, 5)
+    .orGroup("g")
+        .or("t", "operationDate", Op.BETWEEN, "2024-01-01,2024-03-31")
+        .or("t", "operationDate", Op.BETWEEN, "2024-07-01,2024-09-30")
+        .andBranch("branch1")
+            .add("t", "status", Op.EQUAl,        "ACTIVE")
+            .add("t", "amount", Op.GREATER_THAN,  1000)
+        .end()
+    .done();
+```
+
+**Qaydalar:**
+- `.or(...)` hər çağırışı öz ayrı OR branch-ı yaradır — eyni field iki dəfə çağırıldıqda OR-lanır (AND deyil).
+- `.andBranch("alias")` — eyni alias altındakı `.add()` çağırışları AND ilə birləşir; fərqli branchAlias-lar OR ilə.
+- `.done()` — builder-i bağlayır, ana sorğuya qayıdır.
+
+`JooqQuery` ilə eyni sintaksis:
+```java
+JooqQuery.from(Task.class, "t")
+    .filter("t.companyId", Op.EQUAl, 5)
+    .orGroup("g")
+        .or("t", "operationDate", Op.BETWEEN, "2024-01-01,2024-03-31")
+        .or("t", "operationDate", Op.BETWEEN, "2024-07-01,2024-09-30")
+        .andBranch("b1")
+            .add("t", "status", Op.EQUAl,       "ACTIVE")
+            .add("t", "amount", Op.GREATER_THAN, 1000)
+        .end()
+    .done()
+    .execute(dsl);
+```
+
+`Map` overload da mövcuddur:
+```java
+.orGroup("g")
+    .or("t", "status", Map.of("equal", "ACTIVE"))
+    .andBranch("b1")
+        .add("t", "type", Map.of("equal", "OUT"))
+        .add("t", "amount", Map.of("greaterThan", "500"))
+    .end()
+.done()
+```
+
 ---
 
 ## 5. IN (SELECT ...) — SubQueryIn
@@ -401,19 +522,121 @@ JooqQuery.from(User.class, "u")
 
 ## 6. EXISTS / NOT EXISTS
 
+### 6.1 Sadə EXISTS
+
 ```java
-ExistsSpec<Order, ?> hasOrders = ExistsSpec
-    .exists(Order.class, "o")
-    .correlate("u.id", "fkUserId")      // WHERE o.fk_user_id = u.id
+ExistsSpec<User, Order> hasOrders = ExistsSpec
+    .exists(Order.class)
+    .joinField("fkUserId", "u", "id")     // orders.fk_user_id = u.id
     .filter("status", Op.EQUAl, "PAID");
 
 JooqQuery.from(User.class, "u")
     .select("u.id", "u.firstName")
     .exists(hasOrders)
     .execute(dsl);
-// → WHERE EXISTS (SELECT 1 FROM orders o
-//                  WHERE o."fk_user_id" = u."id" AND o."status" = 'PAID')
+// → WHERE EXISTS (SELECT 1 FROM orders
+//                  WHERE orders."fk_user_id" = u."id"
+//                    AND orders."status" = 'PAID')
 ```
+
+### 6.2 NOT EXISTS
+
+```java
+ExistsSpec<User, Blacklist> notBlacklisted = ExistsSpec
+    .notExists(Blacklist.class)
+    .joinField("fkUserId", "u", "id")
+    .filter("active", Op.EQUAl, true);
+
+JooqQuery.from(User.class, "u")
+    .exists(notBlacklisted)
+    .execute(dsl);
+// → WHERE NOT EXISTS (SELECT 1 FROM blacklist
+//                      WHERE blacklist."fk_user_id" = u."id"
+//                        AND blacklist."active" = true)
+```
+
+### 6.3 Çoxlu joinField
+
+Birdən çox sahə ilə korrelyasiya qurmaq mümkündür:
+
+```java
+ExistsSpec.exists(TaskPermission.class)
+    .joinField("fkTaskId",    "t", "id")         // tp.fk_task_id = t.id
+    .joinField("fkCompanyId", "t", "companyId")  // tp.fk_company_id = t.company_id
+    .filter("active", Op.EQUAl, true)
+```
+
+### 6.4 EXISTS daxilində OR/AND qruplaması — orGroup
+
+EXISTS alt-sorğusunun içinə `orGroup().andBranch()` ilə mürəkkəb şərt əlavə edilə bilər:
+
+```java
+ExistsSpec.exists(TaskPermission.class)
+    .joinField("fkTaskId", "t", "id")          // tp.fk_task_id = t.id
+    .filter("status", Op.EQUAl, "A")           // AND tp.status = 'A'
+    .orGroup()
+        .andBranch("branch1")
+            .add("fkFilterId",    Op.EQUAl, userId)
+            .add("fkTaskTypeKey", Op.IN,    taskTypeKeys)
+        .end()
+        .andBranch("branch2")
+            .add("fkTaskTypeKey", Op.IN, visibleKeys)
+        .end()
+    .done()
+// → EXISTS (SELECT 1 FROM task_permission
+//            WHERE tp.fk_task_id = t.id
+//              AND tp.status = 'A'
+//              AND (
+//                    (tp.fk_filter_id = ? AND tp.fk_task_type_key IN (...))
+//                 OR (tp.fk_task_type_key IN (...))
+//                  ))
+```
+
+Sadə `.or()` ilə eyni field-i iki dəfə OR-lamaq:
+
+```java
+ExistsSpec.exists(TaskPermission.class)
+    .joinField("fkTaskId", "t", "id")
+    .orGroup()
+        .or("fkFilterId", Op.EQUAl, userId)
+        .or("fkFilterId", Op.IS_EMPTY, "")   // OR fk_filter_id IS NULL
+    .done()
+```
+
+### 6.5 JooqManager ilə EXISTS — addBarMenuExists nümunəsi
+
+Şərtlərə görə dinamik `addBarMenuExists` çağırışı:
+
+```java
+private void addBarMenuExists(JooqManager jooq, Long userId, String status,
+                               List<String> keys, List<String> visibleKeys) {
+    ExistsSpec<?, TaskPermission> spec = ExistsSpec
+        .exists(TaskPermission.class)
+        .joinField("fkTaskId", "t", "id")
+        .filter("status", Op.EQUAl, status);
+
+    if (userId != null && keys != null && !keys.isEmpty()) {
+        spec.orGroup()
+            .andBranch("b1")
+                .add("fkFilterId",    Op.EQUAl, userId)
+                .add("fkTaskTypeKey", Op.IN,    keys)
+            .end()
+            .andBranch("b2")
+                .add("fkTaskTypeKey", Op.IN, visibleKeys)
+            .end()
+        .done();
+    }
+
+    jooq.addExists(spec);
+}
+
+// İstifadə:
+if (condition1) addBarMenuExists(jooq, userId, "A", type1Keys, visibleKeys1);
+if (condition2) addBarMenuExists(jooq, userId, "B", type2Keys, visibleKeys2);
+// → AND EXISTS (...) AND EXISTS (...)  ← hər çağırış ayrı EXISTS əlavə edir
+```
+
+> **Qeyd:** `addExists()` hər çağırışda yeni `AND EXISTS (...)` əlavə edir; alias parametri artıq lazım deyil.
 
 ---
 
@@ -844,9 +1067,11 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `leftJoin(SelectTable, alias, ...)` | SelectTable JOIN |
 | `filter(field, Op, value)` | WHERE filter (null-safe) |
 | `filter(Condition)` | Birbaşa jOOQ şərti |
+| `fieldFilter(left, Op, right)` | İki sahə arasında müqayisə (t.a > f.b) |
 | `globalFilter(Filters)` | Filters builder ilə |
 | `globalFilter(field, Map)` | Map ilə çoxlu əməliyyat |
 | `globalFilter(Map<String,Map>)` | Tam field xəritəsi |
+| `orGroup(alias).or(...).andBranch(...).add(...).end().done()` | Mürəkkəb OR/AND qruplaması |
 | `inSubQuery(field, SubQueryIn)` | IN (SELECT ...) |
 | `inSubQuery(fields[], SubQueryIn)` | COMPOSITE IN |
 | `exists(ExistsSpec)` | EXISTS / NOT EXISTS |
@@ -864,3 +1089,42 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `noPagination()` | Bütün nəticə, COUNT olmadan |
 | `withCount()` | Bütün data + COUNT |
 | `execute(dsl)` | Sorğunu icra et |
+
+### JooqManager əlavə metodları
+
+| Metod | Təsvir |
+|---|---|
+| `setMainTable(Class, alias)` | Ana cədvəl təyini |
+| `addSelect(cols...)` | SELECT sütunları |
+| `addFilter(field, Op, value)` | WHERE filter |
+| `addFieldFilter(left, Op, right)` | İki sahə arasında WHERE müqayisəsi |
+| `addLeftJoin(Class, alias).on(...).done()` | Builder LEFT JOIN |
+| `addInnerJoin(Class, alias).onFrom(...).done()` | Builder INNER JOIN |
+| `.onFrom(fromAlias, fromField, Op, toField)` | JOIN ON ilə Op operatoru |
+| `addOrOperation(alias, tableAlias, field, Map).add(...).done()` | OR qrupu filterlər |
+| `addOrOperation(alias, tableAlias, field, Op, value).add(...).done()` | OR qrupu (Op overload) |
+| `orGroup(alias).or(...).andBranch(...).add(...).end().done()` | Mürəkkəb OR/AND qruplaması |
+| `addExists(ExistsSpec)` | EXISTS / NOT EXISTS əlavə edir |
+| `addGroupBy(fields...)` | GROUP BY |
+| `addOrderBy(field, dir)` | ORDER BY |
+| `setPage(page, size)` | Səhifələmə |
+| `skipCount()` | COUNT işlətmə (rowCount = -1) |
+| `onlyCount()` | Yalnız COUNT |
+| `fetchMaps()` | `List<Map<String,Object>>` qaytarır |
+| `fetchMapsNullSafe()` | null-safe `List<Map>` |
+| `getLastRowCount()` | Son `onlyCount()` nəticəsi |
+
+### ExistsSpec metodları
+
+| Metod | Təsvir |
+|---|---|
+| `ExistsSpec.exists(Class)` | EXISTS başlatma |
+| `ExistsSpec.notExists(Class)` | NOT EXISTS başlatma |
+| `.joinField(existsField, mainAlias, mainField)` | EXISTS ↔ ana cədvəl korrelyasiyası |
+| `.filter(field, Op, value)` | EXISTS daxili literal filter |
+| `.orGroup()` | OR/AND qruplaması başlatır |
+| `  .or(field, Op, value)` | Sadə OR şərt |
+| `  .andBranch(alias)` | AND alt-qrupu |
+| `    .add(field, Op, value)` | AND qrupuna field əlavə edir |
+| `  .end()` | andBranch-ı bağlayır |
+| `.done()` | orGroup-u bağlayır, ExistsSpec-ə qayıdır |
