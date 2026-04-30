@@ -95,6 +95,18 @@ public class SelectQueryBuilder<T> {
     private final List<Condition> rawConditions = new ArrayList<>();
     private final List<Condition> rawHavings    = new ArrayList<>();
 
+    // ─── Field-to-field WHERE/HAVING müqayisə filterlər ─────────────────
+    // Məs: t.fkTaskId = f.fkTaskId  AND  t.totalPrice > f.totalPrice
+    private final List<FieldFilterRow> fieldFilterRows = new ArrayList<>();
+    private record FieldFilterRow(String leftAliasAndField, Op op, String rightAliasAndField) {}
+
+    // ─── OR qrupları ─────────────────────────────────────────────────────
+    // Struktur: orGroupAlias → (andGroupAlias → List<filterRow>)
+    // Nəticə: AND (andGroup1 OR andGroup2 OR ...)
+    // andGroup içi: condition1 AND condition2 AND ...
+    private final List<OrFilterRow> orFilterRows = new ArrayList<>();
+    private record OrFilterRow(String orGroup, String andGroup, String aliasAndField, Op op, Object value) {}
+
     // ─── GROUP BY + Aqreqat ──────────────────────────────────────────────
     private AggregateBuilder<T> aggregator = null;
 
@@ -580,6 +592,31 @@ public class SelectQueryBuilder<T> {
     }
 
     /**
+     * Field-to-field WHERE şərti — iki cədvəl sütununu Op ilə müqayisə edir.
+     *
+     * <p>Hər iki tərəf {@code "alias.field"} formatında verilir.
+     * Alias tableMap-dən həll edilir; alias olmadıqda əsas cədvəl istifadə edilir.
+     *
+     * <pre>{@code
+     *   .fieldFilter("t.fkTaskId",   Op.EQUAl,        "f.fkTaskId")
+     *   .fieldFilter("t.totalPrice", Op.GREATER_THAN,  "f.totalPrice")
+     *   // → WHERE t."fk_task_id" = f."fk_task_id"
+     *   //     AND t."total_price" > f."total_price"
+     * }</pre>
+     *
+     * @param leftAliasAndField  sol tərəf: {@code "alias.field"}
+     * @param op                 müqayisə operatoru
+     * @param rightAliasAndField sağ tərəf: {@code "alias.field"}
+     */
+    public SelectQueryBuilder<T> fieldFilter(String leftAliasAndField, Op op, String rightAliasAndField) {
+        if (leftAliasAndField != null && !leftAliasAndField.isBlank()
+                && op != null
+                && rightAliasAndField != null && !rightAliasAndField.isBlank())
+            fieldFilterRows.add(new FieldFilterRow(leftAliasAndField, op, rightAliasAndField));
+        return this;
+    }
+
+    /**
      * Birbaşa jOOQ {@link Condition}-u WHERE-ə əlavə edir.
      * Bir neçə çağrış AND ilə birləşir.
      *
@@ -590,6 +627,49 @@ public class SelectQueryBuilder<T> {
      */
     public SelectQueryBuilder<T> rawCondition(Condition condition) {
         if (condition != null) rawConditions.add(condition);
+        return this;
+    }
+
+    /**
+     * OR qrupu filter — sadə hal: bir qrup içindəki şərtlər OR ilə birləşir.
+     *
+     * <pre>{@code
+     *   // WHERE status = 'A' AND (actionType = 'IN' OR actionType = 'OUT')
+     *   .filter("t.status", Op.EQUAl, "A")
+     *   .orFilter("myOr", "t.actionType", Op.EQUAl, "IN")
+     *   .orFilter("myOr", "t.actionType", Op.EQUAl, "OUT")
+     * }</pre>
+     *
+     * @param orGroupAlias  OR qrupunun adı — eyni adlı şərtlər OR ilə birləşir
+     * @param aliasAndField "tableAlias.fieldName" formatında sütun
+     */
+    public SelectQueryBuilder<T> orFilter(String orGroupAlias, String aliasAndField, Op op, Object value) {
+        if (orGroupAlias != null && !orGroupAlias.isBlank() && aliasAndField != null && value != null)
+            orFilterRows.add(new OrFilterRow(orGroupAlias, orGroupAlias, aliasAndField, op, value));
+        return this;
+    }
+
+    /**
+     * OR qrupu filter — mürəkkəb hal: (andGroup1 OR andGroup2).
+     * Eyni andGroupAlias-lı şərtlər AND, fərqli andGroupAlias-lılar OR ilə birləşir.
+     *
+     * <pre>{@code
+     *   // WHERE (field1='y' AND field2='z') OR (field3='a' AND field4='b')
+     *   .orFilter("myOr", "andGroup1", "t.field1", Op.EQUAl, "y")
+     *   .orFilter("myOr", "andGroup1", "t.field2", Op.EQUAl, "z")
+     *   .orFilter("myOr", "andGroup2", "t.field3", Op.EQUAl, "a")
+     *   .orFilter("myOr", "andGroup2", "t.field4", Op.EQUAl, "b")
+     * }</pre>
+     *
+     * @param orGroupAlias  OR qrupunun adı
+     * @param andGroupAlias AND alt-qrupunun adı
+     * @param aliasAndField "tableAlias.fieldName" formatında sütun
+     */
+    public SelectQueryBuilder<T> orFilter(String orGroupAlias, String andGroupAlias, String aliasAndField, Op op, Object value) {
+        if (orGroupAlias != null && !orGroupAlias.isBlank()
+                && andGroupAlias != null && !andGroupAlias.isBlank()
+                && aliasAndField != null && value != null)
+            orFilterRows.add(new OrFilterRow(orGroupAlias, andGroupAlias, aliasAndField, op, value));
         return this;
     }
 
@@ -1022,12 +1102,94 @@ public class SelectQueryBuilder<T> {
             cond = (cond == null) ? c : cond.and(c);
         }
 
+        // OR qrupları — x AND (y OR z) və ya x AND ((y AND z) OR (a AND b))
+        if (!orFilterRows.isEmpty()) {
+            // orGroup → andGroup → List<row>
+            LinkedHashMap<String, LinkedHashMap<String, List<OrFilterRow>>> grouped = new LinkedHashMap<>();
+            for (OrFilterRow row : orFilterRows) {
+                grouped
+                    .computeIfAbsent(row.orGroup(),  k -> new LinkedHashMap<>())
+                    .computeIfAbsent(row.andGroup(), k -> new ArrayList<>())
+                    .add(row);
+            }
+
+            for (LinkedHashMap<String, List<OrFilterRow>> andGroups : grouped.values()) {
+                Condition orGroupCond = null;
+                for (List<OrFilterRow> andRows : andGroups.values()) {
+                    Condition andCond = null;
+                    for (OrFilterRow row : andRows) {
+                        int dot = row.aliasAndField().indexOf('.');
+                        EntityTable<?> t;
+                        String fieldName;
+                        if (dot > 0) {
+                            t         = tableMap.getOrDefault(row.aliasAndField().substring(0, dot), mainTable);
+                            fieldName = row.aliasAndField().substring(dot + 1);
+                        } else {
+                            t         = mainTable;
+                            fieldName = row.aliasAndField();
+                        }
+                        @SuppressWarnings("unchecked")
+                        Field<Object> f = (Field<Object>) t.getField(fieldName);
+                        Condition c = FilterStrategies.get(row.op()).apply(f, row.value());
+                        andCond = (andCond == null) ? c : andCond.and(c);
+                    }
+                    orGroupCond = (orGroupCond == null) ? andCond : orGroupCond.or(andCond);
+                }
+                if (orGroupCond != null)
+                    cond = (cond == null) ? orGroupCond : cond.and(orGroupCond);
+            }
+        }
+
+        // Field-to-field müqayisə şərtlər (t.price > f.price kimi)
+        for (FieldFilterRow ff : fieldFilterRows) {
+            Field<Object> leftF  = resolveAliasField(ff.leftAliasAndField(),  mainTable, tableMap);
+            Field<Object> rightF = resolveAliasField(ff.rightAliasAndField(), mainTable, tableMap);
+            if (leftF != null && rightF != null) {
+                Condition c = applyFieldOp(ff.op(), leftF, rightF);
+                cond = (cond == null) ? c : cond.and(c);
+            }
+        }
+
         // Birbaşa jOOQ raw condition-lar
         for (Condition rc : rawConditions) {
             cond = (cond == null) ? rc : cond.and(rc);
         }
 
         return cond;
+    }
+
+    /**
+     * "alias.field" formatında sahəni tableMap-dən resolve edir.
+     * Alias yoxdursa əsas cədvəl istifadə edilir.
+     */
+    @SuppressWarnings("unchecked")
+    private Field<Object> resolveAliasField(String aliasAndField,
+                                             EntityTable<T> mainTable,
+                                             Map<String, EntityTable<?>> tableMap) {
+        int dot = aliasAndField.indexOf('.');
+        String alias     = (dot > 0) ? aliasAndField.substring(0, dot) : null;
+        String fieldName = (dot > 0) ? aliasAndField.substring(dot + 1) : aliasAndField;
+        EntityTable<?> t = (alias != null)
+                ? tableMap.getOrDefault(alias, mainTable)
+                : mainTable;
+        return (Field<Object>) t.getField(fieldName);
+    }
+
+    /**
+     * İki field arasında Op-a uyğun Condition yaradır.
+     * JOIN ON və field-to-field WHERE şərtləri üçün istifadə edilir.
+     */
+    @SuppressWarnings("unchecked")
+    private static Condition applyFieldOp(Op op, Field<Object> from, Field<Object> to) {
+        if (op == null) return from.eq(to);
+        return switch (op) {
+            case NOT_EQUAL                -> from.ne(to);
+            case LESS_THAN                -> from.lt(to);
+            case LESS_THAN_OR_EQUAL_TO    -> from.le(to);
+            case GREATER_THAN             -> from.gt(to);
+            case GREATER_THAN_OR_EQUAL_TO -> from.ge(to);
+            default                       -> from.eq(to);
+        };
     }
 
     private SelectHavingStep<Record> buildGroupBy(
