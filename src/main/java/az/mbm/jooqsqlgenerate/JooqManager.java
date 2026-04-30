@@ -336,6 +336,22 @@ public class JooqManager {
             return this;
         }
 
+        /**
+         * ON şərti: konkret fromAlias.fromField OP join cədvəl.toField
+         *
+         * <pre>{@code
+         *   .addInnerJoin(RequestEntity.class, "r")
+         *       .onFrom("t", "fkRequestId", Op.EQUAl, "id")
+         *       .andOn("status", Op.EQUAl, "A")
+         *       .done()
+         * }</pre>
+         */
+        @SuppressWarnings("unchecked")
+        public JoinSetup onFrom(String fromAlias, String fromField, Op op, String toField) {
+            inner.onFrom(fromAlias, fromField, op, toField);
+            return this;
+        }
+
         /** JOIN ON-a əlavə dəyər şərti: join cədvəli.field OP value */
         @SuppressWarnings("unchecked")
         public JoinSetup andOn(String field, Op op, Object value) {
@@ -581,6 +597,386 @@ public class JooqManager {
     /** Birbaşa jOOQ {@link Condition} — WHERE-ə. */
     public JooqManager addRawCondition(Condition condition) {
         q().rawCondition(condition);
+        return this;
+    }
+
+    /**
+     * OR qrupu filter — sadə hal.
+     * Eyni orGroupAlias-lı şərtlər OR ilə birləşir, nəticə AND ilə əsas WHERE-ə qoşulur.
+     *
+     * <pre>{@code
+     *   // WHERE status = 'A' AND (actionType = 'IN' OR actionType = 'OUT')
+     *   .addFilter("t.status", Op.EQUAl, "A")
+     *   .addOrFilter("myOr", "t.actionType", Op.EQUAl, "IN")
+     *   .addOrFilter("myOr", "t.actionType", Op.EQUAl, "OUT")
+     * }</pre>
+     */
+    public JooqManager addOrFilter(String orGroupAlias, String aliasAndField, Op op, Object value) {
+        q().orFilter(orGroupAlias, aliasAndField, op, value);
+        return this;
+    }
+
+    /**
+     * OR qrupu filter — mürəkkəb hal: (andGroup1 OR andGroup2).
+     * Eyni andGroupAlias-lı şərtlər AND, fərqli andGroupAlias-lılar OR ilə birləşir.
+     *
+     * <pre>{@code
+     *   // WHERE (field1='y' AND field2='z') OR (field3='a' AND field4='b')
+     *   .addOrFilter("myOr", "andGroup1", "t.field1", Op.EQUAl, "y")
+     *   .addOrFilter("myOr", "andGroup1", "t.field2", Op.EQUAl, "z")
+     *   .addOrFilter("myOr", "andGroup2", "t.field3", Op.EQUAl, "a")
+     *   .addOrFilter("myOr", "andGroup2", "t.field4", Op.EQUAl, "b")
+     * }</pre>
+     */
+    public JooqManager addOrFilter(String orGroupAlias, String andGroupAlias, String aliasAndField, Op op, Object value) {
+        q().orFilter(orGroupAlias, andGroupAlias, aliasAndField, op, value);
+        return this;
+    }
+
+    /**
+     * OR qrupu filter — fluent builder ilə çoxlu field əlavə etmək.
+     *
+     * <p>İlk field ilə builder-i başladır. Sonrakı field-lər {@code .add()} ilə
+     * əlavə edilir, {@code .done()} ilə {@link JooqManager}-ə qayıdılır.
+     *
+     * <p>Eyni {@code conditionAlias} altındakı fərqli field-lər OR,
+     * eyni field-in çoxlu op-ları AND ilə birləşir.
+     *
+     * <pre>{@code
+     *   // WHERE (t.taskNo LIKE '%x%' OR t.carrierDescription LIKE '%x%' OR r.requestDescription LIKE '%x%')
+     *   .addOrOperation("operation", "t", "taskNo",             operation)
+     *   .add            (           "t", "carrierDescription",  operation)
+     *   .add            (           "r", "requestDescription",  operation)
+     *   .done()
+     *
+     *   // WHERE (t.amount > 100 OR t.amount IS NULL)
+     *   .addOrOperation("ag", "t", "amount", Map.of("greaterThan", "100", "isNull", ""))
+     *   .done()
+     * }</pre>
+     *
+     * @param conditionAlias OR qrupunun adı
+     * @param tableAlias     cədvəlin alias-ı
+     * @param field          sahə adı (camelCase)
+     * @param operations     əməliyyat adı → String dəyər cütləri
+     */
+    public OrOperationBuilder addOrOperation(String conditionAlias,
+                                             String tableAlias,
+                                             String field,
+                                             Map<String, String> operations) {
+        return new OrOperationBuilder(this, conditionAlias)
+                .add(tableAlias, field, operations);
+    }
+
+    /**
+     * Fluent OR qrupu builder — {@link #addOrOperation} ilə başlayır, {@link #done} ilə bitir.
+     *
+     * <pre>{@code
+     *   jooq.addOrOperation("op", "t", "taskNo",            op)
+     *       .add(            "t", "carrierDescription",      op)
+     *       .add(            "r", "requestDescription",      op)
+     *       .done()
+     *       .addFilter(...)
+     * }</pre>
+     */
+    public final class OrOperationBuilder {
+        private final JooqManager manager;
+        private final String      conditionAlias;
+
+        OrOperationBuilder(JooqManager manager, String conditionAlias) {
+            this.manager        = manager;
+            this.conditionAlias = conditionAlias;
+        }
+
+        /**
+         * OR qrupuna yeni field əlavə edir.
+         *
+         * @param tableAlias  cədvəlin alias-ı
+         * @param field       sahə adı (camelCase)
+         * @param operations  əməliyyat adı → String dəyər cütləri
+         */
+        public OrOperationBuilder add(String tableAlias,
+                                      String field,
+                                      Map<String, String> operations) {
+            // andGroup = "tableAlias.field" → hər field öz OR branch-ında
+            manager.applyOrOperation(conditionAlias, tableAlias + "." + field,
+                                     tableAlias, field, operations);
+            return this;
+        }
+
+        /** Builder-i tamamlayır, {@link JooqManager}-ə qayıdır. */
+        public JooqManager done() {
+            return manager;
+        }
+    }
+
+    /**
+     * Mürəkkəb OR/AND qruplaması üçün fluent builder.
+     *
+     * <p>Dəstəklənən məntiqlər:
+     * <pre>
+     *   x AND (y OR z)                   — sadə OR qrupu
+     *   x AND (y OR (z AND f))           — OR içində AND alt-qrupu
+     *   x AND ((a AND b) OR (c AND d))   — çoxlu AND alt-qrupları
+     * </pre>
+     *
+     * <pre>{@code
+     *   // x AND (y OR (z AND f))
+     *   jooq.addFilter("t.status", Op.EQUAl, "ACTIVE")          // x
+     *       .orGroup("G")
+     *           .or("t", "name",   Map.of("like", "ali"))        // y  (öz OR branch-ı)
+     *           .andBranch("zf")                                 // (z AND f)
+     *               .add("t", "amount",  Map.of("gt",  "100"))   // z
+     *               .add("t", "country", Map.of("eq",  "AZ"))    // f
+     *           .end()
+     *       .done()
+     *
+     *   // x AND (taskNo LIKE '%x%' OR carrier LIKE '%x%' OR request LIKE '%x%')
+     *   jooq.orGroup("operation")
+     *           .or("t", "taskNo",            operation)
+     *           .or("t", "carrierDescription", operation)
+     *           .or("r", "requestDescription", operation)
+     *       .done()
+     * }</pre>
+     *
+     * @param conditionAlias OR qrupunun adı — WHERE-ə AND ilə birləşir
+     */
+    public OrGroupBuilder orGroup(String conditionAlias) {
+        return new OrGroupBuilder(this, conditionAlias);
+    }
+
+    /**
+     * Fluent OR qrupu builder — {@link #orGroup} ilə başlayır.
+     *
+     * <ul>
+     *   <li>{@link #or}         — sadə OR branch (field öz andGroup-unda)</li>
+     *   <li>{@link #andBranch}  — AND alt-qrupu başladır → {@link AndBranchBuilder}</li>
+     *   <li>{@link #done}       — {@link JooqManager}-ə qayıdır</li>
+     * </ul>
+     */
+    public final class OrGroupBuilder {
+        private final JooqManager manager;
+        private final String      conditionAlias;
+        private       int         orCounter = 0;  // hər .or() çağırışı unikal andGroup alır
+
+        OrGroupBuilder(JooqManager manager, String conditionAlias) {
+            this.manager        = manager;
+            this.conditionAlias = conditionAlias;
+        }
+
+        /**
+         * Sadə OR branch — {@code Map} ilə.
+         *
+         * <pre>{@code
+         *   .or("t", "taskNo",             Map.of("like", "x"))
+         *   .or("t", "carrierDescription", Map.of("like", "x"))
+         *   // → (taskNo LIKE '%x%' OR carrierDescription LIKE '%x%')
+         * }</pre>
+         */
+        public OrGroupBuilder or(String tableAlias, String field,
+                                 Map<String, String> operations) {
+            manager.applyOrOperation(conditionAlias, tableAlias + "." + field,
+                                     tableAlias, field, operations);
+            return this;
+        }
+
+        /**
+         * Sadə OR branch — {@link Op} + dəyər ilə.
+         *
+         * <pre>{@code
+         *   .or("t", "status", Op.EQUAl, "ACTIVE")
+         *   .or("t", "amount", Op.GREATER_THAN, 100)
+         *   // → (status = 'ACTIVE' OR amount > 100)
+         * }</pre>
+         *
+         * @param value null olduqda şərt tətbiq edilmir
+         */
+        public OrGroupBuilder or(String tableAlias, String field, Op op, Object value) {
+            if (tableAlias == null || field == null || op == null || value == null) return this;
+            String aliasAndField = tableAlias + "." + field;
+            // Hər .or() çağırışı unikal andGroup alır →
+            // eyni field belə olsa OR-lanır (AND deyil)
+            String uniqueAndGroup = aliasAndField + "_" + (orCounter++);
+            manager.q().orFilter(conditionAlias, uniqueAndGroup, aliasAndField, op, value);
+            return this;
+        }
+
+        /**
+         * AND alt-qrupu başladır — eyni {@code branchAlias} altındakı field-lər AND,
+         * bu alt-qrup isə digər OR branch-larla OR ilə birləşir.
+         *
+         * <pre>{@code
+         *   .andBranch("zf")
+         *       .add("t", "amount",  Map.of("greaterThan", "100"))
+         *       .add("t", "country", Map.of("equal",       "AZ"))
+         *   .end()
+         *   // → (amount > 100 AND country = 'AZ')  — bu blok OR qrupunun bir branch-ıdır
+         * }</pre>
+         *
+         * @param branchAlias AND alt-qrupunun unikal adı (orGroup içində)
+         */
+        public AndBranchBuilder andBranch(String branchAlias) {
+            return new AndBranchBuilder(this, branchAlias);
+        }
+
+        /** Builder-i tamamlayır, {@link JooqManager}-ə qayıdır. */
+        public JooqManager done() {
+            return manager;
+        }
+    }
+
+    /**
+     * AND alt-qrupu builder — {@link OrGroupBuilder#andBranch} ilə başlayır.
+     *
+     * <p>Eyni {@code branchAlias} altındakı bütün field-lər AND ilə birləşir.
+     * {@link #end()} çağrılanda {@link OrGroupBuilder}-ə qayıdılır.
+     */
+    public final class AndBranchBuilder {
+        private final OrGroupBuilder parent;
+        private final String         branchAlias;
+
+        AndBranchBuilder(OrGroupBuilder parent, String branchAlias) {
+            this.parent      = parent;
+            this.branchAlias = branchAlias;
+        }
+
+        /**
+         * AND alt-qrupuna field əlavə edir — {@code Map} ilə.
+         *
+         * <pre>{@code
+         *   .add("t", "type", Map.of("equal", "IN"))
+         * }</pre>
+         */
+        public AndBranchBuilder add(String tableAlias, String field,
+                                    Map<String, String> operations) {
+            parent.manager.applyOrOperation(parent.conditionAlias, branchAlias,
+                                            tableAlias, field, operations);
+            return this;
+        }
+
+        /**
+         * AND alt-qrupuna field əlavə edir — {@link Op} + dəyər ilə.
+         *
+         * <pre>{@code
+         *   .add("t", "type",   Op.EQUAl, "IN")
+         *   .add("t", "status", Op.EQUAl, "ACTIVE")
+         * }</pre>
+         *
+         * @param tableAlias cədvəlin alias-ı
+         * @param field      sahə adı (camelCase)
+         * @param op         müqayisə operatoru
+         * @param value      null olduqda şərt tətbiq edilmir
+         */
+        public AndBranchBuilder add(String tableAlias, String field, Op op, Object value) {
+            if (tableAlias == null || field == null || op == null || value == null) return this;
+            String aliasAndField = tableAlias + "." + field;
+            parent.manager.q().orFilter(parent.conditionAlias, branchAlias, aliasAndField, op, value);
+            return this;
+        }
+
+        /** AND alt-qrupunu bağlayır, {@link OrGroupBuilder}-ə qayıdır. */
+        public OrGroupBuilder end() {
+            return parent;
+        }
+    }
+
+    /**
+     * OR qrupu şərtlərini {@link JooqQuery}-yə tətbiq edən daxili helper.
+     *
+     * @param conditionAlias  OR qrupunun adı
+     * @param andGroup        AND alt-qrupunun adı (eyni adlılar AND-lənir, fərqlilər OR-lanır)
+     * @param tableAlias      cədvəl alias-ı
+     * @param field           sahə adı
+     * @param operations      əməliyyat adı → String dəyər cütləri
+     */
+    private void applyOrOperation(String conditionAlias,
+                                   String andGroup,
+                                   String tableAlias,
+                                   String field,
+                                   Map<String, String> operations) {
+        if (conditionAlias == null || conditionAlias.isBlank()) return;
+        if (tableAlias     == null || tableAlias.isBlank())     return;
+        if (field          == null || field.isBlank())          return;
+        if (operations     == null || operations.isEmpty())     return;
+
+        String aliasAndField = tableAlias + "." + field;
+        String effectiveAndGroup = (andGroup != null && !andGroup.isBlank())
+                ? andGroup : aliasAndField;
+
+        for (Map.Entry<String, String> e : operations.entrySet()) {
+            if (e.getKey() == null) continue;
+
+            Op op = parseOperationPublic(e.getKey());
+            if (op == null) continue;
+
+            if (op == Op.IS_EMPTY || op == Op.IS_NOT_EMPTY) {
+                q().orFilter(conditionAlias, effectiveAndGroup, aliasAndField, op, "__null_check__");
+                continue;
+            }
+
+            String raw = e.getValue();
+            if (raw == null || raw.isBlank()) continue;
+
+            Object value = parseOrValue(op, raw);
+            if (value == null) continue;
+
+            q().orFilter(conditionAlias, effectiveAndGroup, aliasAndField, op, value);
+        }
+    }
+
+    /**
+     * String dəyərini Op-a uyğun struktural formata çevirir.
+     *
+     * <p>Həqiqi tip dönüşümü ({@code String → Integer, Long, LocalDate, ...})
+     * SQL generasiya zamanı {@code FilterStrategies.coerced()} tərəfindən
+     * field-in {@code DataType}-ına əsasən avtomatik edilir.
+     * Bu metod yalnız struktural çevrilmə edir:
+     * <ul>
+     *   <li>{@code IN / NOT_IN}  — vergüllə ayrılmış siyahı → {@code List<String>}</li>
+     *   <li>{@code BETWEEN}      — {@code "from,to"} → {@code Object[]{"from","to"}}</li>
+     *   <li>Digərlər             — raw string (coercion sonradan baş verir)</li>
+     * </ul>
+     */
+    private static Object parseOrValue(Op op, String raw) {
+        return switch (op) {
+            case IN, NOT_IN -> {
+                // "A,B,C" → ["A", "B", "C"] — boş elementlər təmizlənir
+                java.util.List<String> items = java.util.Arrays.stream(raw.split(","))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty() && !s.equalsIgnoreCase("null"))
+                        .toList();
+                yield items.isEmpty() ? null : items;
+            }
+            case BETWEEN -> {
+                // "from,to" → Object[]{"from","to"} — FilterStrategies.BETWEEN anlar
+                String[] parts = raw.split(",", 2);
+                if (parts.length < 2) yield null;
+                String from = parts[0].trim(), to = parts[1].trim();
+                if (from.isEmpty() || from.equalsIgnoreCase("null") ||
+                    to.isEmpty()   || to.equalsIgnoreCase("null"))   yield null;
+                yield new Object[]{from, to};
+            }
+            // Bütün digər op-lar (EQUAl, LIKE, GT, LT, REGEXP, ...):
+            // raw string ötürülür, FilterStrategies.coerced() DB tipinə çevirir
+            default -> raw.trim().isEmpty() ? null : raw.trim();
+        };
+    }
+
+    /**
+     * Field-to-field WHERE şərti — iki cədvəl sütununu Op ilə müqayisə edir.
+     *
+     * <pre>{@code
+     *   .addFieldFilter("t.fkTaskId",   Op.EQUAl,        "f.fkTaskId")
+     *   .addFieldFilter("t.totalPrice", Op.GREATER_THAN,  "f.totalPrice")
+     *   // → WHERE t."fk_task_id" = f."fk_task_id"
+     *   //     AND t."total_price" > f."total_price"
+     * }</pre>
+     *
+     * @param leftAliasAndField  sol tərəf: {@code "alias.field"}
+     * @param op                 müqayisə operatoru (EQUAl, NOT_EQUAL, GREATER_THAN, ...)
+     * @param rightAliasAndField sağ tərəf: {@code "alias.field"}
+     */
+    public JooqManager addFieldFilter(String leftAliasAndField, Op op, String rightAliasAndField) {
+        q().fieldFilter(leftAliasAndField, op, rightAliasAndField);
         return this;
     }
 
