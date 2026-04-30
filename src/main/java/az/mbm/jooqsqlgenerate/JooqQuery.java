@@ -82,10 +82,13 @@ public final class JooqQuery<T> {
     private final List<SubQueryInRow>       subQueryInCols   = new ArrayList<>();
     private final List<Condition>           rawConditions    = new ArrayList<>();
     private final List<Condition>           rawHavings       = new ArrayList<>();
+    private final List<OrFilterEntry>       orFilterEntries  = new ArrayList<>();
+    private record OrFilterEntry(String orGroup, String andGroup, String aliasAndField, Op op, Object value) {}
     private final List<Field<?>>            rawSelectFields  = new ArrayList<>();
     private final List<SortField<?>>        rawOrderFields   = new ArrayList<>();
     private final List<FilterRow>           filters          = new ArrayList<>();
-    private final List<FiltersEntry>   globalFilters    = new ArrayList<>();
+    private final List<FiltersEntry>   globalFilters       = new ArrayList<>();
+    private final List<FieldFilterEntry> fieldFilterEntries = new ArrayList<>();
     private final List<JoinRow>             joins            = new ArrayList<>();
     private final List<ExtJoinRow>          extJoins         = new ArrayList<>();
     private final List<SelectJoinRow>       selectJoins      = new ArrayList<>();
@@ -131,9 +134,15 @@ public final class JooqQuery<T> {
     private record CoalesceRow(String alias, Object def, String[] fields) {}
     private record SubQueryInRow(List<String> outerFields, SubQueryIn sub) {}
     private record FiltersEntry(String aliasAndField, Op op, Object value) {}
+    private record FieldFilterEntry(String leftAliasAndField, Op op, String rightAliasAndField) {}
     private record RawJoinRow(Table<?> table, JoinType type, Condition on) {}
-    /** Çoxlu ON field cütü: fromAlias.fromField = toAlias.toField */
-    private record FieldPair(String fromAlias, String fromField, String toField) {}
+    /** Çoxlu ON field cütü: fromAlias.fromField OP toAlias.toField */
+    private record FieldPair(String fromAlias, String fromField, Op op, String toField) {
+        /** Geri uyğunluq üçün — op verilmədikdə EQUAl istifadə edilir */
+        FieldPair(String fromAlias, String fromField, String toField) {
+            this(fromAlias, fromField, Op.EQUAl, toField);
+        }
+    }
     /** JOIN ON-da əlavə value şərti: toAlias.field OP value */
     private record JoinFilterRow(String field, Op op, Object value) {}
     /** Genişləndirilmiş entity JOIN — çoxlu field cütü + əlavə şərtlər */
@@ -525,7 +534,7 @@ public final class JooqQuery<T> {
          */
         public JoinBuilder on(String fromField, String toField) {
             if (fromField != null && toField != null)
-                pairs.add(new FieldPair(alias, fromField, toField));
+                pairs.add(new FieldPair(alias, fromField, Op.EQUAl, toField));
             return this;
         }
 
@@ -538,7 +547,23 @@ public final class JooqQuery<T> {
          */
         public JoinBuilder onFrom(String fromAlias, String fromField, String toField) {
             if (fromAlias != null && fromField != null && toField != null)
-                pairs.add(new FieldPair(fromAlias, fromField, toField));
+                pairs.add(new FieldPair(fromAlias, fromField, Op.EQUAl, toField));
+            return this;
+        }
+
+        /**
+         * ON şərti: konkret alias.fromField OP join cədvəl.toField
+         *
+         * <pre>{@code .onFrom("t", "fkRequestId", Op.EQUAl, "id") }</pre>
+         *
+         * @param fromAlias  "from" cədvəlin alias-ı
+         * @param fromField  həmin cədvəldəki sahə adı
+         * @param op         müqayisə operatoru (EQUAl, NOT_EQUAL, GREATER_THAN, ...)
+         * @param toField    join cədvəlindəki sahə adı
+         */
+        public JoinBuilder onFrom(String fromAlias, String fromField, Op op, String toField) {
+            if (fromAlias != null && fromField != null && op != null && toField != null)
+                pairs.add(new FieldPair(fromAlias, fromField, op, toField));
             return this;
         }
 
@@ -888,6 +913,24 @@ public final class JooqQuery<T> {
         return this;
     }
 
+    /**
+     * Field-to-field WHERE şərti — iki cədvəl sütununu Op ilə müqayisə edir.
+     *
+     * <pre>{@code
+     *   .fieldFilter("t.fkTaskId",   Op.EQUAl,        "f.fkTaskId")
+     *   .fieldFilter("t.totalPrice", Op.GREATER_THAN,  "f.totalPrice")
+     *   // → WHERE t."fk_task_id" = f."fk_task_id"
+     *   //     AND t."total_price" > f."total_price"
+     * }</pre>
+     */
+    public JooqQuery<T> fieldFilter(String leftAliasAndField, Op op, String rightAliasAndField) {
+        if (leftAliasAndField != null && !leftAliasAndField.isBlank()
+                && op != null
+                && rightAliasAndField != null && !rightAliasAndField.isBlank())
+            fieldFilterEntries.add(new FieldFilterEntry(leftAliasAndField, op, rightAliasAndField));
+        return this;
+    }
+
     /** WHERE field IN (SELECT ...) subquery. */
     public JooqQuery<T> inSubQuery(String outerField, SubQueryIn sub) {
         if (outerField != null && !outerField.isBlank() && sub != null)
@@ -938,6 +981,41 @@ public final class JooqQuery<T> {
     /** Birbaşa jOOQ {@link Condition} — WHERE-ə. */
     public JooqQuery<T> rawCondition(Condition c) {
         if (c != null) rawConditions.add(c);
+        return this;
+    }
+
+    /**
+     * OR qrupu filter — sadə hal: eyni orGroupAlias-lı şərtlər OR ilə birləşir.
+     *
+     * <pre>{@code
+     *   // WHERE status = 'A' AND (actionType = 'IN' OR actionType = 'OUT')
+     *   .filter("t.status", Op.EQUAl, "A")
+     *   .orFilter("myOr", "t.actionType", Op.EQUAl, "IN")
+     *   .orFilter("myOr", "t.actionType", Op.EQUAl, "OUT")
+     * }</pre>
+     */
+    public JooqQuery<T> orFilter(String orGroupAlias, String aliasAndField, Op op, Object value) {
+        if (orGroupAlias != null && !orGroupAlias.isBlank() && aliasAndField != null && value != null)
+            orFilterEntries.add(new OrFilterEntry(orGroupAlias, orGroupAlias, aliasAndField, op, value));
+        return this;
+    }
+
+    /**
+     * OR qrupu filter — mürəkkəb hal: (andGroup1 OR andGroup2).
+     *
+     * <pre>{@code
+     *   // WHERE (field1='y' AND field2='z') OR (field3='a' AND field4='b')
+     *   .orFilter("myOr", "andGroup1", "t.field1", Op.EQUAl, "y")
+     *   .orFilter("myOr", "andGroup1", "t.field2", Op.EQUAl, "z")
+     *   .orFilter("myOr", "andGroup2", "t.field3", Op.EQUAl, "a")
+     *   .orFilter("myOr", "andGroup2", "t.field4", Op.EQUAl, "b")
+     * }</pre>
+     */
+    public JooqQuery<T> orFilter(String orGroupAlias, String andGroupAlias, String aliasAndField, Op op, Object value) {
+        if (orGroupAlias != null && !orGroupAlias.isBlank()
+                && andGroupAlias != null && !andGroupAlias.isBlank()
+                && aliasAndField != null && value != null)
+            orFilterEntries.add(new OrFilterEntry(orGroupAlias, andGroupAlias, aliasAndField, op, value));
         return this;
     }
 
@@ -1384,7 +1462,7 @@ public final class JooqQuery<T> {
                 Field<Object> fromField = (Field<Object>) fromTable.getField(fp.fromField());
                 @SuppressWarnings("unchecked")
                 Field<Object> toField   = (Field<Object>) toTable.getField(fp.toField());
-                Condition c = fromField.eq(toField);
+                Condition c = applyFieldOp(fp.op(), fromField, toField);
                 on = (on == null) ? c : on.and(c);
             }
 
@@ -1458,7 +1536,9 @@ public final class JooqQuery<T> {
 
         for (SubQueryInRow sir : subQueryInCols) builder.inSubQuery(sir.outerFields(), sir.sub());
         for (FiltersEntry gf : globalFilters) builder.globalWhereFilter(gf.aliasAndField(), gf.op(), gf.value());
+        for (FieldFilterEntry ff : fieldFilterEntries) builder.fieldFilter(ff.leftAliasAndField(), ff.op(), ff.rightAliasAndField());
         for (Condition rc : rawConditions) builder.rawCondition(rc);
+        for (OrFilterEntry e : orFilterEntries) builder.orFilter(e.orGroup(), e.andGroup(), e.aliasAndField(), e.op(), e.value());
         for (ExistsSpec<?, ?> es : existsSpecs) builder.where((Specification) es);
 
         // ComputedField alias filter → globalWhereFilter vasitəsilə ifadə genişləndirilir
@@ -1712,7 +1792,7 @@ public final class JooqQuery<T> {
                 if (fromF == null) fromF = DSL.field(DSL.name(fp.fromAlias(), fp.fromField()));
                 Field<?> toF   = resolveFromTable(jt, fp.toField());
                 if (toF == null) toF = DSL.field(DSL.name(jr.alias(), fp.toField()));
-                Condition c = ((Field<Object>) fromF).eq((Field<Object>) toF);
+                Condition c = applyFieldOp(fp.op(), (Field<Object>) fromF, (Field<Object>) toF);
                 on = (on == null) ? c : on.and(c);
             }
             for (JoinFilterRow extra : jr.extras()) {
@@ -1739,7 +1819,7 @@ public final class JooqQuery<T> {
                 Field<?> fromF   = resolveFromTable(fromTbl, fp.fromField());
                 if (fromF == null) fromF = DSL.field(DSL.name(fp.fromAlias(), fp.fromField()));
                 Field<?> toF = toEt.getField(fp.toField());
-                Condition c = ((Field<Object>) fromF).eq((Field<Object>) toF);
+                Condition c = applyFieldOp(fp.op(), (Field<Object>) fromF, (Field<Object>) toF);
                 on = (on == null) ? c : on.and(c);
             }
             for (JoinFilterRow extra : jr.extras()) {
@@ -1971,5 +2051,28 @@ public final class JooqQuery<T> {
      */
     private static String camelToSnake(String s) {
         return s.replaceAll("([a-z])([A-Z])", "$1_$2").toLowerCase();
+    }
+
+    /**
+     * İki field arasında Op-a uyğun Condition yaradır.
+     * JOIN ON şərtlərindəki field-to-field müqayisə üçün istifadə edilir.
+     *
+     * <pre>{@code
+     *   applyFieldOp(Op.EQUAl,        fromF, toF)  →  fromF = toF
+     *   applyFieldOp(Op.NOT_EQUAL,    fromF, toF)  →  fromF != toF
+     *   applyFieldOp(Op.GREATER_THAN, fromF, toF)  →  fromF > toF
+     * }</pre>
+     */
+    @SuppressWarnings("unchecked")
+    private static Condition applyFieldOp(Op op, Field<Object> from, Field<Object> to) {
+        if (op == null) return from.eq(to);
+        return switch (op) {
+            case NOT_EQUAL                  -> from.ne(to);
+            case LESS_THAN                  -> from.lt(to);
+            case LESS_THAN_OR_EQUAL_TO      -> from.le(to);
+            case GREATER_THAN               -> from.gt(to);
+            case GREATER_THAN_OR_EQUAL_TO   -> from.ge(to);
+            default                         -> from.eq(to);   // EQUAl + digərləri
+        };
     }
 }
