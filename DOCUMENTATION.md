@@ -421,10 +421,17 @@ hər parametri ayrıca `if` ilə yoxlamağa məcbur deyilsən:
 // status=null, name="Ali" gəldi — yalnız name filter işləyəcək
 Specification filter = Filter.of()
     .eq("status", status)    // null → bu sətir tamamilə atlanır
-    .like("name", name)      // "Ali" → WHERE u.name LIKE '%Ali%'
+    .like("name", name)      // "Ali" → WHERE LOWER(REPLACE(...)) LIKE '%ali%'
     .in("roleId", roleIds)   // boş list → atlanır
     .build();
 ```
+
+**`like()`, `startWith()`, `endWith()` — `FilterStrategies` üzərindən işləyir:**
+
+Bu metodlar `FilterStrategies.get(Op.LIKE/START_WITH/END_WITH).apply(field, value)` çağırır.
+Buna görə field tipinə görə eyni avtomatik davranış tətbiq olunur:
+- String field (`varchar`, `text`) → `LOWER(REPLACE(REPLACE(...))) LIKE '%val%'`
+- Numeric field (`bigint`, `integer`) → `CAST(field AS varchar) LIKE '%val%'`
 
 > **Qeyd:** `Filter` sinfi yalnız main table üçündür. JOIN cədvəlinin sahələrini filtreləmək
 > üçün `filter("alias.field", op, value)` metodunu birbaşa `JooqQuery` / `JooqManager`
@@ -583,7 +590,7 @@ Principle):
 ```java
 // Daxili qeydiyyat (sinif ilk dəfə yüklənəndə bir dəfə işlənir):
 register(Op.EQUAl,    (field, val) -> field.eq(coerced(field, val)));
-register(Op.LIKE,     (field, val) -> field.like("%" + val + "%"));
+register(Op.LIKE,     (field, val) -> likeReadyField(field).like("%" + likeReadyVal(field, val) + "%"));
 register(Op.IN,       (field, val) -> field.in(coercedList(field, val)));
 register(Op.BETWEEN,  (field, val) -> field.between(...));
 
@@ -600,6 +607,24 @@ FilterStrategies.register(Op.MY_CUSTOM_OP,
 **Tip uyğunlaşdırması (coercion):** Əgər `Field` INTEGER tipindədir amma `value` `"25"` sətri
 kimi gəlirsə, `coerced()` metodu `"25"` → `25` çevirir. Bu REST-dən gələn string
 parametrlər üçün çox vacibdir.
+
+**LIKE üçün field tipinə görə davranış:**
+
+Rəqəm sütunlarında (`bigint`, `integer`, `numeric`) Türk simvolu ('İ', 'I') ola bilməz.
+Ona görə LIKE əməliyyatında field tipinə görə fərqli SQL yaranır:
+
+| Field tipi | Yaranan SQL |
+|---|---|
+| `varchar`, `text` | `LOWER(REPLACE(REPLACE(field,'İ','i'),'I','i')) LIKE '%val%'` |
+| `bigint`, `integer`, `numeric` | `CAST(field AS varchar) LIKE '%val%'` |
+
+Bu məntiqi üç daxili köməkçi metod idarə edir:
+- `isStringField(field)` — field `CharSequence` alt-tipi olub olmadığını yoxlayır
+- `likeReadyField(field)` — string → `turkishLower(field)`; numeric → `field.cast(String.class)`
+- `likeReadyVal(field, val)` — string → `turkishNormalize(val)`; numeric → `val.toString()`
+
+Bu strategiya bütün LIKE axınlarına (WHERE, HAVING, OR filter, SubQuery, SubSelect) tətbiq olunur,
+çünki hamısı `FilterStrategies.get(op).apply(field, val)` üzərindən keçir.
 
 ---
 
@@ -877,3 +902,5 @@ JooqQuery.from(Product.class, "p")
 | HAVING-də alias prefix | `filter("t.computedAlias", op, value)` — prefix stripped, HAVING-ə düşür |
 | SELECT-də ROUND + filter uyğunluğu | `selectRound(field, scale, alias)` — filter-də ROUND avtomatik tətbiq olunur |
 | WHERE-də ROUND, SELECT-siz | `Op.GREATER_THAN_ROUND_2` kimi ROUND Op-lar — 30 variant (skala 0–4) |
+| LIKE numeric field-də (bigint xətası) | `isStringField()` → `likeReadyField()` + `likeReadyVal()` — tip yoxlaması ilə CAST/REPLACE seçimi |
+| `Filter.java` LIKE bypass | `like()` / `startWith()` / `endWith()` `FilterStrategies` üzərindən işləyir — tip yoxlaması daxildir |
