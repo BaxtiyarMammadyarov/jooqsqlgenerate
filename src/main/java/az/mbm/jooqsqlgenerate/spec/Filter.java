@@ -99,22 +99,50 @@ public final class Filter<T> {
 
     // ─── LIKE ────────────────────────────────────────────────────────────
 
-    /** {@code WHERE field LIKE '%value%'} — value null/boş-dursa atlanır */
+    /**
+     * {@code WHERE field LIKE '%value%'} — value null/boş-dursa atlanır.
+     *
+     * <p>String field → {@code LOWER(REPLACE(REPLACE(field,'İ','i'),'I','i')) LIKE '%val%'}
+     * <br>Numeric field → {@code CAST(field AS varchar) LIKE '%val%'}
+     */
+    @SuppressWarnings("unchecked")
     public Filter<T> like(String field, String value) {
         if (isBlank(field) || isBlank(value)) return this;
-        return add(table -> table.getField(field).like("%" + value + "%"));
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.LIKE).apply(f, value);
+        });
     }
 
-    /** {@code WHERE field LIKE 'value%'} — value null/boş-dursa atlanır */
+    /**
+     * {@code WHERE field LIKE 'value%'} — value null/boş-dursa atlanır.
+     *
+     * <p>String field → türk normallaşdırması ilə; Numeric field → sadə CAST.
+     */
+    @SuppressWarnings("unchecked")
     public Filter<T> startWith(String field, String value) {
         if (isBlank(field) || isBlank(value)) return this;
-        return add(table -> table.getField(field).like(value + "%"));
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.START_WITH).apply(f, value);
+        });
     }
 
-    /** {@code WHERE field LIKE '%value'} — value null/boş-dursa atlanır */
+    /**
+     * {@code WHERE field LIKE '%value'} — value null/boş-dursa atlanır.
+     *
+     * <p>String field → türk normallaşdırması ilə; Numeric field → sadə CAST.
+     */
+    @SuppressWarnings("unchecked")
     public Filter<T> endWith(String field, String value) {
         if (isBlank(field) || isBlank(value)) return this;
-        return add(table -> table.getField(field).like("%" + value));
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.END_WITH).apply(f, value);
+        });
     }
 
     // ─── IN / NOT IN ─────────────────────────────────────────────────────

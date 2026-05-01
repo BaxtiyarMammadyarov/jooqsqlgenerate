@@ -303,12 +303,12 @@ JooqQuery.from(User.class, "u")
 |---|---|---|
 | `EQUAl` | `= value` | `Op.EQUAl, "ACTIVE"` |
 | `NOT_EQUAL` | `!= value` | `Op.NOT_EQUAL, "BANNED"` |
-| `LIKE` | `LOWER(REPLACE(...)) LIKE '%val%'` | `Op.LIKE, "ali"` |
-| `START_WITH` | Türk-aware `LIKE 'val%'` | `Op.START_WITH, "A"` |
-| `END_WITH` | Türk-aware `LIKE '%val'` | `Op.END_WITH, ".az"` |
-| `LIKE_IGNORE_CASE` | Türk-aware `LIKE '%val%'` | `Op.LIKE_IGNORE_CASE, "İlkin"` |
-| `START_WITH_IGNORE_CASE` | Türk-aware `LIKE 'val%'` | `Op.START_WITH_IGNORE_CASE, "İ"` |
-| `END_WITH_IGNORE_CASE` | Türk-aware `LIKE '%val'` | `Op.END_WITH_IGNORE_CASE, "lı"` |
+| `LIKE` | String: `LOWER(REPLACE(...)) LIKE '%val%'` / Numeric: `CAST AS varchar LIKE '%val%'` | `Op.LIKE, "ali"` |
+| `START_WITH` | String: Türk-aware `LIKE 'val%'` / Numeric: `CAST AS varchar LIKE 'val%'` | `Op.START_WITH, "A"` |
+| `END_WITH` | String: Türk-aware `LIKE '%val'` / Numeric: `CAST AS varchar LIKE '%val'` | `Op.END_WITH, ".az"` |
+| `LIKE_IGNORE_CASE` | String: Türk-aware `LIKE '%val%'` / Numeric: `CAST AS varchar LIKE '%val%'` | `Op.LIKE_IGNORE_CASE, "İlkin"` |
+| `START_WITH_IGNORE_CASE` | String: Türk-aware `LIKE 'val%'` / Numeric: sadə CAST | `Op.START_WITH_IGNORE_CASE, "İ"` |
+| `END_WITH_IGNORE_CASE` | String: Türk-aware `LIKE '%val'` / Numeric: sadə CAST | `Op.END_WITH_IGNORE_CASE, "lı"` |
 | `IN` | `IN (...)` | `Op.IN, List.of(1,2,3)` |
 | `NOT_IN` | `NOT IN (...)` | `Op.NOT_IN, List.of(4,5)` |
 | `BETWEEN` | `BETWEEN a AND b` | `Op.BETWEEN, "100,500"` |
@@ -321,15 +321,33 @@ JooqQuery.from(User.class, "u")
 | `REGEXP` | `REGEXP pattern` | `Op.REGEXP, "^A.*"` |
 | `NOT_REGEXP` | `NOT REGEXP pattern` | `Op.NOT_REGEXP, "^B"` |
 
-### 4.3 Türk əlifbası case-insensitive LIKE
+### 4.3 Türk əlifbası case-insensitive LIKE — tip yoxlaması ilə
 
-`Op.LIKE`, `Op.START_WITH`, `Op.END_WITH` default olaraq Türk-aware məntiqilə işləyir:
+`Op.LIKE`, `Op.START_WITH`, `Op.END_WITH` (və `IGNORE_CASE` variantları) field tipinə
+görə fərqli SQL yaradır:
+
+**String field (`varchar`, `text`):**
 ```java
 .filter("u.firstName", Op.LIKE, "İlkin")
 // → WHERE LOWER(REPLACE(REPLACE(u."first_name",'İ','i'),'I','i'))
 //         LIKE '%ilkin%'
 // "İlkin", "ilkin", "ILKIN", "iLKİN" — hamısı tapılır
 ```
+
+**Numeric field (`bigint`, `integer`, `numeric`):**
+```java
+.filter("o.taskNo", Op.LIKE, "1042")
+// → WHERE CAST(o."task_no" AS varchar) LIKE '%1042%'
+// Rəqəm sütununda 'İ'/'I' ola bilməz — REPLACE/LOWER tətbiq olunmur
+```
+
+> **Niyə bu fərq lazımdır?**
+> Numeric field üçün `REPLACE(bigint, 'İ', 'i')` PostgreSQL-də
+> `function replace(bigint, unknown, unknown) does not exist` xətası verir.
+> Tip yoxlaması (`isStringField`) bu xətanın qarşısını avtomatik alır.
+
+Bu davranış bütün LIKE axınlarında eynidir: `filter()`, `globalFilter()`,
+`Filter.of().like()`, HAVING, SubQuery — hamısı `FilterStrategies` üzərindən keçir.
 
 ### 4.4 globalFilter — Filters builder ilə
 
