@@ -1,6 +1,7 @@
 package az.mbm.jooqsqlgenerate.factory;
 
 import org.jooq.DSLContext;
+import az.mbm.jooqsqlgenerate.builder.InsertQueryBuilder;
 import az.mbm.jooqsqlgenerate.builder.SelectQueryBuilder;
 import az.mbm.jooqsqlgenerate.builder.UpdateQueryBuilder;
 
@@ -30,10 +31,17 @@ import az.mbm.jooqsqlgenerate.builder.UpdateQueryBuilder;
  *       .set("status", "INACTIVE")
  *       .where(Spec.eq("id", userId))
  *       .execute();
+ *
+ *   // INSERT
+ *   Long newId = factory.insert(User.class)
+ *       .value("name",   "Əli")
+ *       .value("status", "ACTIVE")
+ *       .executeAndReturnId(Long.class);
  * }</pre>
  *
  * @see SelectQueryBuilder
  * @see UpdateQueryBuilder
+ * @see InsertQueryBuilder
  */
 public final class QueryFactory {
 
@@ -74,6 +82,27 @@ public final class QueryFactory {
      */
     public <T> UpdateQueryBuilder<T> update(Class<T> entity) {
         return new UpdateQueryBuilder<>(entity, dsl);
+    }
+
+    /**
+     * INSERT builder-i yaradır.
+     *
+     * <pre>{@code
+     *   // Tək sətir — id ilə:
+     *   Long id = factory.insert(User.class)
+     *       .value("name",   "Əli")
+     *       .value("status", "ACTIVE")
+     *       .executeAndReturnId(Long.class);
+     *
+     *   // Batch:
+     *   factory.insert(User.class)
+     *       .value("name", "Əli").addRow()
+     *       .value("name", "Vüsal")
+     *       .executeBatch();
+     * }</pre>
+     */
+    public <T> InsertQueryBuilder<T> insert(Class<T> entity) {
+        return new InsertQueryBuilder<>(entity, dsl);
     }
 
     /** DSLContext-i qaytarır (manual sorğular üçün) */
