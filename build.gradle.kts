@@ -7,7 +7,7 @@ plugins {
 
 // ─── Layihə məlumatları ───────────────────────────────────────────────────────
 group   = "az.mbm"
-version = "1.0.8"
+version = "1.0.10"
 
 // ─── Java versiyası ───────────────────────────────────────────────────────────
 java {
@@ -50,11 +50,12 @@ val signingPassword: String? = project.findProperty("signingPassword") as String
 val signingKeyFile = file("${System.getProperty("user.home")}/.gradle/secret.pgp")
 
 signing {
-    useInMemoryPgpKeys(
-        if (signingKeyFile.exists()) signingKeyFile.readText() else null,
-        signingPassword
-    )
-    sign(publishing.publications)
+    // Yalnız PGP key mövcud olduqda imzalama aktivləşdirilir.
+    // Local publish (publishToMavenLocal) zamanı key olmadığına görə avtomatik atlanır.
+    if (signingKeyFile.exists()) {
+        useInMemoryPgpKeys(signingKeyFile.readText(), signingPassword)
+        sign(publishing.publications)
+    }
 }
 
 // ─── Yayımlama konfiqurasiyası ────────────────────────────────────────────────
@@ -65,7 +66,7 @@ publishing {
 
             groupId    = "az.mbm"
             artifactId = "jooq-sql-generate"
-            version    = "1.0.8"
+            version    = "1.0.10"
 
             pom {
                 name        = "jooq-sql-generate"
