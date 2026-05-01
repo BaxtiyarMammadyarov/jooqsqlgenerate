@@ -57,20 +57,21 @@ public final class FilterStrategies {
         register(Op.IS_NOT_EMPTY,
                 (field, val) -> field.isNotNull());
 
-        // ─── LIKE — Türk əlifbası case-insensitive məntiqilə işləyir ────────
-        // LOWER(REPLACE(REPLACE(field,'İ','i'),'I','i')) LIKE '%val%'
-        // Həm sahə, həm dəyər normallaşdırılır — İ/I fərqi aradan qalxır
+        // ─── LIKE — tip yoxlaması ilə ────────────────────────────────────────
+        // String field  → LOWER(REPLACE(REPLACE(field,'İ','i'),'I','i')) LIKE '%val%'
+        // Numeric field → CAST(field AS varchar)                         LIKE '%val%'
+        // Rəqəm sütunlarında 'İ'/'I' ola bilməz — REPLACE/LOWER mənasızdır.
         register(Op.LIKE,
-                (field, val) -> turkishLower(field)
-                        .like("%" + turkishNormalize(val.toString()) + "%"));
+                (field, val) -> likeReadyField(field)
+                        .like("%" + likeReadyVal(field, val) + "%"));
 
         register(Op.START_WITH,
-                (field, val) -> turkishLower(field)
-                        .like(turkishNormalize(val.toString()) + "%"));
+                (field, val) -> likeReadyField(field)
+                        .like(likeReadyVal(field, val) + "%"));
 
         register(Op.END_WITH,
-                (field, val) -> turkishLower(field)
-                        .like("%" + turkishNormalize(val.toString())));
+                (field, val) -> likeReadyField(field)
+                        .like("%" + likeReadyVal(field, val)));
 
         // ─── IN / NOT IN — null elementlər çıxarılır, qalan tip uyğunlaşdırılır
         register(Op.IN, (field, val) -> {
@@ -107,19 +108,19 @@ public final class FilterStrategies {
                 (field, val) -> DSL.not(field.likeRegex(val.toString())));
 
         // ─── Türk əlifbası case-insensitive LIKE ─────────────────────────
-        // SQL: LOWER(REPLACE(REPLACE(field,'İ','i'),'I','i')) LIKE '%val%'
-        // Həm sahə, həm dəyər normallaşdırılır → İ/I fərqi aradan qalxır
+        // String field  → LOWER(REPLACE(REPLACE(field,'İ','i'),'I','i')) LIKE '%val%'
+        // Numeric field → CAST(field AS varchar)                         LIKE '%val%'
         register(Op.LIKE_IGNORE_CASE,
-                (field, val) -> turkishLower(field)
-                        .like("%" + turkishNormalize(val.toString()) + "%"));
+                (field, val) -> likeReadyField(field)
+                        .like("%" + likeReadyVal(field, val) + "%"));
 
         register(Op.START_WITH_IGNORE_CASE,
-                (field, val) -> turkishLower(field)
-                        .like(turkishNormalize(val.toString()) + "%"));
+                (field, val) -> likeReadyField(field)
+                        .like(likeReadyVal(field, val) + "%"));
 
         register(Op.END_WITH_IGNORE_CASE,
-                (field, val) -> turkishLower(field)
-                        .like("%" + turkishNormalize(val.toString())));
+                (field, val) -> likeReadyField(field)
+                        .like("%" + likeReadyVal(field, val)));
 
         // ─── ROUND müqayisə əməliyyatları ─────────────────────────────────
         // ROUND(field, scale) OP value — hesablanmayan sütunlar üçün
@@ -301,6 +302,54 @@ public final class FilterStrategies {
     }
 
     /**
+     * Field-in string (text) tipli olub olmadığını yoxlayır.
+     *
+     * <p>{@code varchar}, {@code text}, {@code char} kimi {@link CharSequence}
+     * alt-tipləri {@code true} qaytarır. {@code bigint}, {@code integer},
+     * {@code numeric}, {@code boolean} və s. {@code false} qaytarır.
+     */
+    private static boolean isStringField(Field<Object> field) {
+        try {
+            Class<?> javaType = field.getDataType().getType();
+            return CharSequence.class.isAssignableFrom(javaType);
+        } catch (Exception e) {
+            return false; // tip tapılmadısa string deyil fərz et
+        }
+    }
+
+    /**
+     * LIKE əməliyyatı üçün sahəni hazırlayır.
+     *
+     * <ul>
+     *   <li>String field → {@code LOWER(REPLACE(REPLACE(field,'İ','i'),'I','i'))}</li>
+     *   <li>Numeric/digər → {@code CAST(field AS varchar)} — REPLACE/LOWER tətbiq olunmur,
+     *       çünki rəqəm sütunlarında Türk simvolları ola bilməz.</li>
+     * </ul>
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static Field<String> likeReadyField(Field<Object> field) {
+        if (isStringField(field)) {
+            return turkishLower(field);
+        }
+        return field.cast(String.class);
+    }
+
+    /**
+     * LIKE əməliyyatı üçün dəyəri hazırlayır.
+     *
+     * <ul>
+     *   <li>String field → {@link #turkishNormalize} tətbiq edilir (İ/I → i, toLowerCase)</li>
+     *   <li>Numeric/digər → dəyər olduğu kimi string-ə çevrilir, normallaşdırma yoxdur</li>
+     * </ul>
+     */
+    private static String likeReadyVal(Field<Object> field, Object val) {
+        if (isStringField(field)) {
+            return turkishNormalize(val.toString());
+        }
+        return val.toString();
+    }
+
+    /**
      * Türk əlifbasına uyğun case-insensitive normallaşdırma — sahə üçün.
      *
      * <p>Yaradılan SQL ifadəsi:
@@ -309,9 +358,12 @@ public final class FilterStrategies {
      * <p>Türk dilinin problemi: Java/SQL {@code LOWER('İ')} → {@code 'i̇'} (2 bayt)
      * deyil, {@code 'i'} qaytarmalıdır. {@code REPLACE} ilə açıq dəyişdirmə
      * verilənlər bazasının locale asılılığını aradan qaldırır.
+     * <p>Yalnız string tiplər üçün çağırılmalıdır — {@link #likeReadyField} istifadə edin.
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static Field<String> turkishLower(Field<Object> field) {
+        // Bu metod yalnız string/CharSequence tipli fieldlər üçün çağırılır.
+        // Numeric fieldlər likeReadyField() tərəfindən əvvəlcədən yönləndirilir.
         Field<String> str = (Field<String>) (Field<?>) field;
         return DSL.lower(
                 DSL.replace(
