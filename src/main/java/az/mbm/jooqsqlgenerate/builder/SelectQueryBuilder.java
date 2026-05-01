@@ -876,10 +876,10 @@ public class SelectQueryBuilder<T> {
         // onlyCount=true olduqda yalnız COUNT işləyir, əsas sorğu icra edilmir
         int rowCount = 0;
         if (onlyCount) {
-            rowCount = buildCount(dsl, mainTable, whereCondition, afterGroupBy);
+            rowCount = buildCount(dsl, mainTable, whereCondition, afterGroupBy, tableMap);
             return new SelectTable(dsl.selectZero().where(DSL.falseCondition()), rowCount);
         } else if ((paginate || countOnly) && !skipCount) {
-            rowCount = buildCount(dsl, mainTable, whereCondition, afterGroupBy);
+            rowCount = buildCount(dsl, mainTable, whereCondition, afterGroupBy, tableMap);
         } else if (skipCount) {
             rowCount = -1;
         }
@@ -1005,8 +1005,8 @@ public class SelectQueryBuilder<T> {
         return fields;
     }
 
-    private SelectJoinStep<Record> buildEntityJoins(
-            SelectJoinStep<Record> query,
+    private <R extends Record> SelectJoinStep<R> buildEntityJoins(
+            SelectJoinStep<R> query,
             Map<String, EntityTable<?>> tableMap) {
 
         for (JoinConfig j : joins) {
@@ -1039,7 +1039,7 @@ public class SelectQueryBuilder<T> {
         return query;
     }
 
-    private SelectJoinStep<Record> buildSubQueryJoins(SelectJoinStep<Record> query) {
+    private <R extends Record> SelectJoinStep<R> buildSubQueryJoins(SelectJoinStep<R> query) {
         for (SubQueryJoin sj : subQueryJoins) {
             Table<?>       sub  = sj.subQuery().asTable(sj.subAlias());
             EntityTable<T> main = new EntityTable<>(entityClass, tableAlias);
@@ -1296,17 +1296,26 @@ public class SelectQueryBuilder<T> {
             DSLContext dsl,
             EntityTable<T> mainTable,
             Condition where,
-            SelectHavingStep<Record> groupedQuery) {
+            SelectHavingStep<Record> groupedQuery,
+            Map<String, EntityTable<?>> tableMap) {
 
         if (aggregator != null && !aggregator.getGroupByFields().isEmpty()) {
             // GROUP BY varsa: COUNT(1) FROM (subquery) AS _count
+            // groupedQuery artıq JOIN-ləri özündə saxlayır
             Record1<Integer> r = dsl.selectCount()
                     .from(groupedQuery.asTable("_count"))
                     .fetchOne();
             return r == null ? 0 : r.value1();
         } else {
-            Record1<Integer> r = dsl.selectCount()
-                    .from(mainTable.getTable())
+            // GROUP BY yoxdursa: COUNT-da da əsas sorğudakı eyni JOIN-lər tətbiq edilməlidir,
+            // əks halda INNER JOIN-lər və/və ya JOIN şərtində/WHERE-də join cədvəlinin sahələri
+            // istifadə olunan hallarda count səhv çıxır.
+            SelectJoinStep<Record1<Integer>> countQuery =
+                    dsl.selectCount().from(mainTable.getTable());
+            countQuery = buildEntityJoins(countQuery, tableMap);
+            countQuery = buildSubQueryJoins(countQuery);
+
+            Record1<Integer> r = countQuery
                     .where(where != null ? where : DSL.trueCondition())
                     .fetchOne();
             return r == null ? 0 : r.value1();
