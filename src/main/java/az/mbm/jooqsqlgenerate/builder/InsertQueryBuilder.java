@@ -171,7 +171,7 @@ public class InsertQueryBuilder<T> {
 
         EntityTable<T> table = new EntityTable<>(entityClass);
         InsertResultStep<?> step = buildSingleInsert(table, rows.get(0)).returningResult();
-        Record result = step.fetchOne();
+        org.jooq.Record result = step.fetchOne();
         if (result == null) return null;
 
         Object val = result.getValue(0);
@@ -221,7 +221,7 @@ public class InsertQueryBuilder<T> {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private InsertOnDuplicateSetMoreStep<?> buildSingleInsert(
+    private InsertReturningStep<?> buildSingleInsert(
             EntityTable<T> table,
             Map<String, Object> rowValues) {
 
