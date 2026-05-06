@@ -9,6 +9,8 @@ import az.mbm.jooqsqlgenerate.builder.SubQueryIn;
 import az.mbm.jooqsqlgenerate.builder.SubSelectBuilder;
 import az.mbm.jooqsqlgenerate.builder.UpdateQueryBuilder;
 import az.mbm.jooqsqlgenerate.core.SelectFetchJooq;
+import az.mbm.jooqsqlgenerate.core.SelectFetchMapResponse;
+import az.mbm.jooqsqlgenerate.core.SelectFetchResponse;
 import az.mbm.jooqsqlgenerate.core.SelectTable;
 import az.mbm.jooqsqlgenerate.enums.Op;
 import az.mbm.jooqsqlgenerate.enums.Agg;
@@ -1363,12 +1365,18 @@ public class JooqManager {
     /**
      * Son icra edilən sorğunun ümumi sətir sayını qaytarır (pagination üçün).
      *
+     * <p>Tövsiyə: {@code fetchMapper} / {@code fetchCast} artıq birbaşa
+     * {@link SelectFetchResponse} qaytarır — ayrıca bu metodu çağırmağa ehtiyac yoxdur.
+     *
      * <pre>{@code
-     *   List<MyDto> list = jooq
-     *       .setMainTable(...)
-     *       .setPage(0, 20)
-     *       .fetchMapper(mapper);
+     *   // Köhnə üsul
+     *   List<MyDto> list = jooq.setMainTable(...).setPage(0, 20).fetchMapper(mapper).getList();
      *   int total = jooq.getLastRowCount();
+     *
+     *   // Yeni üsul (tövsiyə olunur)
+     *   SelectFetchResponse<MyDto> resp = jooq.setMainTable(...).setPage(0, 20).fetchMapper(mapper);
+     *   List<MyDto> list  = resp.getList();
+     *   int         total = resp.getRowCount();
      * }</pre>
      */
     public int getLastRowCount() {
@@ -1412,42 +1420,53 @@ public class JooqManager {
     // ════════════════════════════════════════════════════════════════════
 
     /**
-     * Execute edib {@code List<Map<String, Object>>} qaytarır.
+     * Execute edib {@link SelectFetchMapResponse} qaytarır — siyahı + ümumi sətir sayı.
      *
      * <pre>{@code
-     *   List<Map<String, Object>> rows = jooq
+     *   SelectFetchMapResponse resp = jooq
      *       .setMainTable(User.class, "u")
      *       .addColumns("u.id", "u.name")
      *       .addFilter("status", EQUAl, "ACTIVE")
+     *       .setPage(0, 20)
      *       .fetchMaps();
+     *
+     *   List<Map<String, Object>> list  = resp.getList();
+     *   int                       total = resp.getRowCount();
      * }</pre>
      */
-    public List<Map<String, Object>> fetchMaps() {
-        return new SelectFetchJooq<>().fetchMaps(execute()).getList();
+    public SelectFetchMapResponse fetchMaps() {
+        return new SelectFetchJooq<>().fetchMaps(execute());
     }
 
     /**
-     * Execute edib {@link RecordMapper} ilə çevirərək list qaytarır.
+     * Execute edib {@link RecordMapper} ilə çevirərək {@link SelectFetchResponse} qaytarır.
+     *
+     * <p>Nəticədən həm siyahını, həm də pagination üçün ümumi sətir sayını almaq mümkündür:
      *
      * <pre>{@code
-     *   List<MyDto> list = jooq
+     *   SelectFetchResponse<MyDto> resp = jooq
      *       .setMainTable(WarehouseFlow.class, "t")
      *       .addColumns("t.id", "t1.productName")
+     *       .setPage(0, 20)
      *       .fetchMapper(r -> new MyDto(
      *           r.get("id", String.class),
      *           r.get("product_name", String.class)
      *       ));
+     *
+     *   List<MyDto> list  = resp.getList();
+     *   int         total = resp.getRowCount();
      * }</pre>
      */
-    public <V> List<V> fetchMapper(RecordMapper<Record, V> mapper) {
-        return new SelectFetchJooq<V>().fetchMapper(execute(), mapper).getList();
+    public <V> SelectFetchResponse<V> fetchMapper(RecordMapper<Record, V> mapper) {
+        return new SelectFetchJooq<V>().fetchMapper(execute(), mapper);
     }
 
     /**
-     * Execute edib {@link SelectTable} vasitəsilə {@link RecordMapper} ilə list qaytarır.
+     * Execute edib {@link SelectTable} vasitəsilə {@link RecordMapper} ilə
+     * {@link SelectFetchResponse} qaytarır.
      */
-    public <V> List<V> fetchMapper(SelectTable selectTable, RecordMapper<Record, V> mapper) {
-        return new SelectFetchJooq<V>().fetchMapper(selectTable, mapper).getList();
+    public <V> SelectFetchResponse<V> fetchMapper(SelectTable selectTable, RecordMapper<Record, V> mapper) {
+        return new SelectFetchJooq<V>().fetchMapper(selectTable, mapper);
     }
 
     /**
@@ -1504,17 +1523,21 @@ public class JooqManager {
     }
 
     /**
-     * Execute edib entity list qaytarır.
+     * Execute edib {@link SelectFetchResponse} qaytarır — entity siyahısı + ümumi sətir sayı.
      *
      * <pre>{@code
-     *   List<User> users = jooq
+     *   SelectFetchResponse<User> resp = jooq
      *       .setMainTable(User.class, "u")
      *       .addFilter("status", EQUAl, "ACTIVE")
+     *       .setPage(0, 20)
      *       .fetchInto(User.class);
+     *
+     *   List<User> list  = resp.getList();
+     *   int        total = resp.getRowCount();
      * }</pre>
      */
-    public <E> List<E> fetchInto(Class<E> type) {
-        return new SelectFetchJooq<E>().fetchCast(execute(), type).getList();
+    public <E> SelectFetchResponse<E> fetchInto(Class<E> type) {
+        return new SelectFetchJooq<E>().fetchCast(execute(), type);
     }
 
     // ════════════════════════════════════════════════════════════════════
