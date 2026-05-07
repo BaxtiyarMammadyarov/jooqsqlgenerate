@@ -18,43 +18,32 @@ import az.mbm.jooqsqlgenerate.enums.MathOperation;
 import az.mbm.jooqsqlgenerate.spec.ExistsSpec;
 import az.mbm.jooqsqlgenerate.spec.Filter;
 import az.mbm.jooqsqlgenerate.spec.Filters;
-import org.springframework.beans.factory.config.ConfigurableBeanFactory;
-import org.springframework.context.annotation.Scope;
-import org.springframework.stereotype.Component;
-
 import java.util.*;
 import java.util.stream.Collectors;
 
 /**
  * ═══════════════════════════════════════════════════════════════
- * JOOQ MANAGER — {@link JooqQuery}-nin Spring wrapper-i.
- *
- * <p>Bütün icra məntiqi {@link JooqQuery}-dədir. JooqManager yalnız
- * Spring-ə uyğun {@code addXxx()} interfeysini saxlayır və daxilindəki
- * {@code JooqQuery} nümunəsinə delegate edir.
- *
- * <p>Hər {@code execute()} çağrışından sonra daxili {@code JooqQuery}
- * sıfırlanır — növbəti sorğu tamamilə təmiz başlayır.
+ * Spring bean deyil — hər sorğu üçün {@link JooqManagerFactory#create()} ilə
+ * yeni nümunə yaradın. Bu şəkildə daxili vəziyyət (columns, filters, joins ...)
+ * başqa sorğularla qarışmaz.
  *
  * <pre>{@code
  * @Service
+ * @RequiredArgsConstructor
  * public class UserService {
  *
- *     @Autowired
- *     private JooqManager jooq;
+ *     private final JooqManagerFactory jooqFactory;
  *
- *     public SelectTable search(String status, String name) {
- *         jooq.setMainTable(User.class, "u");
- *         jooq.addColumns("u.id", "u.name", "u.email");
- *         jooq.addFilter("status", Op.EQUAl, status);
- *         jooq.addFilter("name",   Op.LIKE,   name);
- *         return jooq.execute();
+ *     public SelectFetchResponse<UserDto> search(String status) {
+ *         return jooqFactory.create()
+ *             .setMainTable(User.class, "u")
+ *             .addColumns("u.id", "u.name")
+ *             .addFilter("status", Op.EQUAl, status)
+ *             .fetchInto(UserDto.class);
  *     }
  * }
  * }</pre>
  */
-@Component
-@Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
 public class JooqManager {
 
     private final DSLContext dsl;
@@ -62,9 +51,6 @@ public class JooqManager {
     /** Cari sorğunun bütün state-i burada — JooqManager özü heç nə saxlamır */
     @SuppressWarnings("rawtypes")
     private JooqQuery current;
-
-    /** Son icra edilən sorğunun ümumi sətir sayı (pagination üçün) */
-    private int lastRowCount = 0;
 
     /** UPDATE üçün ayrıca filter siyahısı (JooqQuery SELECT-ə yönəlibdir) */
     private final List<UpdateFilterRow> updateFilters = new ArrayList<>();
@@ -1354,33 +1340,10 @@ public class JooqManager {
     public SelectTable execute() {
         JooqQuery<?> q = q();
         try {
-            SelectTable result = q.execute(dsl);
-            lastRowCount = result.getRowCount();
-            return result;
+            return q.execute(dsl);
         } finally {
             reset();
         }
-    }
-
-    /**
-     * Son icra edilən sorğunun ümumi sətir sayını qaytarır (pagination üçün).
-     *
-     * <p>Tövsiyə: {@code fetchMapper} / {@code fetchCast} artıq birbaşa
-     * {@link SelectFetchResponse} qaytarır — ayrıca bu metodu çağırmağa ehtiyac yoxdur.
-     *
-     * <pre>{@code
-     *   // Köhnə üsul
-     *   List<MyDto> list = jooq.setMainTable(...).setPage(0, 20).fetchMapper(mapper).getList();
-     *   int total = jooq.getLastRowCount();
-     *
-     *   // Yeni üsul (tövsiyə olunur)
-     *   SelectFetchResponse<MyDto> resp = jooq.setMainTable(...).setPage(0, 20).fetchMapper(mapper);
-     *   List<MyDto> list  = resp.getList();
-     *   int         total = resp.getRowCount();
-     * }</pre>
-     */
-    public int getLastRowCount() {
-        return lastRowCount;
     }
 
     /**
@@ -1474,19 +1437,23 @@ public class JooqManager {
      * Null dəyərlər {@code ""} ilə əvəzlənir — JSON-da field silinmir.
      *
      * <pre>{@code
-     *   List<Map<String, Object>> rows = jooq
+     *   SelectFetchMapResponse resp = jooq
      *       .setMainTable(WarehouseFlow.class, "t")
      *       .addColumns("t.id", "t.productName", "t.price")
+     *       .setPage(0, 20)
      *       .fetchMapsNullSafe();
      *   // → [{id: "...", productName: "", price: 55.0}, ...]
+     *   List<Map<String, Object>> list  = resp.getList();
+     *   int                       total = resp.getRowCount();
      * }</pre>
      */
-    public List<Map<String, Object>> fetchMapsNullSafe() {
-        List<Map<String, Object>> list = new SelectFetchJooq<>().fetchMaps(execute()).getList();
-        return list.stream()
+    public SelectFetchMapResponse fetchMapsNullSafe() {
+        SelectFetchMapResponse raw = new SelectFetchJooq<>().fetchMaps(execute());
+        List<Map<String, Object>> cleaned = raw.getList().stream()
                 .filter(Objects::nonNull)
                 .map(JooqManager::replaceNulls)
                 .toList();
+        return new SelectFetchMapResponse(cleaned, raw.getRowCount());
     }
 
     /** Map-dəki null dəyərləri {@code ""} ilə əvəzləyir */
