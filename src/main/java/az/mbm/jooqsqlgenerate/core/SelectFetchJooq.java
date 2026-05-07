@@ -8,7 +8,7 @@ import java.util.function.Function;
 /**
  * {@link SelectTable} nəticəsini Java obyektlərinə çevirən yardımçı sinif.
  *
- * <p>Üç fetch strategiyası:
+ * <p>Dörd fetch strategiyası:
  * <ul>
  *   <li>{@link #fetchCast(SelectTable, Class)} — jOOQ-un auto-mapping-i</li>
  *   <li>{@link #fetchMapper(SelectTable, RecordMapper)} — tipli RecordMapper</li>
@@ -34,14 +34,6 @@ public class SelectFetchJooq<V> {
     }
 
     /**
-     * @deprecated fetchCast ilə eynidir. Köhnə imza saxlanılmışdır.
-     */
-    @Deprecated(since = "2.0.0")
-    public SelectFetchResponse<V> fetchSelectCast(SelectTable sel, Class<V> clazz) {
-        return fetchCast(sel, clazz);
-    }
-
-    /**
      * jOOQ RecordMapper ilə nəticəni çevirir.
      */
     public SelectFetchResponse<V> fetchMapper(SelectTable sel, RecordMapper<Record, V> mapper) {
@@ -49,14 +41,6 @@ public class SelectFetchJooq<V> {
         var list   = select.fetch(mapper);
         int count  = sel.getRowCount() == 0 ? list.size() : sel.getRowCount();
         return new SelectFetchResponse<>(list, count);
-    }
-
-    /**
-     * @deprecated fetchMapper ilə eynidir. Köhnə imza saxlanılmışdır.
-     */
-    @Deprecated(since = "2.0.0")
-    public SelectFetchResponse<V> fetchSelectRecordMapper(SelectTable sel, RecordMapper<Record, V> mapper) {
-        return fetchMapper(sel, mapper);
     }
 
     /**
@@ -70,14 +54,6 @@ public class SelectFetchJooq<V> {
     }
 
     /**
-     * @deprecated fetchFunction ilə eynidir. Köhnə imza saxlanılmışdır.
-     */
-    @Deprecated(since = "2.0.0")
-    public SelectFetchResponse<V> fetchSelectFunctionMapper(SelectTable sel, Function<Record, V> fn) {
-        return fetchFunction(sel, fn);
-    }
-
-    /**
      * Dinamik sorğular üçün — nəticəni {@code Map<String,Object>} siyahısı kimi qaytarır.
      * Field adları DB-nin native formatındadır (snake_case).
      */
@@ -85,14 +61,5 @@ public class SelectFetchJooq<V> {
         var list  = sel.getSelectTable().fetchMaps();
         int count = sel.getRowCount() == 0 ? list.size() : sel.getRowCount();
         return new SelectFetchMapResponse(list, count);
-    }
-
-
-    /**
-     * @deprecated fetchMaps ilə eynidir. Köhnə imza saxlanılmışdır.
-     */
-    @Deprecated(since = "2.0.0")
-    public SelectFetchMapResponse fetchMapList(SelectTable sel) {
-        return fetchMaps(sel);
     }
 }
