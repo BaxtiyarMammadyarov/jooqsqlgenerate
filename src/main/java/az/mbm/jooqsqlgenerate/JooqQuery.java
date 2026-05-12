@@ -78,6 +78,7 @@ public final class JooqQuery<T> {
     private final List<ComputedFieldEntry>  computedFields   = new ArrayList<>();
     private final List<ComputedRow>         computedCols     = new ArrayList<>();
     private final List<CoalesceRow>         coalesceCols     = new ArrayList<>();
+    private final List<ConcatRow>           concatCols       = new ArrayList<>();
     private final List<SubSelectBuilder>    subSelectCols    = new ArrayList<>();
     private final List<SubQueryInRow>       subQueryInCols   = new ArrayList<>();
     private final List<Condition>           rawConditions    = new ArrayList<>();
@@ -132,6 +133,7 @@ public final class JooqQuery<T> {
                                       Op filterOp,
                                       Object filterValue) {}
     private record CoalesceRow(String alias, Object def, String[] fields) {}
+    private record ConcatRow(String alias, String separator, String[] fields) {}
     private record SubQueryInRow(List<String> outerFields, SubQueryIn sub) {}
     private record FiltersEntry(String aliasAndField, Op op, Object value) {}
     private record FieldFilterEntry(String leftAliasAndField, Op op, String rightAliasAndField) {}
@@ -369,6 +371,20 @@ public final class JooqQuery<T> {
     public JooqQuery<T> coalesce(String alias, Object defaultValue, String... fields) {
         if (alias != null && fields != null && fields.length > 0)
             coalesceCols.add(new CoalesceRow(alias, defaultValue, fields));
+        return this;
+    }
+
+    /** CONCAT sütunu — separator ilə birləşdirilmiş field-lər. */
+    public JooqQuery<T> concat(String alias, String separator, String... fields) {
+        if (alias != null && fields != null && fields.length > 0)
+            concatCols.add(new ConcatRow(alias, separator, fields));
+        return this;
+    }
+
+    /** CONCAT sütunu — List&lt;String&gt; variantı. */
+    public JooqQuery<T> concat(String alias, String separator, List<String> fields) {
+        if (alias != null && fields != null && !fields.isEmpty())
+            concatCols.add(new ConcatRow(alias, separator, fields.toArray(new String[0])));
         return this;
     }
 
@@ -1426,6 +1442,8 @@ public final class JooqQuery<T> {
             builder.computedColumn(entry.cf(), entry.filterOp(), entry.filterValue());
         for (CoalesceRow cr : coalesceCols)
             builder.coalesce(cr.alias(), cr.def(), cr.fields());
+        for (ConcatRow cc : concatCols)
+            builder.concat(cc.alias(), cc.separator(), cc.fields());
         for (SubSelectBuilder sub : subSelectCols)
             builder.subSelect(sub);
         for (Field<?> rf : rawSelectFields)
