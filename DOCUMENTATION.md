@@ -238,6 +238,24 @@ public SelectTable execute() {
 }
 ```
 
+**Birbaşa filter metodları — istifadəçi `Filters` sinifini bilməli deyil:**
+
+`Filters` kitabxananın daxili sinifidir. İstifadəçi yalnız `JooqManager` ilə işləyir.
+Hər metod daxilən `addFilter(Filters.of().xxx())` çağırır — duplikasiya yoxdur:
+
+```java
+jooq.setMainTable(Order.class, "o")
+    .addColumns("o.id", "o.name")
+    .equal("o.status",    "ACTIVE")
+    .like("o.name",       searchName)
+    .between("o.createdAt", startDate, endDate)   // Long, null → partial dəstək
+    .in("o.roleId",       List.of(1L, 2L, 3L))   // Collection<?>
+    .isNull("o.deletedAt")
+    .execute();
+```
+
+Mövcud `addFilter()` overload-ları tam saxlanılır — geriyə dönük uyğunluq var.
+
 ---
 
 ### 3. `EntityTable<T>` — JPA Annotasiyalarını SQL-ə Çevirir
@@ -895,6 +913,9 @@ JooqQuery.from(Product.class, "p")
 | Hot reload zamanı ClassLoader leak | `WeakHashMap` zəif referansla GC-ə imkan verir |
 | Yeni filter növü əlavə etmək | `FilterStrategies.register()` — mövcud kodu dəyişmədən |
 | Null parametrlər üçün if yığını | `Filter` sinfi null/boş dəyərləri avtomatik atlar |
+| `Filters.of()` wrapping-i artıqdır | `JooqManager` birbaşa `equal`, `between`, `in` metodları — `Filters` gizli qalır |
+| `between` null from/to | Yalnız from → `>=`, yalnız to → `<=`, ikisi null → atlanır |
+| `in`/`notIn` tip çevrilməsi | `Collection<?>` overload — `List<Long>`, `Set<String>` hamısı `coerced()` ilə DB tipinə uyğunlaşır |
 | String `"equal"` yazı xətası riski | `FilterOperationConstants` + `Op` enum |
 | Sorğu üzərindən sorğu | `SelectTable.asTable()` + `JooqQuery.from(SelectTable, alias)` |
 | Tip-təhlükəsiz sorğular | Generated mode — `USERS.FIRST_NAME`, compile zamanı yoxlanılır |
