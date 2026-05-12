@@ -213,6 +213,18 @@ public class JooqManager {
         return this;
     }
 
+    /** CONCAT SELECT sütunu — separator ilə birləşdirilmiş field-lər. */
+    public JooqManager addConcatColumn(String alias, String separator, String... fields) {
+        q().concat(alias, separator, fields);
+        return this;
+    }
+
+    /** CONCAT SELECT sütunu — List&lt;String&gt; variantı. */
+    public JooqManager addConcatColumn(String alias, String separator, List<String> fields) {
+        q().concat(alias, separator, fields);
+        return this;
+    }
+
     /** SELECT-də scalar subquery sütunu. */
     public JooqManager addSubQueryColumn(SubSelectBuilder sub) {
         q().subSelect(sub);
