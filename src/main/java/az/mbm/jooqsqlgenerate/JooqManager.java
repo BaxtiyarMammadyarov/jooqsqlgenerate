@@ -523,6 +523,125 @@ public class JooqManager {
         return this;
     }
 
+    // ─── Birbaşa filter metodları ─────────────────────────────────────────
+    //
+    // Filters.of() yaratmadan birbaşa JooqManager üzərindən filter əlavə etmək üçün.
+    // Hər metod daxilən addFilter(Filters) -ə yönləndirilir — duplikasiya yoxdur.
+    //
+    // Nümunə:
+    //   jooq.setMainTable(Order.class, "o")
+    //       .addColumns("o.id", "o.name")
+    //       .equal("status", "ACTIVE")
+    //       .like("name", name)
+    //       .between("createdAt", startDate, endDate)
+    //       .execute();
+
+    /** {@code WHERE field = value} — null-dursa atlanır */
+    public JooqManager equal(String field, String value) {
+        return addFilter(Filters.of().equal(field, value));
+    }
+
+    /** {@code WHERE field != value} — null-dursa atlanır */
+    public JooqManager notEqual(String field, String value) {
+        return addFilter(Filters.of().notEqual(field, value));
+    }
+
+    /** {@code WHERE field > value} — null-dursa atlanır */
+    public JooqManager greaterThan(String field, String value) {
+        return addFilter(Filters.of().greaterThan(field, value));
+    }
+
+    /** {@code WHERE field >= value} — null-dursa atlanır */
+    public JooqManager greaterThanOrEqual(String field, String value) {
+        return addFilter(Filters.of().greaterThanOrEqual(field, value));
+    }
+
+    /** {@code WHERE field < value} — null-dursa atlanır */
+    public JooqManager lessThan(String field, String value) {
+        return addFilter(Filters.of().lessThan(field, value));
+    }
+
+    /** {@code WHERE field <= value} — null-dursa atlanır */
+    public JooqManager lessThanOrEqual(String field, String value) {
+        return addFilter(Filters.of().lessThanOrEqual(field, value));
+    }
+
+    /** {@code WHERE field LIKE '%value%'} — null/boş-dursa atlanır */
+    public JooqManager like(String field, String value) {
+        return addFilter(Filters.of().like(field, value));
+    }
+
+    /** {@code WHERE field LIKE 'value%'} — null/boş-dursa atlanır */
+    public JooqManager startWith(String field, String value) {
+        return addFilter(Filters.of().startWith(field, value));
+    }
+
+    /** {@code WHERE field LIKE '%value'} — null/boş-dursa atlanır */
+    public JooqManager endWith(String field, String value) {
+        return addFilter(Filters.of().endWith(field, value));
+    }
+
+    /** {@code WHERE field IS NULL} */
+    public JooqManager isNull(String field) {
+        return addFilter(Filters.of().isNull(field));
+    }
+
+    /** {@code WHERE field IS NOT NULL} */
+    public JooqManager isNotNull(String field) {
+        return addFilter(Filters.of().isNotNull(field));
+    }
+
+    /**
+     * {@code WHERE field IN (...)} — null/boş kolleksiya atlanır.
+     *
+     * <pre>{@code
+     *   .in("roleId", List.of(1L, 2L, 3L))
+     *   .in("status", Set.of("ACTIVE", "PENDING"))
+     * }</pre>
+     */
+    public JooqManager in(String field, Collection<?> values) {
+        return addFilter(Filters.of().in(field, values));
+    }
+
+    /**
+     * {@code WHERE field NOT IN (...)} — null/boş kolleksiya atlanır.
+     *
+     * <pre>{@code
+     *   .notIn("status", List.of("DELETED", "BANNED"))
+     *   .notIn("roleId", Set.of(5L, 6L))
+     * }</pre>
+     */
+    public JooqManager notIn(String field, Collection<?> values) {
+        return addFilter(Filters.of().notIn(field, values));
+    }
+
+    /**
+     * {@code WHERE field BETWEEN from AND to} — String variantı.
+     *
+     * <p>Null/boş dəyərlər qismən dəstəklənir:
+     * yalnız from → {@code >= from}, yalnız to → {@code <= to}, ikisi null → atlanır.
+     *
+     * <pre>{@code .between("createdAt", "2024-01-01", "2024-12-31") }</pre>
+     */
+    public JooqManager between(String field, String from, String to) {
+        return addFilter(Filters.of().between(field, from, to));
+    }
+
+    /**
+     * {@code WHERE field BETWEEN from AND to} — {@link Number} variantı
+     * ({@code Long}, {@code BigDecimal}, {@code Integer} və s.).
+     *
+     * <p>Null dəyərlər qismən dəstəklənir — yuxarıdakı String variantı ilə eyni məntiq.
+     *
+     * <pre>{@code
+     *   .between("createdAt", 20240101000000L, 20241231235959L)
+     *   .between("price",     new BigDecimal("10"), new BigDecimal("99.99"))
+     * }</pre>
+     */
+    public JooqManager between(String field, Number from, Number to) {
+        return addFilter(Filters.of().between(field, from, to));
+    }
+
     /**
      * Filter — tək field üçün {@code Map<String, String>} ilə.
      *
