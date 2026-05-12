@@ -121,12 +121,21 @@ public final class Filters {
     }
 
     /**
-     * {@code WHERE field IN (...)} — varargs variantı.
+     * {@code WHERE field IN (...)} — {@link Collection} variantı ({@link List}, {@link Set}).
      *
-     * <pre>{@code .in("roleId", "1", "2", "3") }</pre>
+     * <p>Null və ya boş kolleksiya atlanır. Kolleksiya elementləri {@code toString()} ilə
+     * string-ə çevrilir — {@code Long}, {@code Integer}, {@code String} hamısı işləyir.
+     *
+     * <pre>{@code
+     *   .in("roleId",  List.of(1L, 2L, 3L))
+     *   .in("status",  Set.of("ACTIVE", "PENDING"))
+     * }</pre>
      */
-    public Filters in(String field, String... values) {
-        return put(FilterOperationConstants.IN, field, String.join(",", values));
+    public Filters in(String field, Collection<?> values) {
+        if (values == null || values.isEmpty()) return this;
+        return put(FilterOperationConstants.IN, field,
+                values.stream().filter(Objects::nonNull)
+                      .map(Object::toString).reduce((a, b) -> a + "," + b).orElse(""));
     }
 
     /**
@@ -139,12 +148,20 @@ public final class Filters {
     }
 
     /**
-     * {@code WHERE field NOT IN (...)} — varargs variantı.
+     * {@code WHERE field NOT IN (...)} — {@link Collection} variantı ({@link List}, {@link Set}).
      *
-     * <pre>{@code .notIn("status", "DELETED", "BANNED") }</pre>
+     * <p>Null və ya boş kolleksiya atlanır.
+     *
+     * <pre>{@code
+     *   .notIn("status",  List.of("DELETED", "BANNED"))
+     *   .notIn("roleId",  Set.of(5L, 6L))
+     * }</pre>
      */
-    public Filters notIn(String field, String... values) {
-        return put(FilterOperationConstants.NOT_IN, field, String.join(",", values));
+    public Filters notIn(String field, Collection<?> values) {
+        if (values == null || values.isEmpty()) return this;
+        return put(FilterOperationConstants.NOT_IN, field,
+                values.stream().filter(Objects::nonNull)
+                      .map(Object::toString).reduce((a, b) -> a + "," + b).orElse(""));
     }
 
     // ─── BETWEEN ─────────────────────────────────────────────────────────
@@ -152,13 +169,44 @@ public final class Filters {
     /**
      * {@code WHERE field BETWEEN from AND to}
      *
+     * <p>Null/boş dəyərlər qismən dəstəklənir:
+     * <ul>
+     *   <li>Hər ikisi dolu → {@code BETWEEN from AND to}</li>
+     *   <li>Yalnız from   → {@code >= from}</li>
+     *   <li>Yalnız to     → {@code <= to}</li>
+     *   <li>Hər ikisi null/boş → şərt əlavə edilmir</li>
+     * </ul>
+     *
      * <pre>{@code
      *   .between("createdAt", "2024-01-01", "2024-12-31")
      *   .between("age",       "18",         "65")
      * }</pre>
      */
     public Filters between(String field, String from, String to) {
-        return put(FilterOperationConstants.BETWEEN, field, from + "," + to);
+        boolean hasFrom = from != null && !from.isBlank();
+        boolean hasTo   = to   != null && !to.isBlank();
+        if (hasFrom && hasTo) return put(FilterOperationConstants.BETWEEN,                  field, from + "," + to);
+        if (hasFrom)          return put(FilterOperationConstants.GREATER_THAN_OR_EQUAL_TO, field, from);
+        if (hasTo)            return put(FilterOperationConstants.LESS_THAN_OR_EQUAL_TO,    field, to);
+        return this;
+    }
+
+    /**
+     * {@code WHERE field BETWEEN from AND to} — {@link Number} tipləri üçün
+     * ({@code Long}, {@code BigDecimal}, {@code Integer}, {@code BigInteger} və s.)
+     *
+     * <p>Null dəyərlər qismən dəstəklənir — yuxarıdakı String variantı ilə eyni məntiq.
+     *
+     * <pre>{@code
+     *   .between("createdAt", 20240101000000L,         20241231235959L)
+     *   .between("price",     new BigDecimal("10.00"), new BigDecimal("99.99"))
+     *   .between("count",     1,                       100)
+     * }</pre>
+     */
+    public Filters between(String field, Number from, Number to) {
+        return between(field,
+                from != null ? from.toString() : null,
+                to   != null ? to.toString()   : null);
     }
 
     // ─── REGEXP ──────────────────────────────────────────────────────────
