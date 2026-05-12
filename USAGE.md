@@ -7,13 +7,13 @@
 <dependency>
     <groupId>az.mbm</groupId>
     <artifactId>jooq-sql-generate</artifactId>
-    <version>1.1.2</version>
+    <version>1.1.3</version>
 </dependency>
 ```
 
 ```kotlin
 // Gradle
-implementation("az.mbm:jooq-sql-generate:1.1.2")
+implementation("az.mbm:jooq-sql-generate:1.1.3")
 ```
 
 ---
