@@ -10,8 +10,8 @@
 ## Proyekt haqqında
 
 **Ad:** `jooq-sql-generate`
-**Versiya:** 1.0.8
-**Maven coordinate:** `az.mbm:jooq-sql-generate:1.0.8`
+**Versiya:** 1.1.2
+**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.2`
 **Repo:** https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate
 **Java:** 17
 **Asılılıqlar:** jOOQ 3.18.6, Spring Boot 3.2.5 (compileOnly), Jakarta Persistence 3.1.0
@@ -27,7 +27,7 @@
 
 ## Cari vəziyyət
 
-Versiya 1.0.8 stabildir, Maven Central-da yayımlanır. `DOCUMENTATION.md` (siniflərin izahı) və `USAGE.md` (istifadə təlimatı) tam doludur.
+Versiya 1.1.2 stabildir, Maven Central-da yayımlanır. `DOCUMENTATION.md` (siniflərin izahı) və `USAGE.md` (istifadə təlimatı) tam doludur.
 
 **Əsas sinif strukturu:**
 ```
@@ -154,15 +154,36 @@ COUNT (səhv): SELECT count(*) FROM "task" t WHERE ...   ← JOIN itib
   — bütün JOIN+WHERE+GROUP BY-ı dərived table kimi istifadə edir. Sonrakı sessiyada
   düzəldiləcək (istifadəçi təsdiqindən sonra).
 
-<!--
-Növbəti sessiya üçün şablon:
+### 2026-05-12 — JooqManager birbaşa filter metodları + Filters təkmilləşdirmələri
 
-### YYYY-MM-DD — qısa başlıq
-- Nə edildi: ...
-- Hansı fayllar dəyişdirildi: ...
-- Qərarlar / qeydlər: ...
-- Yarımçıq qalan: ...
--->
+**Motivasiya:** İstifadəçi `Filters.of()` yaradıb `addFilter()` ilə set etmək əvəzinə
+`JooqManager` üzərindən birbaşa filter əlavə etmək istədi. `Filters` daxili sinifdir,
+istifadəçi yalnız `JooqManager` ilə işləməlidir.
+
+**`Filters.java` — dəyişikliklər:**
+
+1. `between(String, String, String)` — null/boş handling əlavə edildi:
+   - Hər ikisi dolu → `BETWEEN from AND to`
+   - Yalnız from → `>= from`
+   - Yalnız to → `<= to`
+   - İkisi null/boş → şərt əlavə edilmir
+
+2. `between(String, Number, Number)` — yeni overload:
+   - `Long`, `BigDecimal`, `Integer`, `BigInteger` hamısını əhatə edir
+   - Daxilən String variantına yönləndirilir, null handling eynidir
+
+3. `in(String, Collection<?>)` — yeni overload (`List`, `Set`)
+4. `notIn(String, Collection<?>)` — yeni overload
+
+**`JooqManager.java` — yeni birbaşa filter metodları (hamısı daxilən `Filters`-ə yönlənir):**
+- `equal`, `notEqual`
+- `greaterThan`, `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`
+- `like`, `startWith`, `endWith`
+- `isNull`, `isNotNull`
+- `in(String, Collection<?>)`, `notIn(String, Collection<?>)`
+- `between(String, String, String)`, `between(String, Number, Number)`
+
+**Geriyə dönük uyğunluq:** Tam qorunur.
 
 ---
 
@@ -170,13 +191,13 @@ Növbəti sessiya üçün şablon:
 
 <!-- Burada açıq tapşırıqlar, bug-lar, ideyalar -->
 
-- [ ] **Maven Central-a release (1.0.9):**
+- [ ] **Maven Central-a release (1.1.2):**
   - `~/.gradle/gradle.properties` və `~/.gradle/secret.pgp` iş kompüterinə köçürüldü ✓
   - Növbəti addımlar (gələcək sessiyada):
     1. `./gradlew clean publishToMavenLocal` — signing test
-    2. `build.gradle.kts`-də iki yerdə (sətr 10, 68) `version = "1.0.8"` → `"1.0.9"`
+    2. `build.gradle.kts`-də versiya artıq `1.1.2`-dir — dəyişmə lazım deyil
     3. `./gradlew clean publishToSonatype closeAndReleaseSonatypeStagingRepository`
-    4. `git add -A && git commit -m "release: 1.0.9" && git push && git tag v1.0.9 && git push --tags`
+    4. `git add -A && git commit -m "release: 1.1.2" && git push && git tag v1.1.2 && git push --tags`
 - [ ] `JooqQuery.executeGenerated()` daxilində COUNT sorğusu (sətr ~1882) də
       JOIN-ləri tətbiq etmir. Tövsiyə: `dsl.selectCount().from(grouped.asTable("_count"))`
       üzərinə keçmək (entity mode-dakı kimi düzgün count almaq üçün).
