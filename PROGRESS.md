@@ -10,8 +10,8 @@
 ## Proyekt haqqında
 
 **Ad:** `jooq-sql-generate`
-**Versiya:** 1.1.2
-**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.2`
+**Versiya:** 1.1.3
+**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.3`
 **Repo:** https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate
 **Java:** 17
 **Asılılıqlar:** jOOQ 3.18.6, Spring Boot 3.2.5 (compileOnly), Jakarta Persistence 3.1.0
@@ -27,7 +27,7 @@
 
 ## Cari vəziyyət
 
-Versiya 1.1.2 stabildir, Maven Central-da yayımlanır. `DOCUMENTATION.md` (siniflərin izahı) və `USAGE.md` (istifadə təlimatı) tam doludur.
+Versiya 1.1.3 hazırdır, Maven Central-a release gözləyir. `DOCUMENTATION.md` (siniflərin izahı) və `USAGE.md` (istifadə təlimatı) tam doludur.
 
 **Əsas sinif strukturu:**
 ```
@@ -154,6 +154,29 @@ COUNT (səhv): SELECT count(*) FROM "task" t WHERE ...   ← JOIN itib
   — bütün JOIN+WHERE+GROUP BY-ı dərived table kimi istifadə edir. Sonrakı sessiyada
   düzəldiləcək (istifadəçi təsdiqindən sonra).
 
+### 2026-05-12 — concat metodu JooqManager + JooqQuery-yə əlavə edildi
+
+**Problem:** `SelectQueryBuilder.concat()` mövcud idi, lakin `JooqManager` və `JooqQuery` üzərindən əlçatan deyildi.
+
+**Dəyişdirilmiş fayllar:**
+
+- `JooqQuery.java`:
+  - `private final List<ConcatRow> concatCols` əlavə edildi
+  - `private record ConcatRow(String alias, String separator, String[] fields)` əlavə edildi
+  - `concat(String alias, String separator, String... fields)` metodu əlavə edildi
+  - Build fazasında `for (ConcatRow cc : concatCols) builder.concat(...)` lopu əlavə edildi
+
+- `JooqManager.java`:
+  - `addConcatColumn(String alias, String separator, String... fields)` metodu əlavə edildi
+
+**İstifadə nümunəsi:**
+```java
+manager.addConcatColumn("fullName", " ", "u.firstName", "u.lastName")
+// SQL: COALESCE(firstName,'') || ' ' || COALESCE(lastName,'') AS fullName
+```
+
+---
+
 ### 2026-05-12 — JooqManager birbaşa filter metodları + Filters təkmilləşdirmələri
 
 **Motivasiya:** İstifadəçi `Filters.of()` yaradıb `addFilter()` ilə set etmək əvəzinə
@@ -191,13 +214,13 @@ istifadəçi yalnız `JooqManager` ilə işləməlidir.
 
 <!-- Burada açıq tapşırıqlar, bug-lar, ideyalar -->
 
-- [ ] **Maven Central-a release (1.1.2):**
+- [ ] **Maven Central-a release (1.1.3):**
   - `~/.gradle/gradle.properties` və `~/.gradle/secret.pgp` iş kompüterinə köçürüldü ✓
   - Növbəti addımlar (gələcək sessiyada):
     1. `./gradlew clean publishToMavenLocal` — signing test
-    2. `build.gradle.kts`-də versiya artıq `1.1.2`-dir — dəyişmə lazım deyil
+    2. `build.gradle.kts`-də versiya artıq `1.1.3`-dir — dəyişmə lazım deyil
     3. `./gradlew clean publishToSonatype closeAndReleaseSonatypeStagingRepository`
-    4. `git add -A && git commit -m "release: 1.1.2" && git push && git tag v1.1.2 && git push --tags`
+    4. `git add -A && git commit -m "release: 1.1.3" && git push && git tag v1.1.3 && git push --tags`
 - [ ] `JooqQuery.executeGenerated()` daxilində COUNT sorğusu (sətr ~1882) də
       JOIN-ləri tətbiq etmir. Tövsiyə: `dsl.selectCount().from(grouped.asTable("_count"))`
       üzərinə keçmək (entity mode-dakı kimi düzgün count almaq üçün).
