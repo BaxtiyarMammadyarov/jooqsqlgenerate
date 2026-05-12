@@ -7,13 +7,13 @@
 <dependency>
     <groupId>az.mbm</groupId>
     <artifactId>jooq-sql-generate</artifactId>
-    <version>1.0.8</version>
+    <version>1.1.2</version>
 </dependency>
 ```
 
 ```kotlin
 // Gradle
-implementation("az.mbm:jooq-sql-generate:1.0.8")
+implementation("az.mbm:jooq-sql-generate:1.1.2")
 ```
 
 ---
@@ -349,7 +349,47 @@ görə fərqli SQL yaradır:
 Bu davranış bütün LIKE axınlarında eynidir: `filter()`, `globalFilter()`,
 `Filter.of().like()`, HAVING, SubQuery — hamısı `FilterStrategies` üzərindən keçir.
 
-### 4.4 globalFilter — Filters builder ilə
+### 4.4 JooqManager — birbaşa filter metodları
+
+`JooqManager` istifadə edərkən `Filters.of()` yaratmadan birbaşa filter əlavə etmək mümkündür:
+
+```java
+jooq.setMainTable(Order.class, "o")
+    .addColumns("o.id", "o.name", "o.status", "o.createdAt")
+    .equal("o.status",    "ACTIVE")              // null → atlanır
+    .like("o.name",       name)                  // null/boş → atlanır
+    .between("o.createdAt", startDate, endDate)  // Long/Number — null olarsa partial
+    .in("o.roleId",       List.of(1L, 2L, 3L))  // boş list → atlanır
+    .notIn("o.status",    Set.of("DELETED"))     // boş set → atlanır
+    .isNull("o.deletedAt")
+    .execute();
+```
+
+**`between` — null dəyərlər qismən dəstəklənir:**
+```java
+// startDate=null, endDate dolu  → WHERE o.createdAt <= endDate
+// startDate dolu, endDate=null  → WHERE o.createdAt >= startDate
+// hər ikisi dolu                → WHERE o.createdAt BETWEEN start AND end
+// hər ikisi null                → şərt əlavə edilmir
+.between("o.createdAt", startDate, endDate)   // Long
+.between("o.price",     minPrice,  maxPrice)  // BigDecimal
+```
+
+**`in` / `notIn` — `List` və `Set` qəbul edir:**
+```java
+.in("o.roleId",  List.of(1L, 2L, 3L))
+.in("o.status",  Set.of("ACTIVE", "PENDING"))
+.notIn("o.type", List.of("DELETED", "ARCHIVED"))
+```
+
+**Mövcud `addFilter()` istifadəsi davam edir — köhnə kod sınmır:**
+```java
+jooq.addFilter(Filters.of().equal("status", "ACTIVE").like("name", name));
+jooq.addFilter("status", Op.EQUAl, status);
+jooq.addFilter(USERS.STATUS.eq("ACTIVE"));
+```
+
+### 4.5 globalFilter — Filters builder ilə
 
 ```java
 JooqQuery.from(Order.class, "o")
@@ -363,7 +403,7 @@ JooqQuery.from(Order.class, "o")
     .execute(dsl);
 ```
 
-### 4.5 globalFilter — Map ilə (REST sorğularından gəldikdə)
+### 4.6 globalFilter — Map ilə (REST sorğularından gəldikdə)
 
 ```java
 // Tək field üçün çoxlu əməliyyat
@@ -380,7 +420,7 @@ JooqQuery.from(Order.class, "o")
 ))
 ```
 
-### 4.6 Birbaşa jOOQ Condition
+### 4.7 Birbaşa jOOQ Condition
 
 ```java
 .filter(USERS.STATUS.eq("ACTIVE"))
@@ -388,7 +428,7 @@ JooqQuery.from(Order.class, "o")
 .rawCondition(DSL.condition("u.created_at > NOW() - INTERVAL '30 days'"))
 ```
 
-### 4.7 fieldFilter — iki sahə arasında WHERE müqayisəsi
+### 4.8 fieldFilter — iki sahə arasında WHERE müqayisəsi
 
 JOIN edilmiş iki cədvəlin sahələrini birbaşa bir-biri ilə müqayisə etmək üçün:
 
@@ -410,7 +450,7 @@ jooq.addFieldFilter("t.totalPrice", Op.GREATER_THAN_OR_EQUAL_TO, "f.minAmount");
 
 `fieldFilter` dəstəklənən operatorlar: `EQUAl`, `NOT_EQUAL`, `LESS_THAN`, `LESS_THAN_OR_EQUAL_TO`, `GREATER_THAN`, `GREATER_THAN_OR_EQUAL_TO`.
 
-### 4.8 OR qrupu filterlər — addOrOperation
+### 4.9 OR qrupu filterlər — addOrOperation
 
 Eyni `conditionAlias` altında toplanan filtrlər AND şərti ilə birləşir; fərqli `conditionAlias`-lar isə OR ilə:
 
@@ -438,7 +478,7 @@ jooq.addOrOperation("cond", "t", "actionType", Op.EQUAl, "OUT")
     .done();
 ```
 
-### 4.9 Mürəkkəb OR/AND qruplaması — orGroup
+### 4.10 Mürəkkəb OR/AND qruplaması — orGroup
 
 `x AND (y OR (z AND f))` formatlı qruplaşdırılmış şərtlər üçün fluent builder:
 
@@ -1114,13 +1154,29 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 |---|---|
 | `setMainTable(Class, alias)` | Ana cədvəl təyini |
 | `addSelect(cols...)` | SELECT sütunları |
-| `addFilter(field, Op, value)` | WHERE filter |
+| `addFilter(field, Op, value)` | WHERE filter (Op ilə) |
+| `addFilter(Filters)` | Filters builder ilə |
+| `addFilter(Condition)` | Birbaşa jOOQ şərti |
+| `equal(field, value)` | `WHERE field = value` — birbaşa |
+| `notEqual(field, value)` | `WHERE field != value` — birbaşa |
+| `like(field, value)` | `WHERE field LIKE '%val%'` — birbaşa |
+| `startWith(field, value)` | `WHERE field LIKE 'val%'` — birbaşa |
+| `endWith(field, value)` | `WHERE field LIKE '%val'` — birbaşa |
+| `greaterThan(field, value)` | `WHERE field > value` — birbaşa |
+| `greaterThanOrEqual(field, value)` | `WHERE field >= value` — birbaşa |
+| `lessThan(field, value)` | `WHERE field < value` — birbaşa |
+| `lessThanOrEqual(field, value)` | `WHERE field <= value` — birbaşa |
+| `isNull(field)` | `WHERE field IS NULL` — birbaşa |
+| `isNotNull(field)` | `WHERE field IS NOT NULL` — birbaşa |
+| `in(field, Collection<?>)` | `WHERE field IN (...)` — List/Set |
+| `notIn(field, Collection<?>)` | `WHERE field NOT IN (...)` — List/Set |
+| `between(field, String, String)` | `BETWEEN` — null handling daxil |
+| `between(field, Number, Number)` | `BETWEEN` — Long/BigDecimal/Integer |
 | `addFieldFilter(left, Op, right)` | İki sahə arasında WHERE müqayisəsi |
 | `addLeftJoin(Class, alias).on(...).done()` | Builder LEFT JOIN |
 | `addInnerJoin(Class, alias).onFrom(...).done()` | Builder INNER JOIN |
 | `.onFrom(fromAlias, fromField, Op, toField)` | JOIN ON ilə Op operatoru |
 | `addOrOperation(alias, tableAlias, field, Map).add(...).done()` | OR qrupu filterlər |
-| `addOrOperation(alias, tableAlias, field, Op, value).add(...).done()` | OR qrupu (Op overload) |
 | `orGroup(alias).or(...).andBranch(...).add(...).end().done()` | Mürəkkəb OR/AND qruplaması |
 | `addExists(ExistsSpec)` | EXISTS / NOT EXISTS əlavə edir |
 | `addGroupBy(fields...)` | GROUP BY |
