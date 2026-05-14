@@ -4,6 +4,7 @@ import org.jooq.*;
 import org.jooq.Record;
 import org.jooq.RecordMapper;
 import az.mbm.jooqsqlgenerate.builder.CaseBuilder;
+import az.mbm.jooqsqlgenerate.builder.ConcatItem;
 import az.mbm.jooqsqlgenerate.builder.ComputedField;
 import az.mbm.jooqsqlgenerate.builder.SubQueryIn;
 import az.mbm.jooqsqlgenerate.builder.SubSelectBuilder;
@@ -213,7 +214,7 @@ public class JooqManager {
         return this;
     }
 
-    /** CONCAT SELECT sütunu — separator ilə birləşdirilmiş field-lər. */
+    /** CONCAT SELECT sütunu — sütun adları ilə. */
     public JooqManager addConcatColumn(String alias, String separator, String... fields) {
         q().concat(alias, separator, fields);
         return this;
@@ -222,6 +223,12 @@ public class JooqManager {
     /** CONCAT SELECT sütunu — List&lt;String&gt; variantı. */
     public JooqManager addConcatColumn(String alias, String separator, List<String> fields) {
         q().concat(alias, separator, fields);
+        return this;
+    }
+
+    /** CONCAT SELECT sütunu — field + literal qarışıq. */
+    public JooqManager addConcatColumn(String alias, String separator, ConcatItem... items) {
+        q().concat(alias, separator, items);
         return this;
     }
 
@@ -1353,6 +1360,94 @@ public class JooqManager {
     public JooqManager addCaseBuilder(CaseBuilder<?> cb) {
         q().caseWhen(cb);
         return this;
+    }
+
+    /**
+     * Fluent CASE WHEN — zəncir sintaksisi ilə.
+     *
+     * <pre>{@code
+     * manager.addCase()
+     *        .when("status", Op.EQUAl, "ACTIVE").then("Aktiv")
+     *        .when("status", Op.EQUAl, "INACTIVE").then("Deaktiv")
+     *        .else_("Naməlum")
+     *        .as("statusLabel")
+     *
+     * // Sütun referansı:
+     * manager.addCase()
+     *        .when("type", Op.EQUAl, "A").thenField("t.priceA")
+     *        .when("type", Op.EQUAl, "B").thenField("t.priceB")
+     *        .elseField("t.defaultPrice")
+     *        .as("finalPrice")
+     * }</pre>
+     */
+    public CaseStep addCase() {
+        return new CaseStep(this, new CaseBuilder<>());
+    }
+
+    /** Fluent CASE WHEN zəncirinin əsas addımı. */
+    public static final class CaseStep {
+        private final JooqManager        manager;
+        private final CaseBuilder<Object> cb;
+
+        @SuppressWarnings("unchecked")
+        CaseStep(JooqManager manager, CaseBuilder<?> cb) {
+            this.manager = manager;
+            this.cb      = (CaseBuilder<Object>) cb;
+        }
+
+        /** WHEN şərti — THEN gözləyir. */
+        public CaseThenStep when(String field, Op op, Object whenValue) {
+            return new CaseThenStep(this, field, op, whenValue);
+        }
+
+        /** ELSE — literal dəyər. */
+        public CaseStep else_(Object elseValue) {
+            cb.otherwise(elseValue);
+            return this;
+        }
+
+        /** ELSE — cədvəl sütunu ({@code "alias.fieldName"}). */
+        public CaseStep elseField(String aliasAndField) {
+            cb.otherwiseField(aliasAndField);
+            return this;
+        }
+
+        /**
+         * Alias təyin edir, CASE-i manager-ə qeydiyyat edir
+         * və {@link JooqManager}-ə qayıdır.
+         */
+        public JooqManager as(String alias) {
+            cb.as(alias);
+            manager.q().caseWhen(cb);
+            return manager;
+        }
+    }
+
+    /** WHEN-dən sonra THEN gözləyən addım. */
+    public static final class CaseThenStep {
+        private final CaseStep parent;
+        private final String   field;
+        private final Op       op;
+        private final Object   whenVal;
+
+        CaseThenStep(CaseStep parent, String field, Op op, Object whenVal) {
+            this.parent  = parent;
+            this.field   = field;
+            this.op      = op;
+            this.whenVal = whenVal;
+        }
+
+        /** THEN — literal dəyər. */
+        public CaseStep then(Object thenValue) {
+            parent.cb.addWhen(field, op, whenVal, thenValue);
+            return parent;
+        }
+
+        /** THEN — cədvəl sütunu ({@code "alias.fieldName"}). */
+        public CaseStep thenField(String aliasAndField) {
+            parent.cb.addWhenField(field, op, whenVal, aliasAndField);
+            return parent;
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════

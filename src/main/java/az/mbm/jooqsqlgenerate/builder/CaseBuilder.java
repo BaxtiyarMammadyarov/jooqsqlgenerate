@@ -1,55 +1,57 @@
 package az.mbm.jooqsqlgenerate.builder;
 
-import org.jooq.Field;
-import org.jooq.impl.DSL;
-import az.mbm.jooqsqlgenerate.core.EntityTable;
 import az.mbm.jooqsqlgenerate.enums.Op;
-import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
 /**
- * FLUENT BUILDER — SQL {@code CASE WHEN} ifadəsi üçün
+ * FLUENT BUILDER — SQL {@code CASE WHEN} ifadəsi üçün.
  *
- * <p>Köhnə kodda 11 parametrli bir metod:
- * <pre>{@code
- *   manager.setAndCaseValue("alias", "w1", "u", "status",
- *       "ACTIVE", Op.EQUAl, "Aktiv", false, null,
- *       Op.EQUAl, "INACTIVE");
- * }</pre>
+ * <p>Bu sinif yalnız data saxlayır — heç bir jOOQ asılılığı yoxdur.
+ * SQL generasiyası {@link SelectQueryBuilder#buildCaseField} tərəfindən həyata keçirilir.
  *
- * <p>Yeni fluent API:
  * <pre>{@code
  *   CaseBuilder.when("status", Op.EQUAl, "ACTIVE").then("Aktiv")
  *              .andWhen("status", Op.EQUAl, "INACTIVE").then("Deaktiv")
  *              .otherwise("Naməlum")
  *              .as("statusLabel")
+ *
+ *   // Rəqəm dəyərləri:
+ *   CaseBuilder.when("a", Op.EQUAl, 1).then(0)
+ *              .otherwise(-1)
+ *              .as("result")
  * }</pre>
  *
  * <p><b>Qeyd:</b> Giriş nöqtəsi üçün statik {@link #when(String, Op, Object)},
  * zəncir üçün isə instance {@link #andWhen(String, Op, Object)} istifadə edin.
- * Java statik və instance metodun eyni erasure-a sahib ola bilməz — buna görə adlar fərqlidir.
  *
  * @param <T> entity tipi
  */
 public class CaseBuilder<T> {
 
-    private record WhenClause(String field, Op op, Object whenVal, Object thenVal) {}
+    /**
+     * WHEN/THEN cütü — package-private, SelectQueryBuilder tərəfindən oxunur.
+     * {@code thenIsField=true} olduqda {@code thenVal} sütun adıdır (alias.field),
+     * əks halda literal dəyərdir ({@code DSL.val()} ilə render olunur).
+     */
+    record WhenClause(String field, Op op, Object whenVal, Object thenVal, boolean thenIsField) {}
 
-    private final List<WhenClause> whenClauses = new ArrayList<>();
-    private       Object           elseValue   = null;
-    private       String           alias       = null;
+    private final List<WhenClause> whenClauses  = new ArrayList<>();
+    private       Object           elseValue    = null;
+    private       boolean          elseIsField  = false;
+    private       String           alias        = null;
 
-    private CaseBuilder() {}
+    public CaseBuilder() {}
 
     // ─── Statik giriş nöqtəsi ────────────────────────────────────────────
 
     /**
      * CASE WHEN builder-ini başladır.
      *
-     * <pre>{@code CaseBuilder.when("status", EQUAl, "ACTIVE").then("Aktiv") }</pre>
+     * <pre>{@code CaseBuilder.when("status", Op.EQUAl, "ACTIVE").then("Aktiv") }</pre>
      */
     public static <T> WhenStep<T> when(String field, Op op, Object whenValue) {
         CaseBuilder<T> b = new CaseBuilder<>();
@@ -61,12 +63,7 @@ public class CaseBuilder<T> {
     /**
      * .then() çağrısından sonra əlavə WHEN şərti əlavə edir.
      *
-     * <pre>{@code
-     *   CaseBuilder.when("status", EQUAl, "ACTIVE").then("Aktiv")
-     *              .andWhen("status", EQUAl, "INACTIVE").then("Deaktiv")
-     * }</pre>
-     *
-     * <p><b>Niyə andWhen?</b> Java-da bir sinifdə eyni silinmə (erasure) ilə
+     * <p><b>Niyə andWhen?</b> Java-da bir sinifdə eyni erasure ilə
      * həm statik həm instance metod ola bilməz. Statik {@code when()} giriş
      * nöqtəsi, {@code andWhen()} isə zəncir metodu rolunu oynayır.
      */
@@ -76,8 +73,17 @@ public class CaseBuilder<T> {
 
     // ─── OTHERWISE ───────────────────────────────────────────────────────
 
+    /** ELSE — literal dəyər (rəqəm, string və s.). */
     public CaseBuilder<T> otherwise(Object elseValue) {
-        this.elseValue = elseValue;
+        this.elseValue   = elseValue;
+        this.elseIsField = false;
+        return this;
+    }
+
+    /** ELSE — cədvəl sütunu ({@code "alias.fieldName"} formatında). */
+    public CaseBuilder<T> otherwiseField(String aliasAndField) {
+        this.elseValue   = aliasAndField;
+        this.elseIsField = true;
         return this;
     }
 
@@ -93,10 +99,10 @@ public class CaseBuilder<T> {
     // ─── THEN addımı (inner builder) ─────────────────────────────────────
 
     public static class WhenStep<T> {
-        private final CaseBuilder<T>   builder;
-        private final String           field;
-        private final Op op;
-        private final Object           whenVal;
+        private final CaseBuilder<T> builder;
+        private final String         field;
+        private final Op             op;
+        private final Object         whenVal;
 
         WhenStep(CaseBuilder<T> builder, String field, Op op, Object whenVal) {
             this.builder = builder;
@@ -105,44 +111,38 @@ public class CaseBuilder<T> {
             this.whenVal = whenVal;
         }
 
-        /** THEN dəyəri: bu WHEN tamamlanır, CaseBuilder-ə qayıdılır */
+        /** THEN — literal dəyər (rəqəm, string və s.). */
         public CaseBuilder<T> then(Object thenValue) {
-            builder.whenClauses.add(new WhenClause(field, op, whenVal, thenValue));
+            builder.whenClauses.add(new WhenClause(field, op, whenVal, thenValue, false));
+            return builder;
+        }
+
+        /** THEN — cədvəl sütunu ({@code "alias.fieldName"} formatında). */
+        public CaseBuilder<T> thenField(String aliasAndField) {
+            builder.whenClauses.add(new WhenClause(field, op, whenVal, aliasAndField, true));
             return builder;
         }
     }
 
-    // ─── jOOQ Field-ə çevirmə ────────────────────────────────────────────
+    // ─── Package-private accessors (SelectQueryBuilder üçün) ─────────────
 
-    /**
-     * Builder-i jOOQ {@link Field}-ə çevirir.
-     * {@link SelectQueryBuilder} tərəfindən çağrılır.
-     *
-     * @param table entity-nin EntityTable nümunəsi
-     * @throws IllegalStateException WHEN şərti və ya alias yoxdursa
-     */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    public Field<?> toField(EntityTable<T> table) {
-        if (whenClauses.isEmpty())
-            throw new IllegalStateException("CaseBuilder: heç bir WHEN şərti yoxdur");
-        if (alias == null)
-            throw new IllegalStateException("CaseBuilder: .as(alias) tələb olunur");
+    List<WhenClause> whenClauses() { return Collections.unmodifiableList(whenClauses); }
+    Object           elseValue()   { return elseValue; }
+    boolean          elseIsField() { return elseIsField; }
+    String           alias()       { return alias; }
 
-        org.jooq.CaseConditionStep caseStep = null;
+    /** Package-private — Case sinifi üçün. */
+    void addWhenClause(WhenClause wc) { whenClauses.add(wc); }
 
-        for (WhenClause wc : whenClauses) {
-            Field<Object> f    = (Field<Object>) table.getField(wc.field());
-            var           cond = FilterStrategies.get(wc.op()).apply(f, wc.whenVal());
-            var           then = DSL.val(wc.thenVal());
-            caseStep = (caseStep == null)
-                    ? DSL.case_().when(cond, then)
-                    : caseStep.when(cond, then);
-        }
+    /** Literal THEN dəyəri ilə WHEN/THEN cütü əlavə edir. */
+    public CaseBuilder<T> addWhen(String field, Op op, Object whenVal, Object thenVal) {
+        whenClauses.add(new WhenClause(field, op, whenVal, thenVal, false));
+        return this;
+    }
 
-        var result = (elseValue != null)
-                ? caseStep.otherwise(DSL.val(elseValue))
-                : caseStep.otherwise(DSL.inline((Object) null));
-
-        return result.as(alias);
+    /** Sütun referansı THEN ilə WHEN/THEN cütü əlavə edir. */
+    public CaseBuilder<T> addWhenField(String field, Op op, Object whenVal, String thenAliasAndField) {
+        whenClauses.add(new WhenClause(field, op, whenVal, thenAliasAndField, true));
+        return this;
     }
 }

@@ -137,7 +137,7 @@ public class SelectQueryBuilder<T> {
             String tableAlias2, String field2) {}
 
     /** CONCAT SELECT sütunu */
-    private record ConcatCol(String alias, String separator, List<String> fields) {}
+    private record ConcatCol(String alias, String separator, List<ConcatItem> items) {}
 
     /** COALESCE SELECT sütunu — ilk null olmayan sahəni qaytarır */
     private record CoalesceCol(String alias, List<String> fields, Object defaultValue) {}
@@ -328,12 +328,38 @@ public class SelectQueryBuilder<T> {
     }
 
     /**
-     * CONCAT SELECT sütunu.
+     * CONCAT SELECT sütunu — sütun adları ilə (geriyə dönük uyğun).
      *
      * <pre>{@code .concat("fullName", " ", "u.firstName", "u.lastName") }</pre>
      */
     public SelectQueryBuilder<T> concat(String alias, String separator, String... fields) {
-        concatCols.add(new ConcatCol(alias, separator, Arrays.asList(fields)));
+        List<ConcatItem> items = Arrays.stream(fields)
+                .map(ConcatItem::field)
+                .collect(java.util.stream.Collectors.toList());
+        concatCols.add(new ConcatCol(alias, separator, items));
+        return this;
+    }
+
+    /**
+     * CONCAT SELECT sütunu — {@link ConcatItem} qarışıq (field + literal).
+     *
+     * <pre>{@code
+     * import static az.mbm.jooqsqlgenerate.builder.ConcatItem.*;
+     *
+     * .concat("userCode", "-", literal("USR"), field("u.userId"))
+     * // SQL: 'USR' || '-' || COALESCE(userId,'')
+     * }</pre>
+     */
+    public SelectQueryBuilder<T> concat(String alias, String separator, ConcatItem... items) {
+        concatCols.add(new ConcatCol(alias, separator, Arrays.asList(items)));
+        return this;
+    }
+
+    /**
+     * CONCAT SELECT sütunu — {@link ConcatItem} List variantı.
+     */
+    public SelectQueryBuilder<T> concat(String alias, String separator, List<ConcatItem> items) {
+        concatCols.add(new ConcatCol(alias, separator, new ArrayList<>(items)));
         return this;
     }
 
@@ -973,7 +999,7 @@ public class SelectQueryBuilder<T> {
 
         // CASE WHEN sütunlar
         for (CaseBuilder<T> cb : caseCols) {
-            fields.add(cb.toField(mainTable));
+            fields.add(buildCaseField(cb, mainTable, tableMap));
         }
 
         // CONCAT sütunlar
@@ -1358,16 +1384,25 @@ public class SelectQueryBuilder<T> {
         };
     }
 
+    private Field<?> buildCaseField(CaseBuilder<T> cb, EntityTable<T> mainTable,
+                                    Map<String, EntityTable<?>> tableMap) {
+        return CaseFieldBuilder.build(cb, mainTable, tableMap);
+    }
+
     private Field<?> buildConcatField(ConcatCol cc, EntityTable<T> mainTable,
                                        Map<String, EntityTable<?>> tableMap) {
         List<Field<?>> parts = new ArrayList<>();
-        for (int i = 0; i < cc.fields().size(); i++) {
+        for (int i = 0; i < cc.items().size(); i++) {
             if (i > 0 && cc.separator() != null && !cc.separator().isEmpty()) {
                 parts.add(DSL.inline(cc.separator()));
             }
-            String         f = cc.fields().get(i);
-            EntityTable<?> t = tableMap.getOrDefault(aliasPart(f), mainTable);
-            parts.add(DSL.coalesce(t.getField(fieldPart(f)), DSL.inline("")));
+            ConcatItem item = cc.items().get(i);
+            if (item instanceof ConcatItem.Literal lit) {
+                parts.add(DSL.inline(lit.value()));
+            } else if (item instanceof ConcatItem.ColField cf) {
+                EntityTable<?> t = tableMap.getOrDefault(aliasPart(cf.aliasAndField()), mainTable);
+                parts.add(DSL.coalesce(t.getField(fieldPart(cf.aliasAndField())), DSL.inline("")));
+            }
         }
         return DSL.concat(parts.toArray(new Field[0])).as(cc.alias());
     }

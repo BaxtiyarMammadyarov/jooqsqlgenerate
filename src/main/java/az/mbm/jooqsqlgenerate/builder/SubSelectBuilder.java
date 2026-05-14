@@ -282,7 +282,7 @@ public class SubSelectBuilder {
                     throw new IllegalStateException("SubSelectBuilder: .selectCase() çağrılmayıb");
                 // CaseBuilder-in alias-ı subquery içindəki sütun adı kimi işlədilir;
                 // xarici .as() subquery field-in alias-ını müəyyən edir.
-                yield caseBuilder.toField((EntityTable) innerTable);
+                yield CaseFieldBuilder.build(caseBuilder, innerTable, null);
             }
         };
     }

@@ -5,6 +5,7 @@ import org.jooq.Record;
 import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.builder.AggregateBuilder;
 import az.mbm.jooqsqlgenerate.builder.CaseBuilder;
+import az.mbm.jooqsqlgenerate.builder.ConcatItem;
 import az.mbm.jooqsqlgenerate.builder.ComputedField;
 import az.mbm.jooqsqlgenerate.builder.SelectQueryBuilder;
 import az.mbm.jooqsqlgenerate.builder.SubQueryIn;
@@ -133,7 +134,7 @@ public final class JooqQuery<T> {
                                       Op filterOp,
                                       Object filterValue) {}
     private record CoalesceRow(String alias, Object def, String[] fields) {}
-    private record ConcatRow(String alias, String separator, String[] fields) {}
+    private record ConcatRow(String alias, String separator, List<ConcatItem> items) {}
     private record SubQueryInRow(List<String> outerFields, SubQueryIn sub) {}
     private record FiltersEntry(String aliasAndField, Op op, Object value) {}
     private record FieldFilterEntry(String leftAliasAndField, Op op, String rightAliasAndField) {}
@@ -374,17 +375,32 @@ public final class JooqQuery<T> {
         return this;
     }
 
-    /** CONCAT sütunu — separator ilə birləşdirilmiş field-lər. */
+    /** CONCAT sütunu — sütun adları ilə (geriyə dönük uyğun). */
     public JooqQuery<T> concat(String alias, String separator, String... fields) {
-        if (alias != null && fields != null && fields.length > 0)
-            concatCols.add(new ConcatRow(alias, separator, fields));
+        if (alias != null && fields != null && fields.length > 0) {
+            List<ConcatItem> items = Arrays.stream(fields)
+                    .map(ConcatItem::field)
+                    .collect(java.util.stream.Collectors.toList());
+            concatCols.add(new ConcatRow(alias, separator, items));
+        }
         return this;
     }
 
     /** CONCAT sütunu — List&lt;String&gt; variantı. */
     public JooqQuery<T> concat(String alias, String separator, List<String> fields) {
-        if (alias != null && fields != null && !fields.isEmpty())
-            concatCols.add(new ConcatRow(alias, separator, fields.toArray(new String[0])));
+        if (alias != null && fields != null && !fields.isEmpty()) {
+            List<ConcatItem> items = fields.stream()
+                    .map(ConcatItem::field)
+                    .collect(java.util.stream.Collectors.toList());
+            concatCols.add(new ConcatRow(alias, separator, items));
+        }
+        return this;
+    }
+
+    /** CONCAT sütunu — field + literal qarışıq. */
+    public JooqQuery<T> concat(String alias, String separator, ConcatItem... items) {
+        if (alias != null && items != null && items.length > 0)
+            concatCols.add(new ConcatRow(alias, separator, Arrays.asList(items)));
         return this;
     }
 
@@ -1443,7 +1459,7 @@ public final class JooqQuery<T> {
         for (CoalesceRow cr : coalesceCols)
             builder.coalesce(cr.alias(), cr.def(), cr.fields());
         for (ConcatRow cc : concatCols)
-            builder.concat(cc.alias(), cc.separator(), cc.fields());
+            builder.concat(cc.alias(), cc.separator(), cc.items());
         for (SubSelectBuilder sub : subSelectCols)
             builder.subSelect(sub);
         for (Field<?> rf : rawSelectFields)
