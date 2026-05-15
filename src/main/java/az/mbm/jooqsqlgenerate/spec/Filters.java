@@ -48,52 +48,61 @@ public final class Filters {
 
     // ─── Bərabərlik ──────────────────────────────────────────────────────
 
-    /** {@code WHERE field = value} */
+    /** {@code WHERE field = value} — null və ya boş dəyər atlanır */
     public Filters equal(String field, String value) {
+        if (value == null || value.isBlank()) return this;
         return put(FilterOperationConstants.EQUAl, field, value);
     }
 
-    /** {@code WHERE field != value} */
+    /** {@code WHERE field != value} — null və ya boş dəyər atlanır */
     public Filters notEqual(String field, String value) {
+        if (value == null || value.isBlank()) return this;
         return put(FilterOperationConstants.NOT_EQUAl, field, value);
     }
 
     // ─── Müqayisə ────────────────────────────────────────────────────────
 
-    /** {@code WHERE field > value} */
+    /** {@code WHERE field > value} — null və ya boş dəyər atlanır */
     public Filters greaterThan(String field, String value) {
+        if (value == null || value.isBlank()) return this;
         return put(FilterOperationConstants.GREATER_THAN, field, value);
     }
 
-    /** {@code WHERE field >= value} */
+    /** {@code WHERE field >= value} — null və ya boş dəyər atlanır */
     public Filters greaterThanOrEqual(String field, String value) {
+        if (value == null || value.isBlank()) return this;
         return put(FilterOperationConstants.GREATER_THAN_OR_EQUAL_TO, field, value);
     }
 
-    /** {@code WHERE field < value} */
+    /** {@code WHERE field < value} — null və ya boş dəyər atlanır */
     public Filters lessThan(String field, String value) {
+        if (value == null || value.isBlank()) return this;
         return put(FilterOperationConstants.LESS_THAN, field, value);
     }
 
-    /** {@code WHERE field <= value} */
+    /** {@code WHERE field <= value} — null və ya boş dəyər atlanır */
     public Filters lessThanOrEqual(String field, String value) {
+        if (value == null || value.isBlank()) return this;
         return put(FilterOperationConstants.LESS_THAN_OR_EQUAL_TO, field, value);
     }
 
     // ─── LIKE ────────────────────────────────────────────────────────────
 
-    /** {@code WHERE field LIKE '%value%'} */
+    /** {@code WHERE field LIKE '%value%'} — null və ya boş dəyər atlanır */
     public Filters like(String field, String value) {
+        if (value == null || value.isBlank()) return this;
         return put(FilterOperationConstants.LIKE, field, value);
     }
 
-    /** {@code WHERE field LIKE 'value%'} */
+    /** {@code WHERE field LIKE 'value%'} — null və ya boş dəyər atlanır */
     public Filters startWith(String field, String value) {
+        if (value == null || value.isBlank()) return this;
         return put(FilterOperationConstants.START_WITH, field, value);
     }
 
-    /** {@code WHERE field LIKE '%value'} */
+    /** {@code WHERE field LIKE '%value'} — null və ya boş dəyər atlanır */
     public Filters endWith(String field, String value) {
+        if (value == null || value.isBlank()) return this;
         return put(FilterOperationConstants.END_WITH, field, value);
     }
 

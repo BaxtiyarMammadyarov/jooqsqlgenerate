@@ -177,6 +177,25 @@ manager.addConcatColumn("fullName", " ", "u.firstName", "u.lastName")
 
 ---
 
+### 2026-05-15 — Bug fix: Filters null/boş dəyər keçikdirmə
+
+**Problem:** `equal("")`, `like("")`, `greaterThan("")` və digər string filter metodları
+boş string-i (`""`) etibarlı dəyər kimi qəbul edirdi → `WHERE field = ''` kimi SQL generasiya olunurdu.
+Düzgün davranış: null və ya boş (`isBlank()`) dəyər gəldikdə şərt əlavə edilməməlidir.
+
+**Düzəliş (`Filters.java`):**
+Aşağıdakı metodların hər birinə `if (value == null || value.isBlank()) return this;` əlavə edildi:
+`equal`, `notEqual`, `greaterThan`, `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`,
+`like`, `startWith`, `endWith`
+
+`isNull`/`isNotNull` dəyişdirilmədi — onlar `""` dəyərini qəsdən ötürür.
+`put()` metodu dəyişdirilmədi — `""` yoxlaması `put()`-da deyil, hər metodda fərdi edildi.
+
+`JooqManager`-dəki eyni metodlar `Filters`-ə delegate etdiyi üçün avtomatik düzəldi;
+yalnız Javadoc şərhləri "null/boş dəyər atlanır" olaraq yeniləndi.
+
+---
+
 ### 2026-05-12 — JooqManager birbaşa filter metodları + Filters təkmilləşdirmələri
 
 **Motivasiya:** İstifadəçi `Filters.of()` yaradıb `addFilter()` ilə set etmək əvəzinə
@@ -214,18 +233,92 @@ istifadəçi yalnız `JooqManager` ilə işləməlidir.
 
 <!-- Burada açıq tapşırıqlar, bug-lar, ideyalar -->
 
-- [ ] **Maven Central-a release (1.1.5):**
+- [ ] **Maven Central-a release (1.1.6):**
   - `~/.gradle/gradle.properties` və `~/.gradle/secret.pgp` iş kompüterinə köçürüldü ✓
   - Növbəti addımlar (gələcək sessiyada):
     1. `./gradlew clean publishToMavenLocal` — signing test
-    2. `build.gradle.kts`-də versiya artıq `1.1.5`-dir — dəyişmə lazım deyil
+    2. `build.gradle.kts`-də versiya artıq `1.1.6`-dır — dəyişmə lazım deyil
     3. `./gradlew clean publishToSonatype closeAndReleaseSonatypeStagingRepository`
-    4. `git add -A && git commit -m "release: 1.1.5" && git push && git tag v1.1.5 && git push --tags`
+    4. `git add -A && git commit -m "release: 1.1.6" && git push && git tag v1.1.6 && git push --tags`
 - [ ] `JooqQuery.executeGenerated()` daxilində COUNT sorğusu (sətr ~1882) də
       JOIN-ləri tətbiq etmir. Tövsiyə: `dsl.selectCount().from(grouped.asTable("_count"))`
       üzərinə keçmək (entity mode-dakı kimi düzgün count almaq üçün).
 - [ ] Yeni unit test əlavə et: INNER JOIN + JOIN ON-da əlavə şərt olduqda
       `rowCount == result.size()` (noPagination ilə) doğrulansın.
+
+---
+
+## Kodlaşdırma qaydaları (checklist — hər yeni feature üçün)
+
+> Bu qaydalar keçmiş buglardan öyrənildi. Yeni metod/feature yazarkən aşağıdakıları yoxla.
+
+### 1. String dəyər alan filter metodları — null/blank guard
+**Qayda:** `String value` parametri alan hər filter metodu `null` **və** `isBlank()` yoxlamalıdır.
+
+```java
+// ✅ Düzgün
+public Filters equal(String field, String value) {
+    if (value == null || value.isBlank()) return this;
+    return put(..., field, value);
+}
+
+// ❌ Səhv — boş string WHERE field = '' generasiya edir
+public Filters equal(String field, String value) {
+    return put(..., field, value);
+}
+```
+
+**Tətbiq edilməli metodlar:** `equal`, `notEqual`, `greaterThan`, `greaterThanOrEqual`,
+`lessThan`, `lessThanOrEqual`, `like`, `startWith`, `endWith`, `regexp`, `notRegexp`
+
+**İstisnalar:** `isNull`, `isNotNull` — `""` dəyərini qəsdən ötürür; bu metodlarda guard olmaz.
+
+**Collection variantları:** `in(Collection)`, `notIn(Collection)` — `isEmpty()` yoxlaması kifayətdir.
+
+---
+
+### 2. Numeric field-də LIKE/REPLACE xətası
+**Qayda:** LIKE strategiyaları numeric field (bigint, integer, numeric) üçün
+`REPLACE`/`LOWER` tətbiq etməməlidir — `CAST(field AS varchar)` istifadə edilməlidir.
+
+```java
+// FilterStrategies-də isStringField() yoxlaması mütləqdir
+Field<?> ready = isStringField(f) ? turkishLower(f) : f.cast(String.class);
+```
+
+**Yoxlanmalı axınlar:** WHERE, HAVING, SubQuery, SubSelect, OR filter — hamısı eyni strategiyadən keçməlidir.
+
+---
+
+### 3. COUNT sorğusunda JOIN-lər
+**Qayda:** `buildCount()` JOIN-ləri də tətbiq etməlidir, yalnız `mainTable`-dan `selectCount()` kifayət etmir.
+
+```java
+// ✅ Düzgün — JOIN-lər tətbiq edilir
+selectCount().from(mainTable).join(...).where(...)
+
+// ❌ Səhv — JOIN-lər itirilir, rowCount yanlış çıxır
+selectCount().from(mainTable).where(...)
+```
+
+**Qeyd:** `JooqQuery.java` (~1882 sətr) hələ düzəldilməyib — TODO-da var.
+
+---
+
+### 4. Yeni public metod əlavə edərkən
+- `JooqManager` metodları → `Filters`-ə delegate et, logika `Filters`-də olsun
+- `SelectQueryBuilder` metodları → `JooqQuery` və `JooqManager` üzərindən də əlçatan et
+- Builder metodları (CaseBuilder, ConcatItem, ComputedField) jOOQ import etməməlidir — DSL logikası ayrıca `*FieldBuilder` siniflərdə olmalıdır
+- Yeni enum dəyər əlavə edərkən `FilterStrategies`-ə müvafiq strategiya da əlavə et
+
+---
+
+### 5. Versiya idarəetməsi
+`build.gradle.kts`-də versiya **iki yerdə** yazılır — hər ikisi eyni vaxtda dəyişdirilməlidir:
+```kotlin
+version = "X.Y.Z"          // ← layihə versiyası (yuxarı)
+version = "X.Y.Z"          // ← MavenPublication içində (aşağı)
+```
 
 ---
 

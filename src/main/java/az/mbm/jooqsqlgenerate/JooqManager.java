@@ -592,32 +592,32 @@ public class JooqManager {
     //       .between("createdAt", startDate, endDate)
     //       .execute();
 
-    /** {@code WHERE field = value} — null-dursa atlanır */
+    /** {@code WHERE field = value} — null/boş dəyər atlanır */
     public JooqManager equal(String field, String value) {
         return addFilter(Filters.of().equal(field, value));
     }
 
-    /** {@code WHERE field != value} — null-dursa atlanır */
+    /** {@code WHERE field != value} — null/boş dəyər atlanır */
     public JooqManager notEqual(String field, String value) {
         return addFilter(Filters.of().notEqual(field, value));
     }
 
-    /** {@code WHERE field > value} — null-dursa atlanır */
+    /** {@code WHERE field > value} — null/boş dəyər atlanır */
     public JooqManager greaterThan(String field, String value) {
         return addFilter(Filters.of().greaterThan(field, value));
     }
 
-    /** {@code WHERE field >= value} — null-dursa atlanır */
+    /** {@code WHERE field >= value} — null/boş dəyər atlanır */
     public JooqManager greaterThanOrEqual(String field, String value) {
         return addFilter(Filters.of().greaterThanOrEqual(field, value));
     }
 
-    /** {@code WHERE field < value} — null-dursa atlanır */
+    /** {@code WHERE field < value} — null/boş dəyər atlanır */
     public JooqManager lessThan(String field, String value) {
         return addFilter(Filters.of().lessThan(field, value));
     }
 
-    /** {@code WHERE field <= value} — null-dursa atlanır */
+    /** {@code WHERE field <= value} — null/boş dəyər atlanır */
     public JooqManager lessThanOrEqual(String field, String value) {
         return addFilter(Filters.of().lessThanOrEqual(field, value));
     }
