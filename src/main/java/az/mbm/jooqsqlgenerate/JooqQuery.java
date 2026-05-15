@@ -16,7 +16,7 @@ import az.mbm.jooqsqlgenerate.core.SelectTable;
 import az.mbm.jooqsqlgenerate.enums.Op;
 import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 import az.mbm.jooqsqlgenerate.enums.Agg;
-import az.mbm.jooqsqlgenerate.enums.MathOperation;
+import az.mbm.jooqsqlgenerate.enums.MathOp;
 import az.mbm.jooqsqlgenerate.spec.ExistsSpec;
 import az.mbm.jooqsqlgenerate.spec.Filter;
 import az.mbm.jooqsqlgenerate.spec.Filters;
@@ -123,12 +123,12 @@ public final class JooqQuery<T> {
                            String fromField, String toField) {}
     private record AggRow(Agg fn, String field, String alias, Integer round,
                           String orderDir,
-                          MathOperation mathOp, String mathField, ComputedField expr) {}
+                          MathOp mathOp, String mathField, ComputedField expr) {}
     private record SortRow(String field, String dir) {}
     private record CaseRow(String field, Op op, Object when,
                            Object then, Object els, String alias) {}
     private record ComputedRow(String alias,
-                               String ta1, String f1, MathOperation op,
+                               String ta1, String f1, MathOp op,
                                String ta2, String f2) {}
     private record ComputedFieldEntry(ComputedField cf,
                                       Op filterOp,
@@ -326,7 +326,7 @@ public final class JooqQuery<T> {
 
     /** 2 sahəli riyazi ifadə sütunu: {@code (ta1.f1 OP ta2.f2) AS alias} */
     public JooqQuery<T> computedColumn(String alias,
-                                       String ta1, MathOperation op, String f1,
+                                       String ta1, MathOp op, String f1,
                                        String ta2, String f2) {
         if (alias != null && f1 != null && f2 != null && op != null)
             computedCols.add(new ComputedRow(alias, ta1, f1, op, ta2, f2));
@@ -1130,7 +1130,7 @@ public final class JooqQuery<T> {
         if (fn != null && field != null && alias != null)
             // alias-da "t.totalPrice" kimi prefix gəlsə yalnız "totalPrice" saxlanır
             aggRows.add(new AggRow(fn, field, fieldPart(alias), round,
-                                   orderDir, MathOperation.NONOPERATION, null, null));
+                                   orderDir, MathOp.NONOPERATION, null, null));
         return this;
     }
 
@@ -1150,7 +1150,7 @@ public final class JooqQuery<T> {
      * <p>HAVING üçün ayrıca {@link #havingFilter(String, Map)} istifadə edin.
      */
     public JooqQuery<T> aggWithMath(Agg fn,
-                                    String field, MathOperation mathOp, String mathField,
+                                    String field, MathOp mathOp, String mathField,
                                     String alias, Integer round, String orderDir) {
         if (fn != null && field != null && alias != null)
             aggRows.add(new AggRow(fn, field, fieldPart(alias), round,
@@ -1160,14 +1160,14 @@ public final class JooqQuery<T> {
 
     /** Riyazi ifadəli aqreqat — yalnız əsas parametrlər. */
     public JooqQuery<T> aggWithMath(Agg fn,
-                                    String field, MathOperation mathOp, String mathField,
+                                    String field, MathOp mathOp, String mathField,
                                     String alias) {
         return aggWithMath(fn, field, mathOp, mathField, alias, null, null);
     }
 
     /** Riyazi ifadəli aqreqat — yuvarlama ilə. */
     public JooqQuery<T> aggWithMath(Agg fn,
-                                    String field, MathOperation mathOp, String mathField,
+                                    String field, MathOp mathOp, String mathField,
                                     String alias, Integer round) {
         return aggWithMath(fn, field, mathOp, mathField, alias, round, null);
     }
@@ -1740,7 +1740,7 @@ public final class JooqQuery<T> {
             if (baseField == null) baseField = DSL.field(DSL.name(fieldPart(ar.field())));
 
             Field<?> operand = baseField;
-            if (ar.mathOp() != null && ar.mathOp() != MathOperation.NONOPERATION
+            if (ar.mathOp() != null && ar.mathOp() != MathOp.NONOPERATION
                     && ar.mathField() != null) {
                 Field<?> mathF = resolveFieldByAlias(ar.mathField());
                 if (mathF == null) mathF = DSL.field(DSL.name(fieldPart(ar.mathField())));

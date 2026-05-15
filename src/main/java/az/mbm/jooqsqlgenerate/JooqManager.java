@@ -15,7 +15,7 @@ import az.mbm.jooqsqlgenerate.core.SelectFetchResponse;
 import az.mbm.jooqsqlgenerate.core.SelectTable;
 import az.mbm.jooqsqlgenerate.enums.Op;
 import az.mbm.jooqsqlgenerate.enums.Agg;
-import az.mbm.jooqsqlgenerate.enums.MathOperation;
+import az.mbm.jooqsqlgenerate.enums.MathOp;
 import az.mbm.jooqsqlgenerate.spec.ExistsSpec;
 import az.mbm.jooqsqlgenerate.spec.Filter;
 import az.mbm.jooqsqlgenerate.spec.Filters;
@@ -196,7 +196,7 @@ public class JooqManager {
     /** 2 sahəli riyazi ifadə: {@code (ta1.f1 OP ta2.f2) AS alias} */
     public JooqManager addComputedColumn(String alias,
                                          String tableAlias1, String field1,
-                                         MathOperation op,
+                                         MathOp op,
                                          String tableAlias2, String field2) {
         q().computedColumn(alias, tableAlias1, op, field1, tableAlias2, field2);
         return this;
@@ -206,6 +206,43 @@ public class JooqManager {
     public JooqManager addComputedField(ComputedField cf) {
         q().computedColumn(cf);
         return this;
+    }
+
+    /**
+     * Fluent computed sütun — çox field ilə riyazi əməliyyat zənciri.
+     *
+     * <pre>{@code
+     * manager.addComputedColumn("t.price")
+     *        .add("t.tax")
+     *        .subtract("t.discount")
+     *        .multiply("t.qty")
+     *        .as("netTotal")
+     * }</pre>
+     */
+    public ComputedChain addComputedColumn(String field) {
+        return new ComputedChain(this, ComputedField.expr(field));
+    }
+
+    /** Fluent computed sütun zənciri. */
+    public static final class ComputedChain {
+        private final JooqManager  manager;
+        private       ComputedField expr;
+
+        ComputedChain(JooqManager manager, ComputedField expr) {
+            this.manager = manager;
+            this.expr    = expr;
+        }
+
+        public ComputedChain add(String field)      { expr = expr.add(field);      return this; }
+        public ComputedChain subtract(String field) { expr = expr.subtract(field); return this; }
+        public ComputedChain multiply(String field) { expr = expr.multiply(field); return this; }
+        public ComputedChain divide(String field)   { expr = expr.divide(field);   return this; }
+
+        /** Alias təyin edir, sütunu qeydiyyat edir və {@link JooqManager}-ə qayıdır. */
+        public JooqManager as(String alias) {
+            manager.q().computedColumn(expr.as(alias));
+            return manager;
+        }
     }
 
     /** COALESCE SELECT sütunu. */
@@ -1225,7 +1262,7 @@ public class JooqManager {
      * }</pre>
      */
     public JooqManager addAggFunctionWithMath(Agg fn,
-                                              String field, MathOperation mathOp, String mathField,
+                                              String field, MathOp mathOp, String mathField,
                                               String alias) {
         q().aggWithMath(fn, field, mathOp, mathField, alias);
         return this;
@@ -1239,7 +1276,7 @@ public class JooqManager {
      * }</pre>
      */
     public JooqManager addAggFunctionWithMath(Agg fn,
-                                              String field, MathOperation mathOp, String mathField,
+                                              String field, MathOp mathOp, String mathField,
                                               String alias, Integer round) {
         q().aggWithMath(fn, field, mathOp, mathField, alias, round);
         return this;
@@ -1269,6 +1306,56 @@ public class JooqManager {
                                                 String alias, Integer round) {
         q().aggOnComputed(fn, expr, alias, round);
         return this;
+    }
+
+    /**
+     * Fluent aqreqat — çox field ilə riyazi əməliyyat zənciri.
+     *
+     * <pre>{@code
+     * manager.addAggFunction(Agg.SUM, "t.price")
+     *        .add("t.tax")
+     *        .subtract("t.discount")
+     *        .multiply("t.qty")
+     *        .as("totalPrice")
+     *
+     * // Yuvarlama ilə:
+     * manager.addAggFunction(Agg.SUM, "t.price")
+     *        .subtract("t.discount")
+     *        .as("netTotal", 2)
+     * }</pre>
+     */
+    public AggChain addAggFunction(Agg fn, String field) {
+        return new AggChain(this, fn, ComputedField.expr(field));
+    }
+
+    /** Fluent aqreqat zənciri. */
+    public static final class AggChain {
+        private final JooqManager  manager;
+        private final Agg          fn;
+        private       ComputedField expr;
+
+        AggChain(JooqManager manager, Agg fn, ComputedField expr) {
+            this.manager = manager;
+            this.fn      = fn;
+            this.expr    = expr;
+        }
+
+        public AggChain add(String field)      { expr = expr.add(field);      return this; }
+        public AggChain subtract(String field) { expr = expr.subtract(field); return this; }
+        public AggChain multiply(String field) { expr = expr.multiply(field); return this; }
+        public AggChain divide(String field)   { expr = expr.divide(field);   return this; }
+
+        /** Alias təyin edir, aqreqatı qeydiyyat edir və {@link JooqManager}-ə qayıdır. */
+        public JooqManager as(String alias) {
+            manager.q().aggOnComputed(fn, expr.as(alias), alias);
+            return manager;
+        }
+
+        /** Alias + yuvarlama ilə. */
+        public JooqManager as(String alias, int scale) {
+            manager.q().aggOnComputed(fn, expr.as(alias), alias, scale);
+            return manager;
+        }
     }
 
     /** HAVING EXISTS / NOT EXISTS. */

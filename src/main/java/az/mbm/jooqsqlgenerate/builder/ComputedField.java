@@ -5,7 +5,7 @@ import org.jooq.Field;
 import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
 import az.mbm.jooqsqlgenerate.enums.Op;
-import az.mbm.jooqsqlgenerate.enums.MathOperation;
+import az.mbm.jooqsqlgenerate.enums.MathOp;
 import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 
 import java.util.ArrayList;
@@ -55,14 +55,14 @@ import java.util.Objects;
 public class ComputedField {
 
     /** Bir addım: əməliyyat + ya sahə adı, ya da iç içə ComputedField ifadəsi */
-    private record Step(MathOperation op, String tableAlias, String fieldName,
+    private record Step(MathOp op, String tableAlias, String fieldName,
                         ComputedField nested) {
         /** Sadə sahə addımı */
-        static Step of(MathOperation op, String tableAlias, String fieldName) {
+        static Step of(MathOp op, String tableAlias, String fieldName) {
             return new Step(op, tableAlias, fieldName, null);
         }
         /** İç içə ifadə addımı */
-        static Step nested(MathOperation op, ComputedField nested) {
+        static Step nested(MathOp op, ComputedField nested) {
             return new Step(op, null, null, nested);
         }
         boolean isNested() { return nested != null; }
@@ -161,7 +161,7 @@ public class ComputedField {
         ComputedField cf = new ComputedField(first);
         for (ComputedField part : rest) {
             Objects.requireNonNull(part, "sumOf: hissə null ola bilməz");
-            cf.steps.add(Step.nested(MathOperation.ADD, part));
+            cf.steps.add(Step.nested(MathOp.ADD, part));
         }
         return cf;
     }
@@ -170,22 +170,22 @@ public class ComputedField {
 
     /** {@code + field} */
     public ComputedField add(String tableAliasAndField) {
-        return fieldStep(MathOperation.ADD, tableAliasAndField);
+        return fieldStep(MathOp.ADD, tableAliasAndField);
     }
 
     /** {@code - field} */
     public ComputedField subtract(String tableAliasAndField) {
-        return fieldStep(MathOperation.SUBTRACT, tableAliasAndField);
+        return fieldStep(MathOp.SUBTRACT, tableAliasAndField);
     }
 
     /** {@code * field} */
     public ComputedField multiply(String tableAliasAndField) {
-        return fieldStep(MathOperation.MULTIPLY, tableAliasAndField);
+        return fieldStep(MathOp.MULTIPLY, tableAliasAndField);
     }
 
     /** {@code / field} */
     public ComputedField divide(String tableAliasAndField) {
-        return fieldStep(MathOperation.DIVIDE, tableAliasAndField);
+        return fieldStep(MathOp.DIVIDE, tableAliasAndField);
     }
 
     // ─── Əməliyyat zənciri — iç içə ifadə (mötərizəli qrup) ─────────────
@@ -201,7 +201,7 @@ public class ComputedField {
      * }</pre>
      */
     public ComputedField add(ComputedField nested) {
-        steps.add(Step.nested(MathOperation.ADD, nested));
+        steps.add(Step.nested(MathOp.ADD, nested));
         return this;
     }
 
@@ -214,7 +214,7 @@ public class ComputedField {
      * }</pre>
      */
     public ComputedField subtract(ComputedField nested) {
-        steps.add(Step.nested(MathOperation.SUBTRACT, nested));
+        steps.add(Step.nested(MathOp.SUBTRACT, nested));
         return this;
     }
 
@@ -226,7 +226,7 @@ public class ComputedField {
      * }</pre>
      */
     public ComputedField multiply(ComputedField nested) {
-        steps.add(Step.nested(MathOperation.MULTIPLY, nested));
+        steps.add(Step.nested(MathOp.MULTIPLY, nested));
         return this;
     }
 
@@ -239,11 +239,11 @@ public class ComputedField {
      * }</pre>
      */
     public ComputedField divide(ComputedField nested) {
-        steps.add(Step.nested(MathOperation.DIVIDE, nested));
+        steps.add(Step.nested(MathOp.DIVIDE, nested));
         return this;
     }
 
-    private ComputedField fieldStep(MathOperation op, String tableAliasAndField) {
+    private ComputedField fieldStep(MathOp op, String tableAliasAndField) {
         String[] parts = split(tableAliasAndField);
         steps.add(Step.of(op, parts[0], parts[1]));
         return this;

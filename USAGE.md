@@ -7,13 +7,13 @@
 <dependency>
     <groupId>az.mbm</groupId>
     <artifactId>jooq-sql-generate</artifactId>
-    <version>1.1.4</version>
+    <version>1.1.5</version>
 </dependency>
 ```
 
 ```kotlin
 // Gradle
-implementation("az.mbm:jooq-sql-generate:1.1.4")
+implementation("az.mbm:jooq-sql-generate:1.1.5")
 ```
 
 ---
@@ -121,7 +121,7 @@ JooqQuery.from(Order.class, "o")
 ```java
 JooqQuery.from(Order.class, "o")
     .select("o.id", "o.price", "o.qty")
-    .computedColumn("lineTotal", "o", MathOperation.MULTIPLY, "price", "o", "qty")
+    .computedColumn("lineTotal", "o", MathOp.MULTIPLY, "price", "o", "qty")
     .execute(dsl);
 // → SELECT ..., (o."price" * o."qty") AS "lineTotal"
 ```
@@ -146,6 +146,16 @@ Filter ilə birlikdə (HAVING-ə çevrilir):
     Op.GREATER_THAN, 500
 )
 // → HAVING ((price * qty)) > 500
+```
+
+**JooqManager — fluent zəncir (`addComputedColumn`):**
+```java
+manager.addComputedColumn("t.price")
+       .add("t.tax")
+       .subtract("t.discount")
+       .multiply("t.qty")
+       .as("netTotal")
+// → ((price + tax) - discount) * qty AS netTotal
 ```
 
 ### 2.5 COALESCE
@@ -184,6 +194,33 @@ JooqQuery.from(User.class, "u")
     .execute(dsl);
 // → SELECT u.id, u.first_name,
 //          (SELECT o.total_price FROM orders o WHERE o.user_id = u.id) AS last_order_total
+```
+
+### 2.8 CONCAT — sütunları birləşdir
+
+Separator ilə sütunları birləşdirir, `null` dəyərlər boş string kimi işlənir:
+
+```java
+// Sadə — sütun adları ilə
+manager.addConcatColumn("fullName", " ", "u.firstName", "u.lastName")
+// → COALESCE(first_name,'') || ' ' || COALESCE(last_name,'') AS fullName
+
+// List ilə
+manager.addConcatColumn("fullName", " ", List.of("u.firstName", "u.lastName"))
+```
+
+**`ConcatItem` — literal + sütun qarışıq:**
+
+```java
+import static az.mbm.jooqsqlgenerate.builder.ConcatItem.*;
+
+// Sabit prefiks + sütun
+manager.addConcatColumn("userCode", "-", literal("USR"), field("u.id"))
+// → 'USR' || '-' || COALESCE(id,'') AS userCode
+
+// Çox qarışıq
+manager.addConcatColumn("label", " ", literal("Ad:"), field("u.firstName"), field("u.lastName"))
+// → 'Ad:' || ' ' || COALESCE(first_name,'') || ' ' || COALESCE(last_name,'')
 ```
 
 ---
@@ -722,7 +759,7 @@ JooqQuery.from(Order.class, "o")
 ### 7.2 Riyazi ifadəli agg — SUM(price * qty)
 
 ```java
-.aggWithMath(Agg.SUM, "o.price", MathOperation.MULTIPLY, "o.qty", "revenue", 2)
+.aggWithMath(Agg.SUM, "o.price", MathOp.MULTIPLY, "o.qty", "revenue", 2)
 // → ROUND(SUM(o."price" * o."qty"), 2) AS "revenue"
 ```
 
@@ -735,6 +772,31 @@ JooqQuery.from(Order.class, "o")
     "netRevenue", 2
 )
 // → ROUND(SUM((o."price" * o."qty") - o."discount"), 2) AS "netRevenue"
+```
+
+### 7.3.1 JooqManager — fluent agg zənciri (`addAggFunction`)
+
+Çox field ilə riyazi əməliyyatı birbaşa zəncir kimi yaza bilərsən:
+
+```java
+// Çox field
+manager.addAggFunction(Agg.SUM, "t.price")
+       .add("t.tax")
+       .subtract("t.discount")
+       .multiply("t.qty")
+       .as("totalRevenue")
+// → SUM(((price + tax) - discount) * qty) AS totalRevenue
+
+// Yuvarlama ilə
+manager.addAggFunction(Agg.SUM, "t.price")
+       .subtract("t.discount")
+       .as("netTotal", 2)
+// → ROUND(SUM(price - discount), 2) AS netTotal
+
+// Tək field (əvvəlki kimi)
+manager.addAggFunction(Agg.SUM, "t.price")
+       .as("totalPrice")
+// → SUM(price) AS totalPrice
 ```
 
 ### 7.4 AggregateBuilder — fluent API
@@ -852,6 +914,53 @@ JooqQuery.from(Order.class, "o")
                    .as("statusLabel")
     )
     .execute(dsl);
+```
+
+### 9.3 Case — tam fluent zəncir
+
+`Case` sinifi ilə `when().then().when().then().else_().as()` zənciri:
+
+```java
+import az.mbm.jooqsqlgenerate.builder.Case;
+
+// Literal dəyərlər
+Case.when("status", Op.EQUAl, "ACTIVE").then("Aktiv")
+    .when("status", Op.EQUAl, "INACTIVE").then("Deaktiv")
+    .else_("Naməlum")
+    .as("statusLabel")
+
+// Rəqəm dəyərləri
+Case.when("a", Op.EQUAl, 1).then(0)
+    .else_(-1)
+    .as("result")
+
+// Sütun referansı (thenField / elseField)
+Case.when("type", Op.EQUAl, "A").thenField("t.priceA")
+    .when("type", Op.EQUAl, "B").thenField("t.priceB")
+    .elseField("t.defaultPrice")
+    .as("finalPrice")
+// → CASE WHEN type='A' THEN priceA WHEN type='B' THEN priceB ELSE defaultPrice END
+```
+
+### 9.4 JooqManager — addCase() fluent zəncir
+
+`addCase()` bitdikdə `JooqManager`-ə qayıdır — sorğu zənciri davam edə bilər:
+
+```java
+manager.addCase()
+       .when("status", Op.EQUAl, "ACTIVE").then("Aktiv")
+       .when("status", Op.EQUAl, "INACTIVE").then("Deaktiv")
+       .else_("Naməlum")
+       .as("statusLabel")           // ← JooqManager-ə qayıdır
+       .addOrderBy("createdAt", "DESC")
+       .setPage(1, 20);
+
+// Sütun referansı ilə
+manager.addCase()
+       .when("type", Op.EQUAl, "A").thenField("t.priceA")
+       .when("type", Op.EQUAl, "B").thenField("t.priceB")
+       .elseField("t.defaultPrice")
+       .as("finalPrice");
 ```
 
 ---

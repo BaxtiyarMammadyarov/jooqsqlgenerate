@@ -5,7 +5,7 @@ import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
 import az.mbm.jooqsqlgenerate.enums.Op;
 import az.mbm.jooqsqlgenerate.enums.Agg;
-import az.mbm.jooqsqlgenerate.enums.MathOperation;
+import az.mbm.jooqsqlgenerate.enums.MathOp;
 import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 
 import java.util.ArrayList;
@@ -46,7 +46,7 @@ public class AggregateBuilder<T> {
             Agg    function,
             String           tableAlias,
             String           fieldName,
-            MathOperation    mathOp,
+            MathOp    mathOp,
             String           mathField,
             String           alias,
             Integer          roundScale,
@@ -135,7 +135,7 @@ public class AggregateBuilder<T> {
             Field<Object> baseField = (Field<Object>) table.getField(agg.fieldName());
             operand = baseField;
 
-            if (agg.mathOp() != null && agg.mathOp() != MathOperation.NONOPERATION
+            if (agg.mathOp() != null && agg.mathOp() != MathOp.NONOPERATION
                     && agg.mathField() != null) {
                 Field<?> mathF = table.getField(agg.mathField());
                 @SuppressWarnings("unchecked")
@@ -198,7 +198,7 @@ public class AggregateBuilder<T> {
         // Sadə sahə
         private final String              tableAlias;
         private final String              fieldName;
-        private       MathOperation       mathOp    = MathOperation.NONOPERATION;
+        private       MathOp       mathOp    = MathOp.NONOPERATION;
         private       String              mathField = null;
         // Çox sahəli ifadə
         private final ComputedField       computedExpr;
@@ -250,15 +250,15 @@ public class AggregateBuilder<T> {
         // Çox sahə lazımdırsa sumOf(ComputedField) istifadə edin
 
         /** {@code SUM(f1 + f2)} */
-        public AggStep<T> add(String field)      { return math(MathOperation.ADD,      field); }
+        public AggStep<T> add(String field)      { return math(MathOp.ADD,      field); }
         /** {@code SUM(f1 - f2)} */
-        public AggStep<T> subtract(String field) { return math(MathOperation.SUBTRACT, field); }
+        public AggStep<T> subtract(String field) { return math(MathOp.SUBTRACT, field); }
         /** {@code SUM(f1 * f2)} */
-        public AggStep<T> multiply(String field) { return math(MathOperation.MULTIPLY, field); }
+        public AggStep<T> multiply(String field) { return math(MathOp.MULTIPLY, field); }
         /** {@code SUM(f1 / f2)} */
-        public AggStep<T> divide(String field)   { return math(MathOperation.DIVIDE,   field); }
+        public AggStep<T> divide(String field)   { return math(MathOp.DIVIDE,   field); }
 
-        private AggStep<T> math(MathOperation op, String field) {
+        private AggStep<T> math(MathOp op, String field) {
             this.mathOp    = op;
             this.mathField = field;
             return this;

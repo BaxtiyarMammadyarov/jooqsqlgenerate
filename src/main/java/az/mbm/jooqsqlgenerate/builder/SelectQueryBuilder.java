@@ -6,7 +6,7 @@ import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
 import az.mbm.jooqsqlgenerate.core.SelectTable;
 import az.mbm.jooqsqlgenerate.enums.Op;
-import az.mbm.jooqsqlgenerate.enums.MathOperation;
+import az.mbm.jooqsqlgenerate.enums.MathOp;
 import az.mbm.jooqsqlgenerate.spec.Specification;
 import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 
@@ -133,7 +133,7 @@ public class SelectQueryBuilder<T> {
     private record ComputedCol(
             String alias,
             String tableAlias1, String field1,
-            MathOperation op,
+            MathOp op,
             String tableAlias2, String field2) {}
 
     /** CONCAT SELECT sütunu */
@@ -234,11 +234,11 @@ public class SelectQueryBuilder<T> {
     /**
      * Riyazi əməliyyatla hesablanmış sütun — 2 sahə üçün sadə form.
      *
-     * <pre>{@code .computedColumn("net", "o", MathOperation.SUBTRACT, "amount", "o", "discount") }</pre>
+     * <pre>{@code .computedColumn("net", "o", MathOp.SUBTRACT, "amount", "o", "discount") }</pre>
      */
     public SelectQueryBuilder<T> computedColumn(
             String alias,
-            String alias1, MathOperation op, String field1,
+            String alias1, MathOp op, String field1,
             String alias2, String field2) {
         computed.add(new ComputedCol(alias, alias1, field1, op, alias2, field2));
         return this;
@@ -1372,7 +1372,7 @@ public class SelectQueryBuilder<T> {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private Field<?> applyMathOp(Field<Object> f1, MathOperation op, Field<Object> f2) {
+    private Field<?> applyMathOp(Field<Object> f1, MathOp op, Field<Object> f2) {
         // mul/div Field<? extends Number> tələb edir — double cast ilə keçir
         Field<? extends Number> numF2 = (Field<? extends Number>) (Field<?>) f2;
         return switch (op) {

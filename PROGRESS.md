@@ -10,8 +10,8 @@
 ## Proyekt haqqında
 
 **Ad:** `jooq-sql-generate`
-**Versiya:** 1.1.4
-**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.4`
+**Versiya:** 1.1.5
+**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.5`
 **Repo:** https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate
 **Java:** 17
 **Asılılıqlar:** jOOQ 3.18.6, Spring Boot 3.2.5 (compileOnly), Jakarta Persistence 3.1.0
@@ -27,7 +27,7 @@
 
 ## Cari vəziyyət
 
-Versiya 1.1.4 hazırdır, Maven Central-a release gözləyir. `DOCUMENTATION.md` (siniflərin izahı) və `USAGE.md` (istifadə təlimatı) tam doludur.
+Versiya 1.1.5 hazırdır, Maven Central-a release gözləyir. `DOCUMENTATION.md` (siniflərin izahı) və `USAGE.md` (istifadə təlimatı) tam doludur.
 
 **Əsas sinif strukturu:**
 ```
@@ -214,13 +214,13 @@ istifadəçi yalnız `JooqManager` ilə işləməlidir.
 
 <!-- Burada açıq tapşırıqlar, bug-lar, ideyalar -->
 
-- [ ] **Maven Central-a release (1.1.4):**
+- [ ] **Maven Central-a release (1.1.5):**
   - `~/.gradle/gradle.properties` və `~/.gradle/secret.pgp` iş kompüterinə köçürüldü ✓
   - Növbəti addımlar (gələcək sessiyada):
     1. `./gradlew clean publishToMavenLocal` — signing test
-    2. `build.gradle.kts`-də versiya artıq `1.1.4`-dir — dəyişmə lazım deyil
+    2. `build.gradle.kts`-də versiya artıq `1.1.5`-dir — dəyişmə lazım deyil
     3. `./gradlew clean publishToSonatype closeAndReleaseSonatypeStagingRepository`
-    4. `git add -A && git commit -m "release: 1.1.4" && git push && git tag v1.1.4 && git push --tags`
+    4. `git add -A && git commit -m "release: 1.1.5" && git push && git tag v1.1.5 && git push --tags`
 - [ ] `JooqQuery.executeGenerated()` daxilində COUNT sorğusu (sətr ~1882) də
       JOIN-ləri tətbiq etmir. Tövsiyə: `dsl.selectCount().from(grouped.asTable("_count"))`
       üzərinə keçmək (entity mode-dakı kimi düzgün count almaq üçün).
