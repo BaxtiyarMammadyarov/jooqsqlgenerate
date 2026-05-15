@@ -1328,6 +1328,29 @@ public final class JooqQuery<T> {
     }
 
     /**
+     * ORDER BY — birləşmiş string format: {@code "alias.field dir, alias.field dir, ..."}.
+     *
+     * <p>REST endpoint-dən gələn {@code sort} parametrini birbaşa ötürmək üçün əlverişlidir.
+     * İstiqamət yazılmadıqda ASC qəbul edilir. Boş/null hissələr atlanır.
+     *
+     * <pre>{@code
+     *   .orderBy("t.insertDate desc, f.createdDate")
+     *   .orderBy("u.name asc, u.createdAt desc")
+     * }</pre>
+     */
+    public JooqQuery<T> orderBy(String sortExpression) {
+        if (sortExpression == null || sortExpression.isBlank()) return this;
+        for (String part : sortExpression.split(",")) {
+            String[] tokens = part.trim().split("\\s+");
+            if (tokens.length == 0 || tokens[0].isBlank()) continue;
+            String field = tokens[0];
+            String dir   = tokens.length >= 2 ? tokens[1] : "ASC";
+            orderBy(field, dir);
+        }
+        return this;
+    }
+
+    /**
      * ORDER BY — dinamik {@link Map} ilə: key=field, value=istiqamət.
      *
      * <pre>{@code

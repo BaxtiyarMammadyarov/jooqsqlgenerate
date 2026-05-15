@@ -177,6 +177,31 @@ manager.addConcatColumn("fullName", " ", "u.firstName", "u.lastName")
 
 ---
 
+### 2026-05-15 — Yeni feature: ORDER BY birləşmiş string format
+
+**Motivasiya:** REST endpoint-dən `"t.insertDate desc,f.createdDate"` kimi
+birləşmiş `sort` parametri gəlir; əvvəlcə `addOrderBy(Map)` ilə parse etmək lazım idi.
+
+**Dəyişdirilmiş fayllar:**
+
+- `JooqQuery.java` — `orderBy(String sortExpression)` metodu əlavə edildi:
+  - Vergüllə böl → hər hissəni boşluqla böl → `field` + `direction` (default ASC)
+  - Boş/null hissələr atlanır
+  - Daxilən mövcud `orderBy(field, dir)` metodunu çağırır
+
+- `JooqManager.java` — `addOrderBy(String sortExpression)` metodu əlavə edildi:
+  - `q().orderBy(sortExpression)` üzərindən delegate edir
+
+**İstifadə:**
+```java
+jooq.addOrderBy("t.insertDate desc, f.createdDate")
+// → ORDER BY t."insertDate" DESC, f."createdDate" ASC
+
+jooq.addOrderBy(request.getSort())  // REST parametri birbaşa
+```
+
+---
+
 ### 2026-05-15 — Bug fix: Filters null/boş dəyər keçikdirmə
 
 **Problem:** `equal("")`, `like("")`, `greaterThan("")` və digər string filter metodları
@@ -310,6 +335,20 @@ selectCount().from(mainTable).where(...)
 - `SelectQueryBuilder` metodları → `JooqQuery` və `JooqManager` üzərindən də əlçatan et
 - Builder metodları (CaseBuilder, ConcatItem, ComputedField) jOOQ import etməməlidir — DSL logikası ayrıca `*FieldBuilder` siniflərdə olmalıdır
 - Yeni enum dəyər əlavə edərkən `FilterStrategies`-ə müvafiq strategiya da əlavə et
+
+---
+
+### 6. ORDER BY string parse məntiqi
+Yeni string-based sort metodu əlavə edərkən parse məntiqi **mövcud `orderBy(field, dir)`-ə delegate** etməlidir — duplikasiya olmaz.
+
+```java
+// ✅ Düzgün — parse + delegate
+for (String part : expr.split(",")) {
+    String[] tokens = part.trim().split("\\s+");
+    orderBy(tokens[0], tokens.length >= 2 ? tokens[1] : "ASC");
+}
+// ❌ Səhv — birbaşa SortField yaratma (tableMap/alias resolution itir)
+```
 
 ---
 

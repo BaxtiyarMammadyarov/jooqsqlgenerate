@@ -1548,6 +1548,25 @@ public class JooqManager {
     }
 
     /**
+     * ORDER BY — birləşmiş string format: {@code "alias.field dir, alias.field dir, ..."}.
+     *
+     * <p>REST endpoint-dən gələn {@code sort} parametrini birbaşa ötürmək üçün əlverişlidir.
+     * İstiqamət yazılmadıqda ASC qəbul edilir. Boş/null ifadə atlanır.
+     *
+     * <pre>{@code
+     *   jooq.addOrderBy("t.insertDate desc, f.createdDate")
+     *   jooq.addOrderBy("u.name asc, u.createdAt desc")
+     *
+     *   // REST parametrindən birbaşa:
+     *   jooq.addOrderBy(request.getSort())   // sort=t.insertDate desc,f.createdDate
+     * }</pre>
+     */
+    public JooqManager addOrderBy(String sortExpression) {
+        q().orderBy(sortExpression);
+        return this;
+    }
+
+    /**
      * ORDER BY — dinamik {@link Map} ilə: key=field, value=istiqamət.
      *
      * <pre>{@code

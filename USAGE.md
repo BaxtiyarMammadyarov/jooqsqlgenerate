@@ -428,14 +428,18 @@ jooq.addFilter(USERS.STATUS.eq("ACTIVE"));
 
 ### 4.5 globalFilter — Filters builder ilə
 
+`null` və ya boş string (`""`, `"  "`) dəyər gəldikdə şərt **avtomatik atlanır** —
+`equal`, `notEqual`, `greaterThan`, `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`,
+`like`, `startWith`, `endWith` metodlarının hamısında bu davranış eynidir.
+
 ```java
 JooqQuery.from(Order.class, "o")
     .globalFilter(
         Filters.of()
-            .equal("o.status",    "ACTIVE")
-            .like("o.orderNo",    orderNo)
-            .greaterThan("o.amount", "100")
-            .between("o.createdAt", "2024-01-01,2024-12-31")
+            .equal("o.status",       "ACTIVE")
+            .like("o.orderNo",       orderNo)       // null/boş → atlanır
+            .greaterThan("o.amount", minAmount)     // null/boş → atlanır
+            .between("o.createdAt", "2024-01-01", "2024-12-31")
     )
     .execute(dsl);
 ```
@@ -972,6 +976,12 @@ manager.addCase()
 .orderBy("u.createdAt", "DESC")
 .orderBy("u.firstName", "ASC")
 
+// Birləşmiş string — REST parametrindən birbaşa ötürmək üçün
+.orderBy("t.insertDate desc, f.createdDate")
+.orderBy("u.name asc, u.createdAt desc, t.amount")
+// İstiqamət yazılmadıqda ASC qəbul edilir:
+.orderBy("u.name")   // → ORDER BY u."name" ASC
+
 // Map ilə
 .orderBy(Map.of(
     "u.createdAt", "DESC",
@@ -986,6 +996,14 @@ manager.addCase()
 
 // Generated field ilə
 .orderBy(USERS.CREATED_AT.desc(), USERS.FIRST_NAME.asc())
+```
+
+**JooqManager:**
+```java
+jooq.addOrderBy("t.insertDate desc, f.createdDate")
+
+// REST-dən gələn sort parametri birbaşa:
+jooq.addOrderBy(request.getSort())   // "t.insertDate desc,f.createdDate asc"
 ```
 
 ---
@@ -1249,6 +1267,7 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `havingFilter(field, Map)` | HAVING filter |
 | `havingFilter(field, Op, value)` | HAVING birbaşa filter |
 | `orderBy(field, dir)` | ORDER BY |
+| `orderBy(sortExpression)` | ORDER BY string format: `"t.field desc, f.field"` |
 | `orderBy(Map)` | ORDER BY map ilə |
 | `page(page, size)` | Səhifələmə (0-dan başlayır) |
 | `skipCount()` | Pagination var, COUNT işləmir (rowCount = -1) |
@@ -1290,6 +1309,7 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `addExists(ExistsSpec)` | EXISTS / NOT EXISTS əlavə edir |
 | `addGroupBy(fields...)` | GROUP BY |
 | `addOrderBy(field, dir)` | ORDER BY |
+| `addOrderBy(sortExpression)` | ORDER BY string format: `"t.field desc, f.field"` |
 | `setPage(page, size)` | Səhifələmə |
 | `skipCount()` | COUNT işlətmə (rowCount = -1) |
 | `onlyCount()` | Yalnız COUNT |
