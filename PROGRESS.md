@@ -177,6 +177,35 @@ manager.addConcatColumn("fullName", " ", "u.firstName", "u.lastName")
 
 ---
 
+### 2026-05-18 — Yeni feature: Filters + JooqManager — Number overloadları
+
+**Motivasiya:** `equal`, `notEqual`, `greaterThan` və s. metodlar yalnız `String value`
+qəbul edirdi. `Long`, `Integer`, `Double`, `BigDecimal` üçün ayrıca overload yox idi —
+istifadəçi `.toString()` çağırmaq məcburiyyətində idi.
+
+**Həll:** `Number` tipli overload əlavə edildi — tək overload bütün rəqəm tiplərini əhatə edir
+(`Long`, `Integer`, `Double`, `BigDecimal`, `BigInteger`, `Float` + primitiv `int`/`long`/`double` autobox).
+
+**Dəyişdirilmiş fayllar:**
+
+- `spec/Filters.java` — `Number` overload əlavə edildi: `equal`, `notEqual`,
+  `greaterThan`, `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`
+  - Daxilən `value.toString()` çağırıb String variantına yönləndirir
+  - `null` yoxlaması var, `isBlank()` yoxdur (Number-də mənasızdır)
+
+- `JooqManager.java` — eyni metodlara `Number` overload əlavə edildi
+  - `Filters`-ə delegate edir — logika `Filters`-dədir
+
+**İstifadə:**
+```java
+.equal("o.statusId", 1L)
+.notEqual("u.roleId", roleId)           // Long
+.greaterThan("o.amount", minAmount)     // BigDecimal
+.lessThanOrEqual("u.age", 65)           // int → autobox Integer
+```
+
+---
+
 ### 2026-05-15 — Yeni feature: ORDER BY birləşmiş string format
 
 **Motivasiya:** REST endpoint-dən `"t.insertDate desc,f.createdDate"` kimi
@@ -299,6 +328,24 @@ public Filters equal(String field, String value) {
 **İstisnalar:** `isNull`, `isNotNull` — `""` dəyərini qəsdən ötürür; bu metodlarda guard olmaz.
 
 **Collection variantları:** `in(Collection)`, `notIn(Collection)` — `isEmpty()` yoxlaması kifayətdir.
+
+---
+
+### 2. Yeni filter metodu əlavə edərkən — Number overload
+**Qayda:** `String value` alan hər filter metodunun `Number value` overloadu da olmalıdır.
+Tək `Number` overload bütün rəqəm tiplərini (`Long`, `Integer`, `Double`, `BigDecimal` + primitiv) əhatə edir.
+
+```java
+// ✅ Düzgün
+public Filters equal(String field, Number value) {
+    if (value == null) return this;
+    return put(..., field, value.toString());
+}
+// NB: isBlank() yoxlaması lazım deyil — Number.toString() heç vaxt blank qaytarmır
+```
+
+**İstisnalar:** `like`, `startWith`, `endWith` — bunlar semantik olaraq yalnız string üçündür,
+Number overload lazım deyil (numeric field-də LIKE ayrıca `CAST AS varchar` məntiqi ilə işləyir).
 
 ---
 
