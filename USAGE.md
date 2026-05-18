@@ -393,7 +393,11 @@ Bu davranış bütün LIKE axınlarında eynidir: `filter()`, `globalFilter()`,
 ```java
 jooq.setMainTable(Order.class, "o")
     .addColumns("o.id", "o.name", "o.status", "o.createdAt")
-    .equal("o.status",    "ACTIVE")              // null → atlanır
+    .equal("o.status",    "ACTIVE")              // null/boş → atlanır
+    .equal("o.statusId",  1L)                    // Long — null → atlanır
+    .notEqual("o.typeId", 5)                     // int (autobox Integer)
+    .greaterThan("o.amount",    minAmount)       // BigDecimal — null → atlanır
+    .lessThanOrEqual("o.age",   65)              // int
     .like("o.name",       name)                  // null/boş → atlanır
     .between("o.createdAt", startDate, endDate)  // Long/Number — null olarsa partial
     .in("o.roleId",       List.of(1L, 2L, 3L))  // boş list → atlanır
@@ -401,6 +405,9 @@ jooq.setMainTable(Order.class, "o")
     .isNull("o.deletedAt")
     .execute();
 ```
+
+**Dəstəklənən rəqəm tipləri** (`Number` overload vasitəsilə — hamısı avtomatik işləyir):
+`Long`, `long`, `Integer`, `int`, `Double`, `double`, `BigDecimal`, `BigInteger`, `Float`, `Short`
 
 **`between` — null dəyərlər qismən dəstəklənir:**
 ```java
