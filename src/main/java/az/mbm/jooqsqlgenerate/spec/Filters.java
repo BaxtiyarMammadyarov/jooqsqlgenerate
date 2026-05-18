@@ -54,10 +54,31 @@ public final class Filters {
         return put(FilterOperationConstants.EQUAl, field, value);
     }
 
+    /**
+     * {@code WHERE field = value} — rəqəm tipləri üçün
+     * ({@code Long}, {@code Integer}, {@code Double}, {@code BigDecimal} və s.).
+     * Primitiv {@code int}, {@code long}, {@code double} avtomatik autobox olunur.
+     * Null dəyər atlanır.
+     */
+    public Filters equal(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.EQUAl, field, value.toString());
+    }
+
     /** {@code WHERE field != value} — null və ya boş dəyər atlanır */
     public Filters notEqual(String field, String value) {
         if (value == null || value.isBlank()) return this;
         return put(FilterOperationConstants.NOT_EQUAl, field, value);
+    }
+
+    /**
+     * {@code WHERE field != value} — rəqəm tipləri üçün
+     * ({@code Long}, {@code Integer}, {@code Double}, {@code BigDecimal} və s.).
+     * Null dəyər atlanır.
+     */
+    public Filters notEqual(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.NOT_EQUAl, field, value.toString());
     }
 
     // ─── Müqayisə ────────────────────────────────────────────────────────
@@ -68,10 +89,28 @@ public final class Filters {
         return put(FilterOperationConstants.GREATER_THAN, field, value);
     }
 
+    /**
+     * {@code WHERE field > value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters greaterThan(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.GREATER_THAN, field, value.toString());
+    }
+
     /** {@code WHERE field >= value} — null və ya boş dəyər atlanır */
     public Filters greaterThanOrEqual(String field, String value) {
         if (value == null || value.isBlank()) return this;
         return put(FilterOperationConstants.GREATER_THAN_OR_EQUAL_TO, field, value);
+    }
+
+    /**
+     * {@code WHERE field >= value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters greaterThanOrEqual(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.GREATER_THAN_OR_EQUAL_TO, field, value.toString());
     }
 
     /** {@code WHERE field < value} — null və ya boş dəyər atlanır */
@@ -80,10 +119,28 @@ public final class Filters {
         return put(FilterOperationConstants.LESS_THAN, field, value);
     }
 
+    /**
+     * {@code WHERE field < value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters lessThan(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.LESS_THAN, field, value.toString());
+    }
+
     /** {@code WHERE field <= value} — null və ya boş dəyər atlanır */
     public Filters lessThanOrEqual(String field, String value) {
         if (value == null || value.isBlank()) return this;
         return put(FilterOperationConstants.LESS_THAN_OR_EQUAL_TO, field, value);
+    }
+
+    /**
+     * {@code WHERE field <= value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters lessThanOrEqual(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.LESS_THAN_OR_EQUAL_TO, field, value.toString());
     }
 
     // ─── LIKE ────────────────────────────────────────────────────────────
