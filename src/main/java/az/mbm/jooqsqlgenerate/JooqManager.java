@@ -597,8 +597,22 @@ public class JooqManager {
         return addFilter(Filters.of().equal(field, value));
     }
 
+    /**
+     * {@code WHERE field = value} — rəqəm tipləri üçün
+     * ({@code Long}, {@code Integer}, {@code Double}, {@code BigDecimal} və s.).
+     * Primitiv {@code int}, {@code long}, {@code double} avtomatik autobox olunur. Null atlanır.
+     */
+    public JooqManager equal(String field, Number value) {
+        return addFilter(Filters.of().equal(field, value));
+    }
+
     /** {@code WHERE field != value} — null/boş dəyər atlanır */
     public JooqManager notEqual(String field, String value) {
+        return addFilter(Filters.of().notEqual(field, value));
+    }
+
+    /** {@code WHERE field != value} — rəqəm tipləri üçün. Null atlanır. */
+    public JooqManager notEqual(String field, Number value) {
         return addFilter(Filters.of().notEqual(field, value));
     }
 
@@ -607,8 +621,18 @@ public class JooqManager {
         return addFilter(Filters.of().greaterThan(field, value));
     }
 
+    /** {@code WHERE field > value} — rəqəm tipləri üçün. Null atlanır. */
+    public JooqManager greaterThan(String field, Number value) {
+        return addFilter(Filters.of().greaterThan(field, value));
+    }
+
     /** {@code WHERE field >= value} — null/boş dəyər atlanır */
     public JooqManager greaterThanOrEqual(String field, String value) {
+        return addFilter(Filters.of().greaterThanOrEqual(field, value));
+    }
+
+    /** {@code WHERE field >= value} — rəqəm tipləri üçün. Null atlanır. */
+    public JooqManager greaterThanOrEqual(String field, Number value) {
         return addFilter(Filters.of().greaterThanOrEqual(field, value));
     }
 
@@ -617,8 +641,18 @@ public class JooqManager {
         return addFilter(Filters.of().lessThan(field, value));
     }
 
+    /** {@code WHERE field < value} — rəqəm tipləri üçün. Null atlanır. */
+    public JooqManager lessThan(String field, Number value) {
+        return addFilter(Filters.of().lessThan(field, value));
+    }
+
     /** {@code WHERE field <= value} — null/boş dəyər atlanır */
     public JooqManager lessThanOrEqual(String field, String value) {
+        return addFilter(Filters.of().lessThanOrEqual(field, value));
+    }
+
+    /** {@code WHERE field <= value} — rəqəm tipləri üçün. Null atlanır. */
+    public JooqManager lessThanOrEqual(String field, Number value) {
         return addFilter(Filters.of().lessThanOrEqual(field, value));
     }
 
