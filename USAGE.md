@@ -7,13 +7,13 @@
 <dependency>
     <groupId>az.mbm</groupId>
     <artifactId>jooq-sql-generate</artifactId>
-    <version>1.1.5</version>
+    <version>1.1.7</version>
 </dependency>
 ```
 
 ```kotlin
 // Gradle
-implementation("az.mbm:jooq-sql-generate:1.1.5")
+implementation("az.mbm:jooq-sql-generate:1.1.7")
 ```
 
 ---
@@ -158,7 +158,47 @@ manager.addComputedColumn("t.price")
 // → ((price + tax) - discount) * qty AS netTotal
 ```
 
-### 2.5 COALESCE
+### 2.5 compute — mötərizəli qrup ifadəsi
+
+`compute()` / `addComputedColumn()` metodlarında boş `add()`, `subtract()`, `multiply()`, `divide()` çağırışı mötərizəli alt-ifadə (qrup) açır. Qrup `.of("field")` ilə başlayır, `.done()` ilə bağlanır və əsas zəncirə qayıdır.
+
+**JooqQuery ilə (`compute`):**
+```java
+// (total_Price_In - total_Price_Out) * rate - (purchase_Expense * count)
+JooqQuery.from(WarehouseFlow.class, "wf")
+    .compute("wf.total_Price_In")
+        .subtract("wf.total_Price_Out")          // sadə sahə
+        .multiply("wf.rate")                      // sadə sahə
+        .subtract().of("wf.purchase_Expense")     // ← mötərizə açılır
+            .multiply("wf.count")
+            .done()                               // ← mötərizə bağlanır
+        .as("profit")                             // commit + SelectQueryBuilder-ə qayıdır
+    .execute(dsl);
+// → ((total_Price_In - total_Price_Out) * rate) - (purchase_Expense * count) AS profit
+```
+
+Bütün dörd əməliyyat eyni şəkildə işləyir:
+```java
+.compute("o.base")
+    .add().of("o.tax").multiply("o.qty").done()           // + (tax * qty)
+    .subtract().of("o.discount").multiply("o.qty").done() // - (discount * qty)
+    .multiply().of("o.price").add("o.vat").done()         // * (price + vat)
+    .divide().of("o.total").subtract("o.refund").done()   // / (total - refund)
+    .as("result")
+```
+
+**JooqManager ilə (`addComputedColumn`):**
+```java
+jooq.addComputedColumn("t.total_Price_In")
+    .subtract("t.total_Price_Out")
+    .multiply("t.rate")
+    .subtract().of("t.purchase_Expense").multiply("t.count").done()
+    .as("profit")
+```
+
+> **Qeyd:** `.subtract("field")` — adi çıxma (sadə sahə); `.subtract()` boş çağırış — mötərizə açır, `GroupStep` qaytarır. `.done()` mötərizəni bağlayır, əsas zəncirə qayıdır. `.as("alias")` isə bütün ifadəni tamamlayır.
+
+### 2.7 COALESCE
 
 ```java
 JooqQuery.from(User.class, "u")
@@ -167,7 +207,7 @@ JooqQuery.from(User.class, "u")
 // → SELECT COALESCE(u."first_name", u."last_name", 'Naməlum') AS "displayName"
 ```
 
-### 2.6 selectRound — yuvarlama sütunu
+### 2.8 selectRound — yuvarlama sütunu
 
 `selectRound` ilə həmin alias-a `filter()` tətbiq edildikdə avtomatik `WHERE ROUND(field, scale)` yaranır:
 ```java
@@ -179,7 +219,7 @@ JooqQuery.from(Order.class, "o")
 //   WHERE  ROUND(o."total_price", 2) > 100
 ```
 
-### 2.7 subSelect — scalar subquery sütunu
+### 2.9 subSelect — scalar subquery sütunu
 
 ```java
 SubSelectBuilder sub = SubSelectBuilder
@@ -196,7 +236,7 @@ JooqQuery.from(User.class, "u")
 //          (SELECT o.total_price FROM orders o WHERE o.user_id = u.id) AS last_order_total
 ```
 
-### 2.8 CONCAT — sütunları birləşdir
+### 2.10 CONCAT — sütunları birləşdir
 
 Separator ilə sütunları birləşdirir, `null` dəyərlər boş string kimi işlənir:
 
@@ -1249,6 +1289,8 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `selectRound(field, scale, alias)` | ROUND SELECT + filter |
 | `distinct()` | SELECT DISTINCT |
 | `computedColumn(...)` | Riyazi ifadə sütunu |
+| `compute(field).add/subtract/multiply/divide(field).as(alias)` | Fluent riyazi zəncir |
+| `compute(field).subtract().of(field)...done().as(alias)` | Mötərizəli qrup ifadəsi |
 | `coalesce(alias, def, fields...)` | COALESCE sütunu |
 | `subSelect(SubSelectBuilder)` | Scalar subquery sütunu |
 | `caseWhen(...)` | CASE WHEN sütunu |
@@ -1308,6 +1350,8 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `between(field, String, String)` | `BETWEEN` — null handling daxil |
 | `between(field, Number, Number)` | `BETWEEN` — Long/BigDecimal/Integer |
 | `addFieldFilter(left, Op, right)` | İki sahə arasında WHERE müqayisəsi |
+| `addComputedColumn(field).add/subtract/multiply/divide(field).as(alias)` | Fluent riyazi zəncir |
+| `addComputedColumn(field).subtract().of(field)...done().as(alias)` | Mötərizəli qrup ifadəsi |
 | `addLeftJoin(Class, alias).on(...).done()` | Builder LEFT JOIN |
 | `addInnerJoin(Class, alias).onFrom(...).done()` | Builder INNER JOIN |
 | `.onFrom(fromAlias, fromField, Op, toField)` | JOIN ON ilə Op operatoru |

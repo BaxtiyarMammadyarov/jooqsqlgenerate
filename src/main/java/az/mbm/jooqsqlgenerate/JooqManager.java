@@ -223,7 +223,23 @@ public class JooqManager {
         return new ComputedChain(this, ComputedField.expr(field));
     }
 
-    /** Fluent computed sütun zənciri. */
+    /**
+     * Fluent computed sütun zənciri.
+     *
+     * <pre>{@code
+     * // Sadə:
+     * jooq.addComputedColumn("t.totalPriceIn")
+     *     .add("t.totalPriceOut")
+     *     .as("totalPriceValue")
+     *
+     * // Mötərizəli qrup:
+     * jooq.addComputedColumn("t.total_Price_In")
+     *     .subtract("t.total_Price_Out")
+     *     .multiply("t.rate")
+     *     .subtract().of("t.purchase_Expense").multiply("t.count").done()
+     *     .as("profit")
+     * }</pre>
+     */
     public static final class ComputedChain {
         private final JooqManager  manager;
         private       ComputedField expr;
@@ -233,15 +249,91 @@ public class JooqManager {
             this.expr    = expr;
         }
 
+        // ─── Sadə sahə əməliyyatları ─────────────────────────────────────
+
         public ComputedChain add(String field)      { expr = expr.add(field);      return this; }
         public ComputedChain subtract(String field) { expr = expr.subtract(field); return this; }
         public ComputedChain multiply(String field) { expr = expr.multiply(field); return this; }
         public ComputedChain divide(String field)   { expr = expr.divide(field);   return this; }
 
+        // ─── Mötərizəli qrup açmaq — boş çağırış ────────────────────────
+
+        /** {@code + ( ... )} — {@code .of("field")...done()} ilə tamamlanır. */
+        public ComputedGroupChain add()      { return new ComputedGroupChain(this, MathOp.ADD);      }
+
+        /** {@code - ( ... )} — {@code .of("field")...done()} ilə tamamlanır. */
+        public ComputedGroupChain subtract() { return new ComputedGroupChain(this, MathOp.SUBTRACT); }
+
+        /** {@code * ( ... )} — {@code .of("field")...done()} ilə tamamlanır. */
+        public ComputedGroupChain multiply() { return new ComputedGroupChain(this, MathOp.MULTIPLY); }
+
+        /** {@code / ( ... )} — {@code .of("field")...done()} ilə tamamlanır. */
+        public ComputedGroupChain divide()   { return new ComputedGroupChain(this, MathOp.DIVIDE);   }
+
+        // ─── Çıxış nöqtəsi ──────────────────────────────────────────────
+
         /** Alias təyin edir, sütunu qeydiyyat edir və {@link JooqManager}-ə qayıdır. */
         public JooqManager as(String alias) {
             manager.q().computedColumn(expr.as(alias));
             return manager;
+        }
+    }
+
+    /**
+     * Mötərizəli alt-ifadə zənciri — {@link ComputedChain#add()}, {@link ComputedChain#subtract()},
+     * {@link ComputedChain#multiply()}, {@link ComputedChain#divide()} tərəfindən açılır.
+     *
+     * <pre>{@code
+     * jooq.addComputedColumn("t.total_Price_In")
+     *     .subtract("t.total_Price_Out")
+     *     .multiply("t.rate")
+     *     .subtract().of("t.purchase_Expense").multiply("t.count").done()
+     *     .as("profit")
+     * }</pre>
+     */
+    public static final class ComputedGroupChain {
+        private final ComputedChain parent;
+        private final MathOp        op;
+        private       ComputedField group;
+
+        ComputedGroupChain(ComputedChain parent, MathOp op) {
+            this.parent = parent;
+            this.op     = op;
+        }
+
+        /** Mötərizənin içindəki ilk sahəni təyin edir. */
+        public ComputedGroupChain of(String tableAliasAndField) {
+            this.group = ComputedField.expr(tableAliasAndField);
+            return this;
+        }
+
+        /** {@code + field} — qrup daxilində */
+        public ComputedGroupChain add(String field)      { group = group.add(field);      return this; }
+
+        /** {@code - field} — qrup daxilində */
+        public ComputedGroupChain subtract(String field) { group = group.subtract(field); return this; }
+
+        /** {@code * field} — qrup daxilində */
+        public ComputedGroupChain multiply(String field) { group = group.multiply(field); return this; }
+
+        /** {@code / field} — qrup daxilində */
+        public ComputedGroupChain divide(String field)   { group = group.divide(field);   return this; }
+
+        /**
+         * Mötərizəni bağlayır — qrupu əsas ifadəyə tətbiq edib {@link ComputedChain}-ə qayıdır.
+         *
+         * @throws IllegalStateException {@code .of(field)} çağrılmayıbsa
+         */
+        public ComputedChain done() {
+            if (group == null)
+                throw new IllegalStateException("ComputedGroupChain: .of(field) tələb olunur");
+            switch (op) {
+                case ADD      -> parent.expr = parent.expr.add(group);
+                case SUBTRACT -> parent.expr = parent.expr.subtract(group);
+                case MULTIPLY -> parent.expr = parent.expr.multiply(group);
+                case DIVIDE   -> parent.expr = parent.expr.divide(group);
+            }
+            return parent;
         }
     }
 
