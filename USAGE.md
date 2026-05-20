@@ -91,7 +91,36 @@ List<String> cols = List.of("u.id", "u.firstName", "u.email");
 JooqQuery.from(User.class, "u").select(cols).execute(dsl);
 ```
 
-### 2.2 selectAs — özəl alias
+### 2.2 selectAll — əsas entity-nin bütün sütunları
+
+`selectAll()` əsas entity-nin **bütün sütunlarını** camelCase alias ilə SELECT-ə əlavə edir.
+`SELECT *`-dan fərqi: yalnız əsas entity-nin sütunları seçilir, JOIN cədvəllərinin sütunları daxil olmur.
+
+```java
+JooqQuery.from(User.class, "u")
+    .selectAll()
+    .execute(dsl);
+// → SELECT u."id"         AS "id",
+//          u."first_name" AS "firstName",
+//          u."last_name"  AS "lastName",
+//          u."email"      AS "email",
+//          u."status"     AS "status"
+//   FROM users u
+```
+
+JOIN olan hallarda əlavə sütunları `.select()` ilə birlikdə istifadə et:
+
+```java
+JooqQuery.from(User.class, "u")
+    .selectAll()                        // u-nun bütün sütunları
+    .select("o.totalAmount", "o.status") // o-dan yalnız bunlar
+    .leftJoin(Order.class, "o").on("id").equalsField("userId").done()
+    .execute(dsl);
+```
+
+> **Qeyd:** `selectAll()` + `select()` birlikdə istifadə edildikdə dublikat sütunlar avtomatik atlanır.
+
+### 2.3 selectAs — özəl alias
 
 Eyni sütun adına sahib join cədvəllərini fərqləndirmək üçün:
 ```java
@@ -105,7 +134,7 @@ JooqQuery.from(Task.class, "t")
 > **Qeyd:** Eyni source field həm `select(...)`, həm `selectAs(...)` ilə əlavə edildikdə
 > SELECT-də dublikat sütun yaranmır — `selectAs` versiyası (aliasla olan) qalır, `select`-dəki atlanır.
 
-### 2.3 DISTINCT
+### 2.4 DISTINCT
 
 ```java
 JooqQuery.from(Order.class, "o")
@@ -115,7 +144,7 @@ JooqQuery.from(Order.class, "o")
 // → SELECT DISTINCT o."customer_id", o."status" FROM orders o
 ```
 
-### 2.4 computedColumn — riyazi ifadə sütunu
+### 2.5 computedColumn — riyazi ifadə sətunu
 
 İki sahə arasında `+`, `-`, `*`, `/`:
 ```java
@@ -158,7 +187,7 @@ manager.addComputedColumn("t.price")
 // → ((price + tax) - discount) * qty AS netTotal
 ```
 
-### 2.5 COALESCE
+### 2.6 COALESCE
 
 ```java
 JooqQuery.from(User.class, "u")
@@ -167,7 +196,7 @@ JooqQuery.from(User.class, "u")
 // → SELECT COALESCE(u."first_name", u."last_name", 'Naməlum') AS "displayName"
 ```
 
-### 2.6 selectRound — yuvarlama sütunu
+### 2.7 selectRound — yuvarlama sütunu
 
 `selectRound` ilə həmin alias-a `filter()` tətbiq edildikdə avtomatik `WHERE ROUND(field, scale)` yaranır:
 ```java
@@ -179,7 +208,7 @@ JooqQuery.from(Order.class, "o")
 //   WHERE  ROUND(o."total_price", 2) > 100
 ```
 
-### 2.7 subSelect — scalar subquery sütunu
+### 2.8 subSelect — scalar subquery sütunu
 
 ```java
 SubSelectBuilder sub = SubSelectBuilder
@@ -196,7 +225,7 @@ JooqQuery.from(User.class, "u")
 //          (SELECT o.total_price FROM orders o WHERE o.user_id = u.id) AS last_order_total
 ```
 
-### 2.8 CONCAT — sütunları birləşdir
+### 2.9 CONCAT — sütunları birləşdir
 
 Separator ilə sütunları birləşdirir, `null` dəyərlər boş string kimi işlənir:
 
@@ -709,9 +738,90 @@ ExistsSpec.exists(TaskPermission.class)
     .done()
 ```
 
-### 6.5 JooqManager ilə EXISTS — addBarMenuExists nümunəsi
+### 6.5 JooqManager — inline EXISTS builder (`addExists`)
 
-Şərtlərə görə dinamik `addBarMenuExists` çağırışı:
+`ExistsSpec` import etmədən birbaşa `JooqManager` zənciri içində EXISTS yazmaq mümkündür.
+`addExists(Class)` ilə açılır, `done()` ilə `JooqManager`-ə qayıdır.
+
+**Sadə hal:**
+```java
+jooq.setMainTable(CashItemGroup.class, "t")
+    .equal("t.status", "A")
+    .addExists(CashFlowEntity.class)
+        .joinField("fkCashGroupId", "t", "id")
+        .equal("status", "A")
+    .done()
+    .addSelectAs("t.id", "key")
+    .addSelectAs("t.cashItemGroupName", "value")
+    .noPagination()
+    .skipCount();
+// → WHERE t.status = 'A'
+//     AND EXISTS (SELECT 1 FROM cash_flow
+//                  WHERE cash_flow.fk_cash_group_id = t.id
+//                    AND cash_flow.status = 'A')
+```
+
+**Shorthand filter metodları** — `Op` yazmadan:
+
+| Metod | SQL |
+|---|---|
+| `.equal(field, value)` | `WHERE field = value` |
+| `.notEqual(field, value)` | `WHERE field != value` |
+| `.in(field, Collection<?>)` | `WHERE field IN (...)` |
+| `.in(field, Object...)` | `WHERE field IN (...)` — varargs |
+| `.notIn(field, Collection<?>)` | `WHERE field NOT IN (...)` |
+| `.like(field, value)` | `WHERE field LIKE '%val%'` |
+| `.isNull(field)` | `WHERE field IS NULL` |
+| `.isNotNull(field)` | `WHERE field IS NOT NULL` |
+| `.filter(field, Op, value)` | Hər hansı `Op` ilə |
+
+Null / boş dəyərlər bütün metodlarda avtomatik atlanır.
+
+**Çoxlu filter:**
+```java
+jooq.addExists(CashFlowEntity.class)
+        .joinField("fkGroupId", "t", "id")
+        .equal("status", "A")
+        .notEqual("type", "DRAFT")
+        .in("typeKey", List.of("K1", "K2", "K3"))
+        .isNotNull("approvedBy")
+    .done()
+```
+
+**NOT EXISTS:**
+```java
+jooq.addNotExists(BlockedEntity.class)
+        .joinField("userId", "u", "id")
+        .equal("active", true)
+    .done()
+```
+
+**HAVING EXISTS (aggregate sorğular üçün):**
+```java
+jooq.addHavingExists(PaymentEntity.class)
+        .joinField("fkTaskId", "t", "id")
+        .equal("status", "PAID")
+    .done()
+```
+
+**OR qrupu ilə:**
+```java
+jooq.addExists(TaskPermission.class)
+        .joinField("fkTaskId", "t", "id")
+        .equal("status", "A")
+        .orGroup()
+            .or("fkFilterId", Op.EQUAl, userId)
+            .andBranch("b1")
+                .add("fkTaskTypeKey", Op.IN,    keys)
+                .add("fkRoleId",      Op.EQUAl, roleId)
+            .end()
+        .done()
+    .done()
+```
+
+### 6.6 JooqManager ilə EXISTS — dinamik nümunə
+
+Köhnə `ExistsSpec` ilə dinamik çağırış:
 
 ```java
 private void addBarMenuExists(JooqManager jooq, Long userId, String status,
@@ -742,7 +852,7 @@ if (condition2) addBarMenuExists(jooq, userId, "B", type2Keys, visibleKeys2);
 // → AND EXISTS (...) AND EXISTS (...)  ← hər çağırış ayrı EXISTS əlavə edir
 ```
 
-> **Qeyd:** `addExists()` hər çağırışda yeni `AND EXISTS (...)` əlavə edir; alias parametri artıq lazım deyil.
+> **Qeyd:** `addExists()` / `addExistsFilter()` hər çağırışda yeni `AND EXISTS (...)` əlavə edir.
 
 ---
 
@@ -1266,6 +1376,7 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `orGroup(alias).or(...).andBranch(...).add(...).end().done()` | Mürəkkəb OR/AND qruplaması |
 | `inSubQuery(field, SubQueryIn)` | IN (SELECT ...) |
 | `inSubQuery(fields[], SubQueryIn)` | COMPOSITE IN |
+| `selectAll()` | Əsas entity-nin bütün sütunları (camelCase alias ilə, JOIN sütunları daxil deyil) |
 | `exists(ExistsSpec)` | EXISTS / NOT EXISTS |
 | `groupBy(fields...)` | GROUP BY |
 | `agg(Agg, field, alias, round, dir)` | Aqreqat funksiya |
@@ -1313,7 +1424,12 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `.onFrom(fromAlias, fromField, Op, toField)` | JOIN ON ilə Op operatoru |
 | `addOrOperation(alias, tableAlias, field, Map).add(...).done()` | OR qrupu filterlər |
 | `orGroup(alias).or(...).andBranch(...).add(...).end().done()` | Mürəkkəb OR/AND qruplaması |
-| `addExists(ExistsSpec)` | EXISTS / NOT EXISTS əlavə edir |
+| `addSelectAll()` | Əsas entity-nin bütün sütunları (camelCase alias, JOIN sütunları daxil deyil) |
+| `addExists(ExistsSpec)` | EXISTS / NOT EXISTS — `ExistsSpec` ilə |
+| `addExists(Class)...done()` | EXISTS — inline builder, `ExistsSpec` import lazım deyil |
+| `addNotExists(Class)...done()` | NOT EXISTS — inline builder |
+| `addHavingExists(Class)...done()` | HAVING EXISTS — aggregate sorğular üçün |
+| `addHavingNotExists(Class)...done()` | HAVING NOT EXISTS — aggregate sorğular üçün |
 | `addGroupBy(fields...)` | GROUP BY |
 | `addOrderBy(field, dir)` | ORDER BY |
 | `addOrderBy(sortExpression)` | ORDER BY string format: `"t.field desc, f.field"` |
@@ -1338,3 +1454,29 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `    .add(field, Op, value)` | AND qrupuna field əlavə edir |
 | `  .end()` | andBranch-ı bağlayır |
 | `.done()` | orGroup-u bağlayır, ExistsSpec-ə qayıdır |
+
+### JooqExistsBuilder metodları (inline builder)
+
+`addExists(Class)` / `addNotExists(Class)` / `addHavingExists(Class)` ilə açılır.
+
+| Metod | Təsvir |
+|---|---|
+| `.joinField(existsField, mainAlias, mainField)` | EXISTS ↔ ana cədvəl korrelyasiyası |
+| `.filter(field, Op, value)` | Hər hansı `Op` ilə filter |
+| `.equal(field, value)` | `WHERE field = value` |
+| `.notEqual(field, value)` | `WHERE field != value` |
+| `.in(field, Collection<?>)` | `WHERE field IN (...)` |
+| `.in(field, Object...)` | `WHERE field IN (...)` — varargs |
+| `.notIn(field, Collection<?>)` | `WHERE field NOT IN (...)` |
+| `.like(field, value)` | `WHERE field LIKE '%val%'` |
+| `.isNull(field)` | `WHERE field IS NULL` |
+| `.isNotNull(field)` | `WHERE field IS NOT NULL` |
+| `.orGroup()` | OR/AND qruplaması başlatır |
+| `  .or(field, Op, value)` | Sadə OR şərt |
+| `  .andBranch(alias)` | AND alt-qrupu |
+| `    .add(field, Op, value)` | AND qrupuna field əlavə edir |
+| `  .end()` | andBranch-ı bağlayır, orGroup-a qayıdır |
+| `  .done()` | orGroup-u bağlayır, `JooqExistsBuilder`-ə qayıdır |
+| `.done()` | EXISTS-i tamamlayır, `JooqManager`-ə qayıdır |
+
+> **Qeyd:** Bütün filter metodlarında null / boş dəyər avtomatik atlanır — şərt əlavə edilmir.
