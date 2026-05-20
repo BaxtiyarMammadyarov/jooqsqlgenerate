@@ -791,6 +791,55 @@ public class JooqManager {
         return addExistsFilter(spec);
     }
 
+    /**
+     * WHERE EXISTS — inline fluent builder. {@code ExistsSpec} import etmək lazım deyil.
+     *
+     * <pre>{@code
+     *   .addExists(CashFlowEntity.class)
+     *       .joinField("fkCashGroupId", "t", "id")
+     *       .filter("status", Op.EQUAl, "A")
+     *   .done()
+     * }</pre>
+     */
+    public <E> JooqExistsBuilder<E> addExists(Class<E> entity) {
+        return new JooqExistsBuilder<>(this, ExistsSpec.exists(entity), false);
+    }
+
+    /**
+     * WHERE NOT EXISTS — inline fluent builder.
+     *
+     * <pre>{@code
+     *   .addNotExists(BlockedEntity.class)
+     *       .joinField("userId", "u", "id")
+     *       .filter("active", Op.EQUAl, true)
+     *   .done()
+     * }</pre>
+     */
+    public <E> JooqExistsBuilder<E> addNotExists(Class<E> entity) {
+        return new JooqExistsBuilder<>(this, ExistsSpec.notExists(entity), false);
+    }
+
+    /**
+     * HAVING EXISTS — inline fluent builder (aggregate sorğular üçün).
+     *
+     * <pre>{@code
+     *   .addHavingExists(PaymentEntity.class)
+     *       .joinField("fkTaskId", "t", "id")
+     *       .filter("status", Op.EQUAl, "PAID")
+     *   .done()
+     * }</pre>
+     */
+    public <E> JooqExistsBuilder<E> addHavingExists(Class<E> entity) {
+        return new JooqExistsBuilder<>(this, ExistsSpec.exists(entity), true);
+    }
+
+    /**
+     * HAVING NOT EXISTS — inline fluent builder (aggregate sorğular üçün).
+     */
+    public <E> JooqExistsBuilder<E> addHavingNotExists(Class<E> entity) {
+        return new JooqExistsBuilder<>(this, ExistsSpec.notExists(entity), true);
+    }
+
     /** Birbaşa jOOQ {@link Condition} — WHERE-ə. */
     public JooqManager addRawCondition(Condition condition) {
         q().rawCondition(condition);
@@ -1501,74 +1550,8 @@ public class JooqManager {
      *        .as("finalPrice")
      * }</pre>
      */
-    public CaseStep addCase() {
-        return new CaseStep(this, new CaseBuilder<>());
-    }
-
-    /** Fluent CASE WHEN zəncirinin əsas addımı. */
-    public static final class CaseStep {
-        private final JooqManager        manager;
-        private final CaseBuilder<Object> cb;
-
-        @SuppressWarnings("unchecked")
-        CaseStep(JooqManager manager, CaseBuilder<?> cb) {
-            this.manager = manager;
-            this.cb      = (CaseBuilder<Object>) cb;
-        }
-
-        /** WHEN şərti — THEN gözləyir. */
-        public CaseThenStep when(String field, Op op, Object whenValue) {
-            return new CaseThenStep(this, field, op, whenValue);
-        }
-
-        /** ELSE — literal dəyər. */
-        public CaseStep else_(Object elseValue) {
-            cb.otherwise(elseValue);
-            return this;
-        }
-
-        /** ELSE — cədvəl sütunu ({@code "alias.fieldName"}). */
-        public CaseStep elseField(String aliasAndField) {
-            cb.otherwiseField(aliasAndField);
-            return this;
-        }
-
-        /**
-         * Alias təyin edir, CASE-i manager-ə qeydiyyat edir
-         * və {@link JooqManager}-ə qayıdır.
-         */
-        public JooqManager as(String alias) {
-            cb.as(alias);
-            manager.q().caseWhen(cb);
-            return manager;
-        }
-    }
-
-    /** WHEN-dən sonra THEN gözləyən addım. */
-    public static final class CaseThenStep {
-        private final CaseStep parent;
-        private final String   field;
-        private final Op       op;
-        private final Object   whenVal;
-
-        CaseThenStep(CaseStep parent, String field, Op op, Object whenVal) {
-            this.parent  = parent;
-            this.field   = field;
-            this.op      = op;
-            this.whenVal = whenVal;
-        }
-
-        /** THEN — literal dəyər. */
-        public CaseStep then(Object thenValue) {
-            parent.cb.addWhen(field, op, whenVal, thenValue);
-            return parent;
-        }
-
-        /** THEN — cədvəl sütunu ({@code "alias.fieldName"}). */
-        public CaseStep thenField(String aliasAndField) {
-            parent.cb.addWhenField(field, op, whenVal, aliasAndField);
-            return parent;
-        }
+    public JooqCaseBuilder.CaseStep addCase() {
+        return new JooqCaseBuilder.CaseStep(this, new CaseBuilder<>());
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -1971,6 +1954,12 @@ public class JooqManager {
         return current;
     }
 
+    /** {@link JooqCaseBuilder.CaseStep} tərəfindən çağrılır — package-private. */
+    @SuppressWarnings("unchecked")
+    void commitCase(az.mbm.jooqsqlgenerate.builder.CaseBuilder<?> cb) {
+        q().caseWhen(cb);
+    }
+
     @SuppressWarnings("unchecked")
     private void applyFilter(Filter filter, UpdateFilterRow fr) {
         if (fr.value() == null) return;
@@ -1991,4 +1980,5 @@ public class JooqManager {
             default                       -> filter.eq(fr.field(), fr.value());
         }
     }
+
 }
