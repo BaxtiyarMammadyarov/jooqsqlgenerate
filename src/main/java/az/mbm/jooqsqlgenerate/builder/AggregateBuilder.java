@@ -9,6 +9,7 @@ import az.mbm.jooqsqlgenerate.enums.MathOp;
 import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -56,10 +57,94 @@ public class AggregateBuilder<T> {
             ComputedField    computedExpr      // null → sadə sahə; non-null → çox sahəli ifadə
     ) {}
 
-    private final List<String>   groupByFields = new ArrayList<>();
-    private final List<AggField> aggFields     = new ArrayList<>();
+    private final List<String>        groupByFields  = new ArrayList<>();
+    private final List<AggField>      aggFields      = new ArrayList<>();
+    private final List<AggExistsClause> existsClauses = new ArrayList<>();
 
     private AggregateBuilder() {}
+
+    // ════════════════════════════════════════════════════════════════════
+    //  EXISTS / NOT EXISTS daxili data strukturu
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * AggregateBuilder daxilindəki EXISTS / NOT EXISTS şərtinin data strukturu.
+     *
+     * <p>Condition build zamanı ({@link SelectQueryBuilder#buildGroupBy}) mainTable
+     * və tableMap mövcuddur — ora qədər bu record saxlanılır.
+     */
+    public record AggExistsClause(
+            Class<?>           existsEntity,
+            boolean            negated,
+            List<JoinFieldRow> joinFields,
+            List<FilterRow>    filters,
+            List<OrClauseRow>  orClauses
+    ) {
+        public record JoinFieldRow(String existsField, String mainAlias, String mainField) {}
+        public record FilterRow(String field, Op op, Object value) {}
+        /** EXISTS daxilindəki OR/AND qrupları */
+        public record OrClauseRow(String orGroup, String andGroup, String field, Op op, Object value) {}
+
+        /**
+         * EXISTS Condition-unu qurur.
+         * {@code mainTable} — ana cədvəlin EntityTable-ı (joinField üçün lazımdır).
+         * {@code tableMap}  — bütün alias → EntityTable xəritəsi.
+         */
+        @SuppressWarnings("unchecked")
+        public Condition toCondition(EntityTable<?> mainTable,
+                                     Map<String, EntityTable<?>> tableMap) {
+            EntityTable<?> existsTable = new EntityTable<>(existsEntity);
+            Condition cond = null;
+
+            // JOIN şərtləri: existsTable.field = mainAliasTable.field
+            for (JoinFieldRow jf : joinFields) {
+                EntityTable<?> aliasTable = tableMap.getOrDefault(
+                        jf.mainAlias(), mainTable);
+                Field<Object> eField = (Field<Object>) existsTable.getField(jf.existsField());
+                Field<Object> mField = (Field<Object>) aliasTable.getField(jf.mainField());
+                Condition c = eField.eq(mField);
+                cond = (cond == null) ? c : cond.and(c);
+            }
+
+            // Literal filtr şərtləri
+            for (FilterRow fr : filters) {
+                Field<Object> f = (Field<Object>) existsTable.getField(fr.field());
+                Condition c = FilterStrategies.get(fr.op()).apply(f, fr.value());
+                cond = (cond == null) ? c : cond.and(c);
+            }
+
+            // OR/AND qrupları
+            if (!orClauses.isEmpty()) {
+                LinkedHashMap<String, LinkedHashMap<String, List<OrClauseRow>>> grouped =
+                        new LinkedHashMap<>();
+                for (OrClauseRow oc : orClauses) {
+                    grouped.computeIfAbsent(oc.orGroup(),  k -> new LinkedHashMap<>())
+                           .computeIfAbsent(oc.andGroup(), k -> new ArrayList<>())
+                           .add(oc);
+                }
+                for (LinkedHashMap<String, List<OrClauseRow>> andGroups : grouped.values()) {
+                    Condition orGroupCond = null;
+                    for (List<OrClauseRow> andRows : andGroups.values()) {
+                        Condition andCond = null;
+                        for (OrClauseRow oc : andRows) {
+                            Field<Object> f = (Field<Object>) existsTable.getField(oc.field());
+                            Condition c = FilterStrategies.get(oc.op()).apply(f, oc.value());
+                            andCond = (andCond == null) ? c : andCond.and(c);
+                        }
+                        orGroupCond = (orGroupCond == null) ? andCond : orGroupCond.or(andCond);
+                    }
+                    if (orGroupCond != null)
+                        cond = (cond == null) ? orGroupCond : cond.and(orGroupCond);
+                }
+            }
+
+            var subSelect = DSL.selectOne()
+                    .from(existsTable.getTable())
+                    .where(cond != null ? cond : DSL.trueCondition());
+
+            return negated ? DSL.notExists(subSelect) : DSL.exists(subSelect);
+        }
+    }
 
     // ─── Static giriş nöqtəsi ────────────────────────────────────────────
 
