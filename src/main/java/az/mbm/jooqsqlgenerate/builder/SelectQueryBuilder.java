@@ -1561,6 +1561,12 @@ public class SelectQueryBuilder<T> {
             allHaving = (allHaving == null) ? rh : allHaving.and(rh);
         }
 
+        // EXISTS / NOT EXISTS HAVING şərtləri
+        for (AggregateBuilder.AggExistsClause ec : aggregator.getExistsClauses()) {
+            Condition ecCond = ec.toCondition(mainTable, tableMap);
+            allHaving = (allHaving == null) ? ecCond : allHaving.and(ecCond);
+        }
+
         return (allHaving != null) ? (SelectHavingStep<Record>) grouped.having(allHaving) : grouped;
     }
 
