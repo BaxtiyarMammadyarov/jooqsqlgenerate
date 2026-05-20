@@ -7,13 +7,13 @@
 <dependency>
     <groupId>az.mbm</groupId>
     <artifactId>jooq-sql-generate</artifactId>
-    <version>1.1.5</version>
+    <version>1.1.7</version>
 </dependency>
 ```
 
 ```kotlin
 // Gradle
-implementation("az.mbm:jooq-sql-generate:1.1.5")
+implementation("az.mbm:jooq-sql-generate:1.1.7")
 ```
 
 ---
@@ -188,6 +188,47 @@ manager.addComputedColumn("t.price")
 ```
 
 ### 2.6 COALESCE
+### 2.5 compute — mötərizəli qrup ifadəsi
+
+`compute()` / `addComputedColumn()` metodlarında boş `add()`, `subtract()`, `multiply()`, `divide()` çağırışı mötərizəli alt-ifadə (qrup) açır. Qrup `.of("field")` ilə başlayır, `.done()` ilə bağlanır və əsas zəncirə qayıdır.
+
+**JooqQuery ilə (`compute`):**
+```java
+// (total_Price_In - total_Price_Out) * rate - (purchase_Expense * count)
+JooqQuery.from(WarehouseFlow.class, "wf")
+    .compute("wf.total_Price_In")
+        .subtract("wf.total_Price_Out")          // sadə sahə
+        .multiply("wf.rate")                      // sadə sahə
+        .subtract().of("wf.purchase_Expense")     // ← mötərizə açılır
+            .multiply("wf.count")
+            .done()                               // ← mötərizə bağlanır
+        .as("profit")                             // commit + SelectQueryBuilder-ə qayıdır
+    .execute(dsl);
+// → ((total_Price_In - total_Price_Out) * rate) - (purchase_Expense * count) AS profit
+```
+
+Bütün dörd əməliyyat eyni şəkildə işləyir:
+```java
+.compute("o.base")
+    .add().of("o.tax").multiply("o.qty").done()           // + (tax * qty)
+    .subtract().of("o.discount").multiply("o.qty").done() // - (discount * qty)
+    .multiply().of("o.price").add("o.vat").done()         // * (price + vat)
+    .divide().of("o.total").subtract("o.refund").done()   // / (total - refund)
+    .as("result")
+```
+
+**JooqManager ilə (`addComputedColumn`):**
+```java
+jooq.addComputedColumn("t.total_Price_In")
+    .subtract("t.total_Price_Out")
+    .multiply("t.rate")
+    .subtract().of("t.purchase_Expense").multiply("t.count").done()
+    .as("profit")
+```
+
+> **Qeyd:** `.subtract("field")` — adi çıxma (sadə sahə); `.subtract()` boş çağırış — mötərizə açır, `GroupStep` qaytarır. `.done()` mötərizəni bağlayır, əsas zəncirə qayıdır. `.as("alias")` isə bütün ifadəni tamamlayır.
+
+### 2.7 COALESCE
 
 ```java
 JooqQuery.from(User.class, "u")
@@ -197,6 +238,7 @@ JooqQuery.from(User.class, "u")
 ```
 
 ### 2.7 selectRound — yuvarlama sütunu
+### 2.8 selectRound — yuvarlama sütunu
 
 `selectRound` ilə həmin alias-a `filter()` tətbiq edildikdə avtomatik `WHERE ROUND(field, scale)` yaranır:
 ```java
@@ -209,6 +251,7 @@ JooqQuery.from(Order.class, "o")
 ```
 
 ### 2.8 subSelect — scalar subquery sütunu
+### 2.9 subSelect — scalar subquery sütunu
 
 ```java
 SubSelectBuilder sub = SubSelectBuilder
@@ -226,6 +269,7 @@ JooqQuery.from(User.class, "u")
 ```
 
 ### 2.9 CONCAT — sütunları birləşdir
+### 2.10 CONCAT — sütunları birləşdir
 
 Separator ilə sütunları birləşdirir, `null` dəyərlər boş string kimi işlənir:
 
@@ -991,6 +1035,92 @@ JooqQuery.from(CashFlow.class, "t")
 > GROUP BY hər birini ayrı sütun kimi emal edir. Alias.fieldName açarı istifadə olunur,
 > buna görə `cashItemType.property_value` ilə `propertyValueType.property_value` toqquşmur.
 
+### 7.7 AggregateBuilder — EXISTS / NOT EXISTS (HAVING)
+
+`AggregateBuilder` daxilindən `exists()` / `notExists()` ilə HAVING EXISTS şərti əlavə etmək mümkündür.
+Zəncir `done()` ilə `AggregateBuilder`-ə qayıdır.
+
+#### Sadə EXISTS
+
+```java
+JooqQuery.from(CashFlow.class, "t")
+    .select("t.status")
+    .aggregate(
+        AggregateBuilder.<CashFlow>groupBy("t.status")
+            .count("t.id").as("cnt").done()
+            .exists(AllowedStatus.class)
+                .joinField("statusCode", "t", "status")
+                .equal("isActive", true)
+            .done()
+    )
+    .execute(dsl);
+// → SELECT t.status, COUNT(t.id) AS cnt
+//   FROM cash_flow t
+//   GROUP BY t.status
+//   HAVING EXISTS (SELECT 1 FROM allowed_status
+//                  WHERE status_code = t.status AND is_active = true)
+```
+
+#### NOT EXISTS
+
+```java
+AggregateBuilder.<Order>groupBy("o.customerId")
+    .sum("o.totalPrice").round(2).as("totalSum").done()
+    .notExists(BlockedCustomer.class)
+        .joinField("customerId", "o", "customerId")
+    .done()
+```
+
+#### IN / NOT IN / like / isNull ilə
+
+```java
+AggregateBuilder.<Task>groupBy("t.fkRequestId")
+    .count("t.id").as("taskCount").done()
+    .exists(TaskPermission.class)
+        .joinField("fkTaskId", "t", "id")
+        .in("fkRoleId", allowedRoles)
+        .equal("isActive", true)
+    .done()
+```
+
+#### OR qrupu ilə
+
+```java
+AggregateBuilder.<Task>groupBy("t.fkRequestId")
+    .count("t.id").as("cnt").done()
+    .exists(TaskPermission.class)
+        .joinField("fkTaskId", "t", "id")
+        .orGroup()
+            .or("fkUserId",  Op.EQUAl, userId)
+            .andBranch("b1")
+                .add("fkRoleId",    Op.EQUAl, roleId)
+                .add("fkTypeKey",   Op.IN,    typeList)
+            .end()
+        .done()
+    .done()
+// → HAVING EXISTS (SELECT 1 FROM task_permission
+//                  WHERE fk_task_id = t.id
+//                  AND (fk_user_id = ? OR (fk_role_id = ? AND fk_type_key IN (...))))
+```
+
+#### `AggExistsBuilder` metodları
+
+| Metod | SQL qarşılığı |
+|---|---|
+| `joinField(eField, alias, mField)` | `EXISTS.eField = alias.mField` |
+| `filter(field, op, value)` | İstənilən Op |
+| `equal(field, value)` | `field = value` |
+| `notEqual(field, value)` | `field != value` |
+| `in(field, collection)` | `field IN (...)` |
+| `in(field, values...)` | `field IN (...)` varargs |
+| `notIn(field, collection)` | `field NOT IN (...)` |
+| `notIn(field, values...)` | `field NOT IN (...)` varargs |
+| `like(field, value)` | `LOWER(field) LIKE '%value%'` |
+| `isNull(field)` | `field IS NULL` |
+| `isNotNull(field)` | `field IS NOT NULL` |
+| `orGroup()` | OR alt-qrupu açır |
+| `done()` | `AggregateBuilder`-ə qayıdır |
+
 ---
 
 ## 8. HAVING
@@ -1359,6 +1489,8 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `selectRound(field, scale, alias)` | ROUND SELECT + filter |
 | `distinct()` | SELECT DISTINCT |
 | `computedColumn(...)` | Riyazi ifadə sütunu |
+| `compute(field).add/subtract/multiply/divide(field).as(alias)` | Fluent riyazi zəncir |
+| `compute(field).subtract().of(field)...done().as(alias)` | Mötərizəli qrup ifadəsi |
 | `coalesce(alias, def, fields...)` | COALESCE sütunu |
 | `subSelect(SubSelectBuilder)` | Scalar subquery sütunu |
 | `caseWhen(...)` | CASE WHEN sütunu |
@@ -1419,6 +1551,8 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `between(field, String, String)` | `BETWEEN` — null handling daxil |
 | `between(field, Number, Number)` | `BETWEEN` — Long/BigDecimal/Integer |
 | `addFieldFilter(left, Op, right)` | İki sahə arasında WHERE müqayisəsi |
+| `addComputedColumn(field).add/subtract/multiply/divide(field).as(alias)` | Fluent riyazi zəncir |
+| `addComputedColumn(field).subtract().of(field)...done().as(alias)` | Mötərizəli qrup ifadəsi |
 | `addLeftJoin(Class, alias).on(...).done()` | Builder LEFT JOIN |
 | `addInnerJoin(Class, alias).onFrom(...).done()` | Builder INNER JOIN |
 | `.onFrom(fromAlias, fromField, Op, toField)` | JOIN ON ilə Op operatoru |

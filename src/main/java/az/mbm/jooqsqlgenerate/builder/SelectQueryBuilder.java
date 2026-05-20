@@ -333,6 +333,222 @@ public class SelectQueryBuilder<T> {
     }
 
     /**
+     * Riyazi hesablanmış sütun — {@link MathExpr} DSL ilə başlanır,
+     * {@code .as("alias").done()} ilə tamamlanır.
+     *
+     * <p>Bu metod {@link ComputedField}-i tamamilə gizlədir — istifadəçi yalnız
+     * {@link MathExpr} ilə işləyir.
+     *
+     * <pre>{@code
+     *   // (total_Price_In - total_Price_Out) * rate - purchase_Expense * count
+     *   factory.select(WarehouseFlow.class, "wf")
+     *       .compute("wf.total_Price_In")
+     *           .subtract("wf.total_Price_Out")
+     *           .multiply("wf.rate")
+     *           .subtract(MathExpr.group("wf.purchase_Expense").multiply("wf.count"))
+     *           .as("profit")
+     *       .build(dsl);
+     *
+     *   // Sadə: price - discount
+     *   .compute("o.price")
+     *       .subtract("o.discount")
+     *       .as("netPrice")
+     *
+     *   // Mötərizəli qrup: price + (tax * qty)
+     *   .compute("o.price")
+     *       .add().of("o.tax").multiply("o.qty").done()
+     *       .as("total")
+     * }</pre>
+     *
+     * @param tableAliasAndField  ilk sahə — {@code "alias.fieldName"} formatında
+     * @return {@link MathStep} — riyazi zəncir, {@code .as().done()} ilə tamamlanır
+     */
+    public MathStep<T> compute(String tableAliasAndField) {
+        return new MathStep<>(this, MathExpr.of(tableAliasAndField));
+    }
+
+    /**
+     * Riyazi hesablanmış sütun zənciri — {@link #compute(String)} tərəfindən başladılır.
+     *
+     * <p>Zəncir {@code .as("alias").done()} ilə tamamlanır:
+     * {@code .done()} hesablanmış sütunu builder-ə əlavə edib {@link SelectQueryBuilder}-ə qayıdır.
+     *
+     * @param <E> entity tipi
+     */
+    public static class MathStep<E> {
+
+        private final SelectQueryBuilder<E> parent;
+        private final MathExpr              expr;
+        private       String                alias;
+
+        MathStep(SelectQueryBuilder<E> parent, MathExpr expr) {
+            this.parent = parent;
+            this.expr   = expr;
+        }
+
+        // ─── Riyazi əməliyyatlar — sadə sahə ────────────────────────────
+
+        /** {@code + field} */
+        public MathStep<E> add(String field)      { expr.add(field);      return this; }
+
+        /** {@code - field} */
+        public MathStep<E> subtract(String field) { expr.subtract(field); return this; }
+
+        /** {@code * field} */
+        public MathStep<E> multiply(String field) { expr.multiply(field); return this; }
+
+        /** {@code / field} */
+        public MathStep<E> divide(String field)   { expr.divide(field);   return this; }
+
+        // ─── Mötərizəli qrup açmaq — boş çağırış ────────────────────────
+
+        /**
+         * {@code + ( ... )} — yeni mötərizəli qrup başladır.
+         *
+         * <pre>{@code
+         *   .add().of("o.tax").multiply("o.qty").done()
+         *   // → + (tax * qty)
+         * }</pre>
+         */
+        public GroupStep<E> add()      { return new GroupStep<>(this, MathOp.ADD);      }
+
+        /**
+         * {@code - ( ... )} — yeni mötərizəli qrup başladır.
+         *
+         * <pre>{@code
+         *   .subtract().of("wf.purchase_Expense").multiply("wf.count").done()
+         *   // → - (purchase_Expense * count)
+         * }</pre>
+         */
+        public GroupStep<E> subtract() { return new GroupStep<>(this, MathOp.SUBTRACT); }
+
+        /**
+         * {@code * ( ... )} — yeni mötərizəli qrup başladır.
+         *
+         * <pre>{@code
+         *   .multiply().of("o.price").add("o.tax").done()
+         *   // → * (price + tax)
+         * }</pre>
+         */
+        public GroupStep<E> multiply() { return new GroupStep<>(this, MathOp.MULTIPLY); }
+
+        /**
+         * {@code / ( ... )} — yeni mötərizəli qrup başladır.
+         *
+         * <pre>{@code
+         *   .divide().of("o.total").subtract("o.discount").done()
+         *   // → / (total - discount)
+         * }</pre>
+         */
+        public GroupStep<E> divide()   { return new GroupStep<>(this, MathOp.DIVIDE);   }
+
+        // ─── Çıxış nöqtəsi ──────────────────────────────────────────────
+
+        /**
+         * SELECT alias-ını təyin edib hesablanmış sütunu builder-ə əlavə edir
+         * və {@link SelectQueryBuilder}-ə qayıdır.
+         *
+         * <pre>{@code
+         *   .compute("wf.total_Price_In")
+         *       .subtract("wf.total_Price_Out")
+         *       .multiply("wf.rate")
+         *       .subtract().of("wf.purchase_Expense").multiply("wf.count").done()
+         *       .as("profit")        // ← commit + qayıdış, ayrıca .done() lazım deyil
+         *   .build(dsl);
+         * }</pre>
+         */
+        public SelectQueryBuilder<E> as(String alias) {
+            parent.computedColumn(expr.buildWithAlias(alias));
+            return parent;
+        }
+    }
+
+    /**
+     * Mötərizəli alt-ifadə builder-i — {@link MathStep#add()}, {@link MathStep#subtract()},
+     * {@link MathStep#multiply()}, {@link MathStep#divide()} tərəfindən açılır.
+     *
+     * <p>Zəncir {@code .of("alias.field")} ilə başlayır, {@code .done()} ilə
+     * bağlanır və {@link MathStep}-ə qayıdır.
+     *
+     * <pre>{@code
+     *   // (total_Price_In - total_Price_Out) * rate - (purchase_Expense * count)
+     *   factory.select(WarehouseFlow.class, "wf")
+     *       .compute("wf.total_Price_In")
+     *           .subtract("wf.total_Price_Out")
+     *           .multiply("wf.rate")
+     *           .subtract().of("wf.purchase_Expense").multiply("wf.count").done()
+     *           .as("profit")
+     *       .build(dsl);
+     *
+     *   // price + (tax * qty) - (discount * qty)
+     *   .compute("o.price")
+     *       .add().of("o.tax").multiply("o.qty").done()
+     *       .subtract().of("o.discount").multiply("o.qty").done()
+     *       .as("lineTotal")
+     * }</pre>
+     *
+     * @param <E> entity tipi
+     */
+    public static class GroupStep<E> {
+
+        private final MathStep<E> parent;
+        private final MathOp      op;       // valideynə tətbiq olunacaq əməliyyat
+        private       MathExpr    group;    // .of() ilə qurulur
+
+        GroupStep(MathStep<E> parent, MathOp op) {
+            this.parent = parent;
+            this.op     = op;
+        }
+
+        // ─── Qrupun ilk sahəsi ────────────────────────────────────────────
+
+        /**
+         * Mötərizənin içindəki ilk sahəni təyin edir.
+         *
+         * <pre>{@code .subtract().of("wf.purchase_Expense") }</pre>
+         */
+        public GroupStep<E> of(String tableAliasAndField) {
+            this.group = MathExpr.of(tableAliasAndField);
+            return this;
+        }
+
+        // ─── Qrup daxilindəki əməliyyatlar ───────────────────────────────
+
+        /** {@code + field} — qrup daxilində */
+        public GroupStep<E> add(String field)      { group.add(field);      return this; }
+
+        /** {@code - field} — qrup daxilində */
+        public GroupStep<E> subtract(String field) { group.subtract(field); return this; }
+
+        /** {@code * field} — qrup daxilində */
+        public GroupStep<E> multiply(String field) { group.multiply(field); return this; }
+
+        /** {@code / field} — qrup daxilində */
+        public GroupStep<E> divide(String field)   { group.divide(field);   return this; }
+
+        // ─── Mötərizəni bağla, valideynə qayıt ───────────────────────────
+
+        /**
+         * Mötərizəni bağlayır — qrupu əsas ifadəyə tətbiq edib {@link MathStep}-ə qayıdır.
+         *
+         * <pre>{@code .subtract().of("wf.purchase_Expense").multiply("wf.count").done() }</pre>
+         *
+         * @throws IllegalStateException {@code .of(field)} çağrılmayıbsa
+         */
+        public MathStep<E> done() {
+            if (group == null)
+                throw new IllegalStateException("GroupStep: .of(field) tələb olunur");
+            switch (op) {
+                case ADD      -> parent.expr.add(group);
+                case SUBTRACT -> parent.expr.subtract(group);
+                case MULTIPLY -> parent.expr.multiply(group);
+                case DIVIDE   -> parent.expr.divide(group);
+            }
+            return parent;
+        }
+    }
+
+    /**
      * CASE WHEN SELECT sütunu.
      *
      * <pre>{@code
