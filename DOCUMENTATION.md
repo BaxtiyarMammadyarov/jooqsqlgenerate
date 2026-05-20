@@ -37,7 +37,13 @@ jOOQ DSL                   ← tip-təhlükəli SQL yaradır
 az.mbm.jooqsqlgenerate
 │
 ├── JooqManager.java          ← Spring @Component — köhnə API
-├── JooqQuery.java            ← Yeni, Spring-dən asılı olmayan API
+├── JooqManager.java          ← Spring bean facade — fluent API giriş nöqtəsi
+├── JooqManagerFactory.java   ← JooqManager factory (Spring bean)
+├── JooqQuery.java            ← Spring-dən asılı olmayan aşağı səviyyəli API
+├── JooqExistsBuilder.java        ← Inline EXISTS builder (addExists...done())
+├── JooqExistsOrGroupBuilder.java ← EXISTS daxili OR qrupu builder
+├── JooqExistsAndBranchBuilder.java ← EXISTS daxili AND alt-qrupu builder
+├── JooqCaseBuilder.java          ← Inline CASE WHEN builder (addCase...as())
 │
 ├── core/
 │   ├── EntityTable.java      ← JPA annotasiyalarını SQL-ə çevirir
