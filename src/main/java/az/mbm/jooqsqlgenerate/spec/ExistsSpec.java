@@ -203,6 +203,18 @@ public class ExistsSpec<T, E> implements Specification<T> {
             orClauses.add(new OrClause(orGroup, andGroup, field, op, value));
     }
 
+    /**
+     * OR şərti birbaşa əlavə edir — xarici builder-lər üçün (məs. JooqManager inline builder).
+     * Daxili {@link #orGroup()} builder-i ilə eyni məntiq, sadəcə birbaşa API-dir.
+     *
+     * @param orGroup  OR qrupunun adı — eyni adlılar OR ilə birləşir
+     * @param andGroup AND alt-qrupu adı — eyni adlılar AND ilə birləşir
+     */
+    public ExistsSpec<T, E> orFilter(String orGroup, String andGroup, String field, Op op, Object value) {
+        addOrClause(orGroup, andGroup, field, op, value);
+        return this;
+    }
+
     // ─── Specification → Condition ────────────────────────────────────────
 
     @Override
