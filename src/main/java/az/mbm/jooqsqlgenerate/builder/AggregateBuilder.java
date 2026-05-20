@@ -9,6 +9,8 @@ import az.mbm.jooqsqlgenerate.enums.MathOp;
 import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -181,10 +183,42 @@ public class AggregateBuilder<T> {
     public AggStep<T> maxOf(ComputedField expr)   { return new AggStep<>(this, Agg.MAX,   expr); }
     public AggStep<T> minOf(ComputedField expr)   { return new AggStep<>(this, Agg.MIN,   expr); }
 
+    // ─── EXISTS / NOT EXISTS giriş nöqtələri ────────────────────────────────
+
+    /**
+     * HAVING EXISTS şərti əlavə edir.
+     *
+     * <pre>{@code
+     *   AggregateBuilder.groupBy("t.status")
+     *       .count("t.id").as("cnt").done()
+     *       .exists(CashFlowEntity.class)
+     *           .joinField("fkGroupId", "t", "id")
+     *           .equal("status", "A")
+     *       .done()
+     * }</pre>
+     */
+    public <E> AggExistsBuilder<T, E> exists(Class<E> entity) {
+        return new AggExistsBuilder<>(this, entity, false);
+    }
+
+    /**
+     * HAVING NOT EXISTS şərti əlavə edir.
+     *
+     * <pre>{@code
+     *   .notExists(BlockedEntity.class)
+     *       .joinField("fkUserId", "u", "id")
+     *   .done()
+     * }</pre>
+     */
+    public <E> AggExistsBuilder<T, E> notExists(Class<E> entity) {
+        return new AggExistsBuilder<>(this, entity, true);
+    }
+
     // ─── Accessor-lar ────────────────────────────────────────────────────
 
-    public List<String>   getGroupByFields() { return groupByFields; }
-    public List<AggField> getAggFields()     { return aggFields;     }
+    public List<String>          getGroupByFields()  { return groupByFields; }
+    public List<AggField>        getAggFields()      { return aggFields;     }
+    public List<AggExistsClause> getExistsClauses()  { return existsClauses; }
 
     // ─── jOOQ Field-ə çevirmə ────────────────────────────────────────────
 
@@ -390,6 +424,249 @@ public class AggregateBuilder<T> {
                     mathOp, mathField, alias, round,
                     havingOp, havingVal, orderDir,
                     computedExpr));
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  AggExistsBuilder
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * Aggregate EXISTS / NOT EXISTS üçün fluent builder.
+     *
+     * <p>{@link AggregateBuilder#exists} / {@link AggregateBuilder#notExists} ilə açılır,
+     * {@link #done()} ilə {@link AggregateBuilder}-ə qayıdır.
+     *
+     * <pre>{@code
+     *   AggregateBuilder.groupBy("t.status")
+     *       .count("t.id").as("cnt").done()
+     *       .exists(CashFlowEntity.class)
+     *           .joinField("fkGroupId", "t", "id")
+     *           .equal("status",  "A")
+     *           .in("typeId",     typeIds)
+     *       .done()
+     * }</pre>
+     *
+     * @param <T> ana entity tipi
+     * @param <E> EXISTS alt-sorğusunun entity tipi
+     */
+    public static class AggExistsBuilder<T, E> {
+
+        private final AggregateBuilder<T>                parent;
+        private final Class<E>                           entity;
+        private final boolean                            negated;
+        private final List<AggExistsClause.JoinFieldRow> joinFields = new ArrayList<>();
+        private final List<AggExistsClause.FilterRow>    filters    = new ArrayList<>();
+        private final List<AggExistsClause.OrClauseRow>  orClauses  = new ArrayList<>();
+        private       int                                orGroupCounter = 0;
+
+        AggExistsBuilder(AggregateBuilder<T> parent, Class<E> entity, boolean negated) {
+            this.parent  = parent;
+            this.entity  = entity;
+            this.negated = negated;
+        }
+
+        // ─── JOIN ────────────────────────────────────────────────────────────
+
+        /**
+         * EXISTS cədvəlinin sahəsini ana cədvəlin sahəsinə bağlayır.
+         *
+         * <pre>{@code .joinField("fkGroupId", "t", "id") }</pre>
+         *
+         * @param existsField EXISTS cədvəlindəki sahə adı (camelCase)
+         * @param mainAlias   Ana cədvəlin alias-ı ("t", "u", ...)
+         * @param mainField   Ana cədvəldəki sahə adı (camelCase)
+         */
+        public AggExistsBuilder<T, E> joinField(String existsField, String mainAlias, String mainField) {
+            joinFields.add(new AggExistsClause.JoinFieldRow(existsField, mainAlias, mainField));
+            return this;
+        }
+
+        // ─── Filterlər ────────────────────────────────────────────────────────
+
+        /** Literal dəyər filtri — value null-dursa atlanır. */
+        public AggExistsBuilder<T, E> filter(String field, Op op, Object value) {
+            if (value != null) filters.add(new AggExistsClause.FilterRow(field, op, value));
+            return this;
+        }
+
+        /** {@code WHERE field = value} */
+        public AggExistsBuilder<T, E> equal(String field, Object value) {
+            return filter(field, Op.EQUAl, value);
+        }
+
+        /** {@code WHERE field != value} */
+        public AggExistsBuilder<T, E> notEqual(String field, Object value) {
+            return filter(field, Op.NOT_EQUAL, value);
+        }
+
+        /** {@code WHERE field IN (...)} — null/boş kolleksiya atlanır */
+        public AggExistsBuilder<T, E> in(String field, Collection<?> values) {
+            if (values != null && !values.isEmpty())
+                filters.add(new AggExistsClause.FilterRow(field, Op.IN, values));
+            return this;
+        }
+
+        /** {@code WHERE field IN (...)} — varargs */
+        public AggExistsBuilder<T, E> in(String field, Object... values) {
+            return values != null && values.length > 0 ? in(field, Arrays.asList(values)) : this;
+        }
+
+        /** {@code WHERE field NOT IN (...)} — null/boş kolleksiya atlanır */
+        public AggExistsBuilder<T, E> notIn(String field, Collection<?> values) {
+            if (values != null && !values.isEmpty())
+                filters.add(new AggExistsClause.FilterRow(field, Op.NOT_IN, values));
+            return this;
+        }
+
+        /** {@code WHERE field NOT IN (...)} — varargs */
+        public AggExistsBuilder<T, E> notIn(String field, Object... values) {
+            return values != null && values.length > 0 ? notIn(field, Arrays.asList(values)) : this;
+        }
+
+        /** {@code WHERE field LIKE '%value%'} — null/boş atlanır */
+        public AggExistsBuilder<T, E> like(String field, String value) {
+            return filter(field, Op.LIKE, value);
+        }
+
+        /** {@code WHERE field IS NULL} */
+        public AggExistsBuilder<T, E> isNull(String field) {
+            filters.add(new AggExistsClause.FilterRow(field, Op.IS_EMPTY, ""));
+            return this;
+        }
+
+        /** {@code WHERE field IS NOT NULL} */
+        public AggExistsBuilder<T, E> isNotNull(String field) {
+            filters.add(new AggExistsClause.FilterRow(field, Op.IS_NOT_EMPTY, ""));
+            return this;
+        }
+
+        // ─── OR qrupu ─────────────────────────────────────────────────────────
+
+        /**
+         * EXISTS daxilində OR qrupu açır.
+         *
+         * <pre>{@code
+         *   .orGroup()
+         *       .or("fkFilterId", Op.EQUAl, filterId)
+         *       .andBranch("b1")
+         *           .add("fkTypeKey", Op.IN, typeList)
+         *           .add("fkRoleId",  Op.EQUAl, roleId)
+         *       .end()
+         *   .done()
+         * }</pre>
+         */
+        public AggExistsOrGroupBuilder<T, E> orGroup() {
+            return new AggExistsOrGroupBuilder<>(this, "G" + (orGroupCounter++));
+        }
+
+        // ─── Tamamlama ────────────────────────────────────────────────────────
+
+        /**
+         * EXISTS builder-i tamamlayır, {@link AggregateBuilder}-ə qayıdır.
+         * Condition HAVING-ə əlavə olunur.
+         */
+        public AggregateBuilder<T> done() {
+            parent.existsClauses.add(
+                    new AggExistsClause(entity, negated, joinFields, filters, orClauses));
+            return parent;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  AggExistsOrGroupBuilder
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * EXISTS daxilindəki OR qrupu builder-i.
+     *
+     * <p>{@link AggExistsBuilder#orGroup()} ilə açılır,
+     * {@link #done()} ilə {@link AggExistsBuilder}-ə qayıdır.
+     *
+     * @param <T> ana entity tipi
+     * @param <E> EXISTS alt-sorğusunun entity tipi
+     */
+    public static class AggExistsOrGroupBuilder<T, E> {
+
+        private final AggExistsBuilder<T, E> existsBuilder;
+        private final String                 orGroupName;
+        private       int                    branchCounter = 0;
+
+        AggExistsOrGroupBuilder(AggExistsBuilder<T, E> existsBuilder, String orGroupName) {
+            this.existsBuilder = existsBuilder;
+            this.orGroupName   = orGroupName;
+        }
+
+        /**
+         * OR qrupuna tək şərt əlavə edir — hər biri ayrı AND branch kimi işlənir.
+         *
+         * @param value null olduqda şərt tətbiq edilmir
+         */
+        public AggExistsOrGroupBuilder<T, E> or(String field, Op op, Object value) {
+            if (value != null)
+                existsBuilder.orClauses.add(new AggExistsClause.OrClauseRow(
+                        orGroupName, "_s" + (branchCounter++), field, op, value));
+            return this;
+        }
+
+        /**
+         * AND alt-qrupu açır — eyni branch alias-ı olan şərtlər AND ilə birləşir.
+         *
+         * <pre>{@code
+         *   .andBranch("b1")
+         *       .add("fkTypeKey", Op.IN,    typeList)
+         *       .add("fkRoleId",  Op.EQUAl, roleId)
+         *   .end()
+         * }</pre>
+         */
+        public AggExistsAndBranchBuilder<T, E> andBranch(String alias) {
+            return new AggExistsAndBranchBuilder<>(this, alias);
+        }
+
+        /** OR qrupunu bağlayır, {@link AggExistsBuilder}-ə qayıdır. */
+        public AggExistsBuilder<T, E> done() {
+            return existsBuilder;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  AggExistsAndBranchBuilder
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * EXISTS daxilindəki AND alt-qrupu builder-i.
+     *
+     * <p>{@link AggExistsOrGroupBuilder#andBranch(String)} ilə açılır,
+     * {@link #end()} ilə {@link AggExistsOrGroupBuilder}-ə qayıdır.
+     *
+     * @param <T> ana entity tipi
+     * @param <E> EXISTS alt-sorğusunun entity tipi
+     */
+    public static class AggExistsAndBranchBuilder<T, E> {
+
+        private final AggExistsOrGroupBuilder<T, E> orGroupBuilder;
+        private final String                        branchAlias;
+
+        AggExistsAndBranchBuilder(AggExistsOrGroupBuilder<T, E> orGroupBuilder, String branchAlias) {
+            this.orGroupBuilder = orGroupBuilder;
+            this.branchAlias    = branchAlias;
+        }
+
+        /**
+         * AND alt-qrupuna şərt əlavə edir.
+         *
+         * @param value null olduqda şərt tətbiq edilmir
+         */
+        public AggExistsAndBranchBuilder<T, E> add(String field, Op op, Object value) {
+            if (value != null)
+                orGroupBuilder.existsBuilder.orClauses.add(new AggExistsClause.OrClauseRow(
+                        orGroupBuilder.orGroupName, branchAlias, field, op, value));
+            return this;
+        }
+
+        /** AND alt-qrupunu bağlayır, {@link AggExistsOrGroupBuilder}-ə qayıdır. */
+        public AggExistsOrGroupBuilder<T, E> end() {
+            return orGroupBuilder;
         }
     }
 }
