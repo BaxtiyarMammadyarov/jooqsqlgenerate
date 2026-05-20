@@ -54,7 +54,7 @@ az.mbm.jooqsqlgenerate
 │
 ├── builder/
 │   ├── SelectQueryBuilder.java   ← SELECT sorğusunu addım-addım qurur
-│   ├── AggregateBuilder.java     ← GROUP BY + SUM/COUNT/AVG/MIN/MAX
+│   ├── AggregateBuilder.java     ← GROUP BY + SUM/COUNT/AVG/MIN/MAX + HAVING EXISTS
 │   ├── CaseBuilder.java          ← CASE WHEN ... THEN ... END
 │   ├── ComputedField.java        ← (price * qty) - discount kimi ifadələr
 │   ├── SubQueryIn.java           ← WHERE id IN (SELECT ...)
@@ -427,7 +427,34 @@ ORDER BY SUM(o.amount) DESC
 ```
 
 > **Qeyd:** `AggregateBuilder`-dəki `.round(scale)` aqreqat funksiyaya (SUM, AVG...) tətbiq
-> olunur. Bu, `selectRound()` metodundan fərqlidir — `selectRound()` adi sütunu yuvarlayır.
+> olunur. Bu, `selectRound()` metodundan fərqlidir — `selectRound()` adi sətri yuvarlayır.
+
+**EXISTS / NOT EXISTS — HAVING-də:**
+
+`AggregateBuilder` eyni fluent zəncir daxilindən EXISTS şərtlərini HAVING-ə əlavə edə bilir.
+Üç daxili sinif bu işi görür — hamısı `AggregateBuilder.java`-nın içindədir:
+
+- **`AggExistsBuilder<T,E>`** — `exists(Class)` / `notExists(Class)` ilə açılır;
+  `joinField`, `filter`, shorthand filterlər (`equal`, `in`, `like`, `isNull`…), `orGroup()`, `done()` metodları var.
+- **`AggExistsOrGroupBuilder<T,E>`** — `orGroup()` ilə açılır; `or()`, `andBranch()`, `done()` var.
+- **`AggExistsAndBranchBuilder<T,E>`** — `andBranch(alias)` ilə açılır; `add()`, `end()` var.
+
+`done()` çağırıldıqda `AggExistsClause` record-u `existsClauses` siyahısına əlavə olunur.
+`SelectQueryBuilder.buildGroupBy()` bu siyahıdakı hər clause-u `toCondition()` ilə jOOQ `Condition`-a çevirib HAVING-ə AND ilə birləşdirir.
+
+```java
+AggregateBuilder.<Task>groupBy("t.fkRequestId")
+    .count("t.id").as("taskCount").done()
+    .exists(TaskPermission.class)
+        .joinField("fkTaskId", "t", "id")
+        .in("fkRoleId", allowedRoles)
+        .equal("isActive", true)
+    .done()
+// → HAVING EXISTS (SELECT 1 FROM task_permission
+//                  WHERE fk_task_id = t.id
+//                  AND fk_role_id IN (...)
+//                  AND is_active = true)
+```
 
 ---
 
