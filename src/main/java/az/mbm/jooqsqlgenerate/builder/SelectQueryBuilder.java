@@ -114,13 +114,14 @@ public class SelectQueryBuilder<T> {
     private final List<SortField<?>> orderFields = new ArrayList<>();
 
     // ─── Flags ───────────────────────────────────────────────────────────
-    private boolean distinct   = false;
-    private int     pageNumber = 0;
-    private int     pageSize   = 50;
-    private boolean paginate   = false;  // yalnız page() çağrılanda aktiv olur
-    private boolean countOnly  = false;  // pagination olmadan yalnız COUNT
-    private boolean skipCount  = false;  // pagination var, amma COUNT işləməsin
-    private boolean onlyCount  = false;  // yalnız COUNT işləsin, əsas data sorğusu icra edilməsin
+    private boolean distinct              = false;
+    private int     pageNumber            = 0;
+    private int     pageSize              = 50;
+    private boolean paginate              = false;  // yalnız page() çağrılanda aktiv olur
+    private boolean countOnly             = false;  // pagination olmadan yalnız COUNT
+    private boolean skipCount             = false;  // pagination var, amma COUNT işləməsin
+    private boolean onlyCount             = false;  // yalnız COUNT işləsin, əsas data sorğusu icra edilməsin
+    private boolean selectMainEntityFields = false; // əsas entity-nin bütün sütunları explicit SELECT-ə əlavə olunur
 
     // ════════════════════════════════════════════════════════════════════
     //  Daxili record-lar
@@ -204,9 +205,28 @@ public class SelectQueryBuilder<T> {
         return this;
     }
 
-    /** Bütün sahələri seç (SELECT *) — default davranış */
+    /**
+     * Əsas entity-nin bütün sütunlarını SELECT-ə explicit əlavə edir.
+     *
+     * <p>Fərqi {@code SELECT *}-dən: yalnız əsas entity-nin sütunları seçilir
+     * (JOIN cədvəllərinin sütunları daxil olmur), hər sütun camelCase Java adı
+     * ilə alias-lanır.
+     *
+     * <pre>{@code
+     *   factory.select(User.class, "u")
+     *       .selectAll()                  // u.id, u.name, u.email ...
+     *       .leftJoin(Order.class, "o")...// o sütunları SEÇİLMİR
+     *       .build(dsl);
+     * }</pre>
+     *
+     * <p>Əlavə sütunlar lazım olduqda {@code .columns()} ilə birlikdə istifadə et:
+     * <pre>{@code
+     *   .selectAll()
+     *   .columns("o.totalAmount", "o.status")
+     * }</pre>
+     */
     public SelectQueryBuilder<T> selectAll() {
-        columns.clear();
+        this.selectMainEntityFields = true;
         return this;
     }
 
@@ -926,7 +946,8 @@ public class SelectQueryBuilder<T> {
             EntityTable<T> mainTable,
             Map<String, EntityTable<?>> tableMap) {
 
-        boolean hasCustomFields = !columns.isEmpty() || !selectAsCols.isEmpty()
+        boolean hasCustomFields = selectMainEntityFields
+                || !columns.isEmpty() || !selectAsCols.isEmpty()
                 || !computed.isEmpty() || !computedChain.isEmpty() || !caseCols.isEmpty()
                 || !concatCols.isEmpty() || !coalesceCols.isEmpty() || !subSelectCols.isEmpty()
                 || !rawSelectFields.isEmpty()
@@ -941,6 +962,28 @@ public class SelectQueryBuilder<T> {
         Set<String> selectAsSourceKeys = new HashSet<>();
         for (SelectAsCol sa : selectAsCols) {
             selectAsSourceKeys.add(sa.aliasAndField());
+        }
+
+        // selectAll() çağrılanda əsas entity-nin bütün sütunları explicit əlavə olunur.
+        // SELECT * əvəzinə: yalnız əsas entity sütunları, camelCase alias ilə.
+        // columns() ilə birlikdə istifadə olunduqda dublikatlar atlanır.
+        if (selectMainEntityFields) {
+            Set<String> explicitCols = new HashSet<>(columns);
+            for (String javaFieldName : mainTable.getEntityFieldMap().keySet()) {
+                // columns()-də artıq varsa atla (dublikat önlənir)
+                String qualifiedName = tableAlias + "." + javaFieldName;
+                if (explicitCols.contains(javaFieldName) || explicitCols.contains(qualifiedName)) continue;
+                // selectAsCols-da da yoxla
+                if (selectAsSourceKeys.contains(javaFieldName) || selectAsSourceKeys.contains(qualifiedName)) continue;
+
+                Field<?> f = mainTable.getField(javaFieldName);
+                // DB sütun adı (snake_case) ilə java adı (camelCase) fərqlidirsə alias əlavə et
+                if (!f.getName().equals(javaFieldName)) {
+                    fields.add(f.as(javaFieldName));
+                } else {
+                    fields.add(f);
+                }
+            }
         }
 
         // Sadə sütunlar — user camelCase yazmışsa AS "camelCase" əlavə olunur
