@@ -1592,7 +1592,21 @@ public final class JooqQuery<T> {
         }
 
         for (SubQueryInRow sir : subQueryInCols) builder.inSubQuery(sir.outerFields(), sir.sub());
-        for (FiltersEntry gf : globalFilters) builder.globalWhereFilter(gf.aliasAndField(), gf.op(), gf.value());
+
+        // globalFilter(Map) yolu ilə gələn filterlər — aggAlias olduqda HAVING-ə yönləndir,
+        // əks halda normalda WHERE-ə göndər.
+        // Qeyd: addFilter(String, Op, Object) yolu artıq aggAliases yoxlayır (yuxarıda),
+        //       lakin globalFilter(Map) yolu bunu keçirirdi — bu fix bunu düzəldir.
+        for (FiltersEntry gf : globalFilters) {
+            String fieldKey = fieldPart(gf.aliasAndField());
+            if (aggAliases.contains(fieldKey)) {
+                // Aqreqat alias → HAVING-ə əlavə et (step.having() ilə bağlanacaq)
+                havingMap.put(fieldKey, new FilterRow(fieldKey, gf.op(), gf.value()));
+            } else {
+                builder.globalWhereFilter(gf.aliasAndField(), gf.op(), gf.value());
+            }
+        }
+
         for (FieldFilterEntry ff : fieldFilterEntries) builder.fieldFilter(ff.leftAliasAndField(), ff.op(), ff.rightAliasAndField());
         for (Condition rc : rawConditions) builder.rawCondition(rc);
         for (OrFilterEntry e : orFilterEntries) builder.orFilter(e.orGroup(), e.andGroup(), e.aliasAndField(), e.op(), e.value());
