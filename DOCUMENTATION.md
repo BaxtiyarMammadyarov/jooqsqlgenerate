@@ -5,6 +5,31 @@
 
 ---
 
+## Dəyişikliklər — Versiya Tarixi
+
+### v1.1.8 — REGEXP/NOT_REGEXP düzəlişi
+**Problem:** `Op.REGEXP` və `Op.NOT_REGEXP` filterlərinə `List<String>` dəyər verildikdə
+Java-nın `List.toString()` onu `[isMusteri]` formatına çevirirdi. PostgreSQL regex-ində
+`[isMusteri]` bir **character class** kimi işlənir (i, s, M, u, t, e, r hərflərindən biri),
+nəticədə demək olar bütün sətirləri sızdırırdı.
+
+**Həll:** `FilterStrategies.java`-ya `toRegexPattern()` köməkçi metodu əlavə edildi:
+- `List["isMusteri"]` → `"isMusteri"` (brackets silinir)
+- `List["isMusteri", "isTechizatci"]` → `"isMusteri|isTechizatci"` (regex OR)
+- `"isMusteri,isTechizatci"` (vergüllü string) → `"isMusteri|isTechizatci"`
+
+**NOT_REGEXP SQL düzəlişi:** `DSL.not(field.likeRegex(...))` əvəzinə
+`field.notLikeRegex(...)` istifadə olunur:
+```sql
+-- Əvvəl: NOT (("t"."col" ~ 'pattern'))   ← ikiqat mötərizə
+-- İndi:  "t"."col" !~ 'pattern'          ← təmiz PostgreSQL sintaksisi
+```
+
+### v1.1.7
+- Əvvəlki buraxılış
+
+---
+
 ## Ümumi Mənzərə — Bu Kitabxana Nə Edir?
 
 Adətən Java-da verilənlər bazasına sorğu yazmaq üçün ya SQL sətiri yazırıq
@@ -677,6 +702,50 @@ Bu məntiqi üç daxili köməkçi metod idarə edir:
 Bu strategiya bütün LIKE axınlarına (WHERE, HAVING, OR filter, SubQuery, SubSelect) tətbiq olunur,
 çünki hamısı `FilterStrategies.get(op).apply(field, val)` üzərindən keçir.
 
+**REGEXP / NOT_REGEXP — Pattern hazırlama:**
+
+`Op.REGEXP` və `Op.NOT_REGEXP` üçün xüsusi `toRegexPattern()` metodu işlənir.
+
+**Problem (v1.1.7 və öncəsi):** Java-da `List.of("isMusteri").toString()` → `"[isMusteri]"` verir.
+PostgreSQL regex-ində `[isMusteri]` bir **character class** kimi işlənir — `{i, s, M, u, t, e, r}`
+hərflərindən birini axtarır. Nəticədə demək olar hər sətir filterə tutulurdu.
+
+**Həll (v1.1.8):** `toRegexPattern()` daxili köməkçi metodu:
+
+```java
+// Collection → elementlər | ilə birləşdirilir
+List.of("isMusteri")                    →  "isMusteri"
+List.of("isMusteri", "isTechizatci")    →  "isMusteri|isTechizatci"
+
+// Vergüllü string → | ilə əvəzlənir
+"isMusteri,isTechizatci"                →  "isMusteri|isTechizatci"
+
+// Sadə string → dəyişmədən
+"isMusteri"                             →  "isMusteri"
+```
+
+Yaranan SQL:
+```sql
+-- REGEXP:
+"t"."fk_counter_agent_type_key" ~ 'isMusteri|isTechizatci'
+
+-- NOT_REGEXP (notLikeRegex() ilə — ikiqat mötərizəsiz):
+"t"."fk_counter_agent_type_key" !~ 'isMusteri'
+```
+
+İstifadə nümunəsi — `fk_counter_agent_type_key` sütunu `"isMusteri,isTechizatci"` kimi
+vergüllə ayrılmış dəyərlər saxladıqda:
+```java
+// isMusteri olanları GÖSTƏRMƏ:
+.addFilter("t.fkCounterAgentTypeKey", Op.NOT_REGEXP, List.of("isMusteri"))
+
+// isMusteri VƏ ya isTechizatci olanları GÖSTƏRMƏ:
+.addFilter("t.fkCounterAgentTypeKey", Op.NOT_REGEXP, List.of("isMusteri", "isTechizatci"))
+
+// Yalnız isMusteri olanları GÖSTƏR:
+.addFilter("t.fkCounterAgentTypeKey", Op.REGEXP, "isMusteri")
+```
+
 ---
 
 ### 13. `CaseBuilder<T>` — CASE WHEN ... THEN ... END
@@ -958,3 +1027,5 @@ JooqQuery.from(Product.class, "p")
 | WHERE-də ROUND, SELECT-siz | `Op.GREATER_THAN_ROUND_2` kimi ROUND Op-lar — 30 variant (skala 0–4) |
 | LIKE numeric field-də (bigint xətası) | `isStringField()` → `likeReadyField()` + `likeReadyVal()` — tip yoxlaması ilə CAST/REPLACE seçimi |
 | `Filter.java` LIKE bypass | `like()` / `startWith()` / `endWith()` `FilterStrategies` üzərindən işləyir — tip yoxlaması daxildir |
+| `REGEXP` / `NOT_REGEXP` `List` dəyəri `[val]` formatına düşür | `toRegexPattern()` — Collection-ı `\|` ilə birləşdirir, Java `List.toString()` brackets-ni silir |
+| `NOT_REGEXP` ikiqat mötərizə `NOT ((field ~ p))` | `field.notLikeRegex(p)` — birbaşa `field !~ 'p'` yaradır |

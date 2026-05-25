@@ -101,11 +101,21 @@ public final class FilterStrategies {
         });
 
         // ─── REGEXP — string pattern ──────────────────────────────────────
+        // PostgreSQL: field ~ 'pattern'
+        //
+        // val Collection/array olduqda elementlər | ilə birləşdirilir:
+        //   List.of("isMusteri", "isTechizatci") → field ~ 'isMusteri|isTechizatci'
+        // val String olduqda vergüllə ayrılmışsa da | ilə dəyişdirilir:
+        //   "isMusteri,isTechizatci" → field ~ 'isMusteri|isTechizatci'
         register(Op.REGEXP,
-                (field, val) -> field.likeRegex(val.toString()));
+                (field, val) -> field.likeRegex(toRegexPattern(val)));
 
+        // PostgreSQL: field !~ 'pattern'
+        // notLikeRegex() istifadə olunur — ikiqat mötərizə olmur:
+        //   Əvvəl: NOT (("t"."col" ~ 'pattern'))
+        //   İndi:  "t"."col" !~ 'pattern'
         register(Op.NOT_REGEXP,
-                (field, val) -> DSL.not(field.likeRegex(val.toString())));
+                (field, val) -> field.notLikeRegex(toRegexPattern(val)));
 
         // ─── Türk əlifbası case-insensitive LIKE ─────────────────────────
         // String field  → LOWER(REPLACE(REPLACE(field,'İ','i'),'I','i')) LIKE '%val%'
@@ -286,6 +296,57 @@ public final class FilterStrategies {
         if (val instanceof Object[] arr)    return Arrays.asList(arr);
         if (val instanceof String s)        return Arrays.asList(s.split(","));
         return Arrays.asList(val);
+    }
+
+    /**
+     * REGEXP / NOT_REGEXP üçün regex pattern yaradır.
+     *
+     * <p>Problem: Java-da {@code List.of("isMusteri").toString()} → {@code "[isMusteri]"} verir.
+     * PostgreSQL regex-ində {@code [isMusteri]} character class kimi işlənir (hər simvol ayrıca),
+     * literal "isMusteri" sözü kimi deyil.
+     *
+     * <p>Həll:
+     * <ul>
+     *   <li>{@code Collection} / array → elementlər {@code |} ilə birləşdirilir<br>
+     *       {@code ["isMusteri","isTechizatci"]} → {@code "isMusteri|isTechizatci"}</li>
+     *   <li>Vergüllü String → {@code |} ilə əvəzlənir<br>
+     *       {@code "isMusteri,isTechizatci"} → {@code "isMusteri|isTechizatci"}</li>
+     *   <li>Sadə String → olduğu kimi saxlanır<br>
+     *       {@code "isMusteri"} → {@code "isMusteri"}</li>
+     * </ul>
+     *
+     * <p>Nəticə SQL nümunəsi:
+     * <pre>{@code
+     *   field ~ 'isMusteri|isTechizatci'
+     *   field !~ 'isMusteri'
+     * }</pre>
+     */
+    private static String toRegexPattern(Object val) {
+        if (val instanceof Collection<?> col) {
+            return col.stream()
+                    .filter(java.util.Objects::nonNull)
+                    .map(Object::toString)
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .collect(Collectors.joining("|"));
+        }
+        if (val instanceof Object[] arr) {
+            return Arrays.stream(arr)
+                    .filter(java.util.Objects::nonNull)
+                    .map(Object::toString)
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .collect(Collectors.joining("|"));
+        }
+        // "isMusteri,isTechizatci" → "isMusteri|isTechizatci"
+        String s = val.toString().trim();
+        if (s.contains(",")) {
+            return Arrays.stream(s.split(","))
+                    .map(String::trim)
+                    .filter(p -> !p.isEmpty())
+                    .collect(Collectors.joining("|"));
+        }
+        return s;
     }
 
     /**

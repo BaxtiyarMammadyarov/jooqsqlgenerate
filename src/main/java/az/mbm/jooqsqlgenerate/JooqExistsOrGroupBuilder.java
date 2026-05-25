@@ -22,8 +22,8 @@ import az.mbm.jooqsqlgenerate.enums.Op;
  */
 public final class JooqExistsOrGroupBuilder<E> {
 
-    private final JooqExistsBuilder<E> existsBuilder;
-    final         String               orGroupName;    // package-private: JooqExistsAndBranchBuilder oxuyur
+    final JooqExistsBuilder<E> existsBuilder;  // package-private: JooqExistsAndBranchBuilder oxuyur
+    final String               orGroupName;   // package-private: JooqExistsAndBranchBuilder oxuyur
     private       int                  branchCounter = 0;
 
     JooqExistsOrGroupBuilder(JooqExistsBuilder<E> existsBuilder, String orGroupName) {
