@@ -584,6 +584,49 @@ public final class JooqQuery<T> {
         }
 
         /**
+         * ON şərti: dot-notation — {@code "alias.field"} birləşdirilmiş formada.
+         *
+         * <pre>{@code .onFrom("u.fkCompanyId", "id") }</pre>
+         *
+         * @param fromAliasAndField {@code "alias.field"} formatında birləşdirilmiş
+         * @param toField           join cədvəlindəki sahə adı
+         */
+        public JoinBuilder onFrom(String fromAliasAndField, String toField) {
+            if (fromAliasAndField != null && toField != null) {
+                int dot = fromAliasAndField.indexOf('.');
+                if (dot > 0) {
+                    pairs.add(new FieldPair(
+                            fromAliasAndField.substring(0, dot),
+                            fromAliasAndField.substring(dot + 1),
+                            Op.EQUAl, toField));
+                }
+            }
+            return this;
+        }
+
+        /**
+         * ON şərti: dot-notation + operator — {@code "alias.field"} birləşdirilmiş formada.
+         *
+         * <pre>{@code .onFrom("u.fkCompanyId", Op.EQUAl, "id") }</pre>
+         *
+         * @param fromAliasAndField {@code "alias.field"} formatında birləşdirilmiş
+         * @param op                müqayisə operatoru
+         * @param toField           join cədvəlindəki sahə adı
+         */
+        public JoinBuilder onFrom(String fromAliasAndField, Op op, String toField) {
+            if (fromAliasAndField != null && op != null && toField != null) {
+                int dot = fromAliasAndField.indexOf('.');
+                if (dot > 0) {
+                    pairs.add(new FieldPair(
+                            fromAliasAndField.substring(0, dot),
+                            fromAliasAndField.substring(dot + 1),
+                            op, toField));
+                }
+            }
+            return this;
+        }
+
+        /**
          * ON şərti: konkret alias.fromField OP join cədvəl.toField
          *
          * <pre>{@code .onFrom("t", "fkRequestId", Op.EQUAl, "id") }</pre>
@@ -612,6 +655,46 @@ public final class JooqQuery<T> {
             if (field != null && op != null && value != null)
                 extras.add(new JoinFilterRow(field, op, value));
             return this;
+        }
+
+        /** Shortcut: {@code AND join.field = value} */
+        public JoinBuilder equal(String field, Object value) {
+            return andOn(field, Op.EQUAl, value);
+        }
+
+        /** Shortcut: {@code AND join.field != value} */
+        public JoinBuilder notEqual(String field, Object value) {
+            return andOn(field, Op.NOT_EQUAL, value);
+        }
+
+        /** Shortcut: {@code AND join.field > value} */
+        public JoinBuilder greaterThan(String field, Object value) {
+            return andOn(field, Op.GREATER_THAN, value);
+        }
+
+        /** Shortcut: {@code AND join.field >= value} */
+        public JoinBuilder greaterThanOrEqual(String field, Object value) {
+            return andOn(field, Op.GREATER_THAN_OR_EQUAL_TO, value);
+        }
+
+        /** Shortcut: {@code AND join.field < value} */
+        public JoinBuilder lessThan(String field, Object value) {
+            return andOn(field, Op.LESS_THAN, value);
+        }
+
+        /** Shortcut: {@code AND join.field <= value} */
+        public JoinBuilder lessThanOrEqual(String field, Object value) {
+            return andOn(field, Op.LESS_THAN_OR_EQUAL_TO, value);
+        }
+
+        /** Shortcut: {@code AND join.field IS NULL} */
+        public JoinBuilder isNull(String field) {
+            return andOn(field, Op.IS_EMPTY, "__null_check__");
+        }
+
+        /** Shortcut: {@code AND join.field IS NOT NULL} */
+        public JoinBuilder isNotNull(String field) {
+            return andOn(field, Op.IS_NOT_EMPTY, "__null_check__");
         }
 
         /** Builder-i tamamlayır, {@link JooqQuery}-yə qayıdır. */
