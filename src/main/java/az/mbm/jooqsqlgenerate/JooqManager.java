@@ -473,6 +473,36 @@ public class JooqManager {
         }
 
         /**
+         * ON şərti: dot-notation — {@code "alias.field"} birləşdirilmiş formada.
+         *
+         * <pre>{@code
+         *   .addLeftJoin(Company.class, "c")
+         *       .onFrom("u.fkCompanyId", "id")
+         *       .equal("status", "A")
+         *       .done()
+         * }</pre>
+         *
+         * @param fromAliasAndField {@code "alias.field"} formatında birləşdirilmiş
+         * @param toField           join cədvəlindəki sahə adı
+         */
+        @SuppressWarnings("unchecked")
+        public JoinSetup onFrom(String fromAliasAndField, String toField) {
+            inner.onFrom(fromAliasAndField, toField);
+            return this;
+        }
+
+        /**
+         * ON şərti: dot-notation + operator.
+         *
+         * <pre>{@code .onFrom("u.fkCompanyId", Op.EQUAl, "id") }</pre>
+         */
+        @SuppressWarnings("unchecked")
+        public JoinSetup onFrom(String fromAliasAndField, Op op, String toField) {
+            inner.onFrom(fromAliasAndField, op, toField);
+            return this;
+        }
+
+        /**
          * ON şərti: konkret fromAlias.fromField OP join cədvəl.toField
          *
          * <pre>{@code
@@ -492,6 +522,64 @@ public class JooqManager {
         @SuppressWarnings("unchecked")
         public JoinSetup andOn(String field, Op op, Object value) {
             inner.andOn(field, op, value);
+            return this;
+        }
+
+        // ─── Shortcut metodlar (andOn-un qısayolları) ────────────────────
+
+        /** {@code AND join.field = value} — {@code andOn(field, Op.EQUAl, value)} qısayolu */
+        @SuppressWarnings("unchecked")
+        public JoinSetup equal(String field, Object value) {
+            inner.equal(field, value);
+            return this;
+        }
+
+        /** {@code AND join.field != value} */
+        @SuppressWarnings("unchecked")
+        public JoinSetup notEqual(String field, Object value) {
+            inner.notEqual(field, value);
+            return this;
+        }
+
+        /** {@code AND join.field > value} */
+        @SuppressWarnings("unchecked")
+        public JoinSetup greaterThan(String field, Object value) {
+            inner.greaterThan(field, value);
+            return this;
+        }
+
+        /** {@code AND join.field >= value} */
+        @SuppressWarnings("unchecked")
+        public JoinSetup greaterThanOrEqual(String field, Object value) {
+            inner.greaterThanOrEqual(field, value);
+            return this;
+        }
+
+        /** {@code AND join.field < value} */
+        @SuppressWarnings("unchecked")
+        public JoinSetup lessThan(String field, Object value) {
+            inner.lessThan(field, value);
+            return this;
+        }
+
+        /** {@code AND join.field <= value} */
+        @SuppressWarnings("unchecked")
+        public JoinSetup lessThanOrEqual(String field, Object value) {
+            inner.lessThanOrEqual(field, value);
+            return this;
+        }
+
+        /** {@code AND join.field IS NULL} */
+        @SuppressWarnings("unchecked")
+        public JoinSetup isNull(String field) {
+            inner.isNull(field);
+            return this;
+        }
+
+        /** {@code AND join.field IS NOT NULL} */
+        @SuppressWarnings("unchecked")
+        public JoinSetup isNotNull(String field) {
+            inner.isNotNull(field);
             return this;
         }
 
