@@ -269,23 +269,687 @@ public SelectTable execute() {
 }
 ```
 
-**Birbaşa filter metodları — istifadəçi `Filters` sinifini bilməli deyil:**
+---
 
-`Filters` kitabxananın daxili sinifidir. İstifadəçi yalnız `JooqManager` ilə işləyir.
-Hər metod daxilən `addFilter(Filters.of().xxx())` çağırır — duplikasiya yoxdur:
+#### 2.1 Sütun seçimi
+
+**`addColumns`** — SELECT-ə sütun əlavə edir.
+
+```java
+// String varargs
+jooq.addColumns("t.id", "t.name", "t1.productName");
+
+// List<String>
+jooq.addColumns(List.of("t.id", "t.name"));
+
+// jOOQ Field varargs (generated mode)
+jooq.addColumns(USERS.ID, USERS.FIRST_NAME);
+
+// List<Field<?>>
+jooq.addColumnFields(List.of(USERS.ID, USERS.FIRST_NAME));
+```
+
+**`addSelectAs`** — sütuna özəl çıxış alias verir (entity mode).
+
+```java
+// "t1.fkProductId" sütununu "productId" adı ilə SELECT-ə əlavə edir
+jooq.addSelectAs("t1.fkProductId", "productId")
+    .addSelectAs("t.operationDate",  "date");
+```
+
+**`addRawSelectField`** — birbaşa jOOQ `Field<?>` əlavə edir.
+
+```java
+jooq.addRawSelectField(DSL.val("literal").as("constCol"));
+jooq.addRawSelectField(DSL.currentDate().as("today"));
+```
+
+**`setDistinct`** — `SELECT DISTINCT` aktivləşdirir.
 
 ```java
 jooq.setMainTable(Order.class, "o")
-    .addColumns("o.id", "o.name")
-    .equal("o.status",    "ACTIVE")
-    .like("o.name",       searchName)
-    .between("o.createdAt", startDate, endDate)   // Long, null → partial dəstək
-    .in("o.roleId",       List.of(1L, 2L, 3L))   // Collection<?>
-    .isNull("o.deletedAt")
+    .addColumns("o.status")
+    .setDistinct()
+    .execute();
+// → SELECT DISTINCT o.status FROM orders o
+```
+
+---
+
+#### 2.2 Computed sütunlar
+
+**`addComputedColumn` — 3 parametrli (sadə ikitərəfli riyaziyyat)**
+
+```java
+// (tableAlias1.field1) OP (tableAlias2.field2) AS alias
+jooq.addComputedColumn("netAmount", "t", "price", MathOp.MULTIPLY, "t", "qty");
+// → t.price * t.qty AS net_amount
+```
+
+**`addComputedField(ComputedField cf)` — hazır `ComputedField` obyekti ilə**
+
+```java
+ComputedField expr = ComputedField.of("t.price")
+    .multiply("t.qty")
+    .subtract("t.discount")
+    .as("netAmount");
+jooq.addComputedField(expr);
+```
+
+**`addComputedColumn(String field)` — fluent zəncir (ən çox istifadə olunan)**
+
+Bir sahədən başlayıb riyazi zəncir qurursan, `.as(alias)` ilə tamamlayırsan:
+
+```java
+// Sadə:
+jooq.addComputedColumn("t.price")
+    .add("t.tax")
+    .subtract("t.discount")
+    .as("finalPrice");
+// → (t.price + t.tax) - t.discount AS final_price
+
+// Multiply ilə:
+jooq.addComputedColumn("t.totalPriceIn")
+    .add("t.totalPriceOut")
+    .as("totalPriceValue");
+```
+
+**`ComputedGroupChain` — mötərizəli alt-ifadə**
+
+`.add()`, `.subtract()`, `.multiply()`, `.divide()` metodlarını arqumentsiz çağırsan —
+bu yeni bir `ComputedGroupChain` açır. `.of(field)` ilə qrupun içindəki ilk sahəni
+təyin edirsən, `.done()` ilə mötərizəni bağlayıb əsas zəncirə qayıdırsan:
+
+```java
+jooq.addComputedColumn("t.total_Price_In")
+    .subtract("t.total_Price_Out")
+    .multiply("t.rate")
+    .subtract().of("t.purchase_Expense").multiply("t.count").done()
+    .as("profit");
+// → ((t.total_price_in - t.total_price_out) * t.rate)
+//     - (t.purchase_expense * t.count) AS profit
+```
+
+---
+
+#### 2.3 Xüsusi SELECT sütunları
+
+**`addCoalesceColumn`** — `COALESCE(field1, field2, ..., default) AS alias`
+
+```java
+// Birinci null olmayan dəyəri götürür, hamısı null-sa default qaytarır
+jooq.addCoalesceColumn("displayName", "N/A", "t.fullName", "t.username");
+// → COALESCE(t.full_name, t.username, 'N/A') AS display_name
+```
+
+**`addConcatColumn`** — `CONCAT` sütunu, ayırıcı ilə birləşdirmə
+
+```java
+// String varargs:
+jooq.addConcatColumn("fullName", " ", "t.firstName", "t.lastName");
+// → CONCAT(t.first_name, ' ', t.last_name) AS full_name
+
+// List<String>:
+jooq.addConcatColumn("fullName", " ", List.of("t.firstName", "t.lastName"));
+
+// ConcatItem — field + literal qarışıq:
+jooq.addConcatColumn("label", "",
+    ConcatItem.field("t.code"),
+    ConcatItem.literal(" - "),
+    ConcatItem.field("t.name"));
+// → CONCAT(t.code, ' - ', t.name) AS label
+```
+
+**`addSubQueryColumn`** — SELECT içində scalar subquery sütunu
+
+```java
+jooq.addSubQueryColumn(
+    SubSelectBuilder.from(OrderLine.class, "ol")
+        .select("ol.amount")
+        .filter("fkOrderId", Op.EQUAl, "o.id")
+        .as("lineAmount")
+);
+// → (SELECT ol.amount FROM order_lines ol WHERE ol.fk_order_id = o.id) AS line_amount
+```
+
+---
+
+#### 2.4 JOIN metodları
+
+**Sadə 1 ON şərti ilə JOIN:**
+
+```java
+// LEFT JOIN — entity mode, tək cüt
+jooq.addLeftJoin(Product.class, "t1", "fkProductId", "id");
+// → LEFT JOIN products t1 ON t.fk_product_id = t1.id
+
+// INNER JOIN
+jooq.addInnerJoin(Category.class, "c", "fkCategoryId", "id");
+```
+
+**Fluent `JoinSetup` builder — çoxlu ON şərtləri:**
+
+```java
+jooq.addLeftJoin(Product.class, "t1")
+    .on("fkProductId", "id")           // t.fk_product_id = t1.id
+    .on("companyId",   "companyId")    // t.company_id    = t1.company_id
+    .andOn("status", Op.EQUAl, "A")   // AND t1.status = 'A'
+    .done()
+    .addColumns("t1.productName");
+
+// onFrom — başqa cədvəlin alias-ından ON şərti:
+jooq.addLeftJoin(Company.class, "c")
+    .onFrom("u.fkCompanyId", "id")     // u.fk_company_id = c.id
+    .equal("isActive", true)           // AND c.is_active = true
+    .done();
+
+// onFrom dot-notation + operator:
+jooq.addInnerJoin(RequestEntity.class, "r")
+    .onFrom("t", "fkRequestId", Op.EQUAl, "id")
+    .andOn("status", Op.EQUAl, "A")
+    .done();
+```
+
+`JoinSetup`-da mövcud shorthand metodlar: `equal`, `notEqual`, `greaterThan`,
+`greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`, `isNull`, `isNotNull`.
+
+**Generated mode JOIN (tip-təhlükəli):**
+
+```java
+jooq.addLeftJoin(ORDERS, "o", USERS.ID.eq(ORDERS.USER_ID));
+jooq.addInnerJoin(ROLES,  "r", USERS.ROLE_ID.eq(ROLES.ID));
+```
+
+**`SelectTable` ilə JOIN (derived table üzərinə):**
+
+```java
+// Sadə:
+jooq.addLeftJoin(budgetQuery, "b", "f.fkAccountId", "fkAccountId");
+
+// Fluent builder:
+jooq.addLeftJoin(budgetQuery, "b")
+    .on("f.fkAccountId",   "fkAccountId")
+    .on("f.fkCurrencyId",  "fkCurrencyId")
+    .andOn("status", Op.EQUAl, "A")
+    .done();
+
+// Raw Condition:
+jooq.addLeftJoin(subQuery, "sub", DSL.condition("sub.id = t.fk_sub_id"));
+```
+
+---
+
+#### 2.5 WHERE filterlər
+
+**Birbaşa filter metodları** — `Filters.of()` yaratmadan istifadə:
+
+```java
+jooq.setMainTable(Order.class, "o")
+    .equal("o.status",    "ACTIVE")         // WHERE o.status = 'ACTIVE'
+    .notEqual("o.type",   "DRAFT")          // AND o.type != 'DRAFT'
+    .like("o.name",       searchName)       // AND o.name LIKE '%...%'
+    .startWith("o.code",  prefix)           // AND o.code LIKE 'prefix%'
+    .endWith("o.ref",     suffix)           // AND o.ref  LIKE '%suffix'
+    .greaterThan("o.amount", 100)           // AND o.amount > 100
+    .greaterThanOrEqual("o.amount", 100)    // AND o.amount >= 100
+    .lessThan("o.amount", 500)              // AND o.amount < 500
+    .lessThanOrEqual("o.amount", 500)       // AND o.amount <= 500
+    .between("o.createdAt", from, to)       // AND o.created_at BETWEEN ... AND ...
+    .in("o.roleId",   List.of(1L, 2L))      // AND o.role_id IN (1, 2)
+    .notIn("o.status", List.of("DEL"))      // AND o.status NOT IN ('DEL')
+    .isNull("o.deletedAt")                  // AND o.deleted_at IS NULL
+    .isNotNull("o.confirmedAt")             // AND o.confirmed_at IS NOT NULL
     .execute();
 ```
 
-Mövcud `addFilter()` overload-ları tam saxlanılır — geriyə dönük uyğunluq var.
+`between` null dəstəyi: yalnız `from` → `>= from`; yalnız `to` → `<= to`; ikisi null → atlanır.
+
+**`addFilter` overload-ları:**
+
+```java
+// Op enum ilə (hər cədvəl üçün — alias prefix desteklenir):
+jooq.addFilter("t.status", Op.EQUAl, status);        // null → atlanır
+jooq.addFilter("t.roleId", Op.IN,    roleIds);        // boş kolleksiya → atlanır
+
+// Generated Field ilə (tip-təhlükəli):
+jooq.addFilter(USERS.STATUS, Op.EQUAl, "ACTIVE");
+
+// Birbaşa jOOQ Condition:
+jooq.addFilter(USERS.AGE.gt(18).and(USERS.DELETED_AT.isNull()));
+
+// Filters fluent builder:
+jooq.addFilter(
+    Filters.of()
+        .equal("status", "ACTIVE")
+        .like("name",    name)
+        .greaterThan("o.amount", "100")
+);
+
+// Map<String, String> — field + əməliyyatlar:
+jooq.addFilter("o.amount", Map.of("greaterThan", "100", "lessThan", "500"));
+
+// Map<String, Map<String,String>> — JSON body-dən:
+jooq.addFilter(request.getFilterMap());
+// {"price": {"greaterThan": "10"}, "status": {"equal": "ACTIVE"}}
+```
+
+**`addFieldFilter`** — iki field arasında müqayisə (sabit deyil, başqa sütunla):
+
+```java
+// WHERE t.priceIn > t.priceOut
+jooq.addFieldFilter("t.priceIn", Op.GREATER_THAN, "t.priceOut");
+
+// WHERE t.startDate <= t.endDate
+jooq.addFieldFilter("t.startDate", Op.LESS_THAN_OR_EQUAL_TO, "t.endDate");
+```
+
+**`addRawCondition`** — birbaşa jOOQ `Condition`:
+
+```java
+jooq.addRawCondition(DSL.condition("t.amount > t.min_amount"));
+```
+
+---
+
+#### 2.6 OR qrupları
+
+**`addOrFilter` — sadə OR qrupu:**
+
+```java
+// WHERE t.status = 'A' AND (t.actionType = 'IN' OR t.actionType = 'OUT')
+jooq.addFilter("t.status", Op.EQUAl, "A")
+    .addOrFilter("myOr", "t.actionType", Op.EQUAl, "IN")
+    .addOrFilter("myOr", "t.actionType", Op.EQUAl, "OUT");
+```
+
+**`addOrFilter` — AND alt-qrupu olan OR:**
+
+```java
+// WHERE (field1='y' AND field2='z') OR (field3='a' AND field4='b')
+jooq.addOrFilter("myOr", "andGroup1", "t.field1", Op.EQUAl, "y")
+    .addOrFilter("myOr", "andGroup1", "t.field2", Op.EQUAl, "z")
+    .addOrFilter("myOr", "andGroup2", "t.field3", Op.EQUAl, "a")
+    .addOrFilter("myOr", "andGroup2", "t.field4", Op.EQUAl, "b");
+```
+
+**`addOrOperation` + `OrOperationBuilder`** — Map-based OR, çoxlu field:
+
+```java
+// WHERE (taskNo LIKE '%x%' OR carrierDescription LIKE '%x%' OR requestDescription LIKE '%x%')
+Map<String, String> op = Map.of("like", searchText);
+
+jooq.addOrOperation("operation", "t", "taskNo",            op)
+    .add(                        "t", "carrierDescription", op)
+    .add(                        "r", "requestDescription", op)
+    .done();
+
+// WHERE (amount > 100 OR amount IS NULL)
+jooq.addOrOperation("ag", "t", "amount", Map.of("greaterThan", "100", "isNull", ""))
+    .done();
+```
+
+**`orGroup` + `OrGroupBuilder`** — mürəkkəb OR/AND qruplaması:
+
+```java
+// WHERE x AND (y OR z)
+jooq.addFilter("t.status", Op.EQUAl, "ACTIVE")      // x
+    .orGroup("G")
+        .or("t", "name",   Map.of("like", "ali"))    // y
+        .or("t", "code",   Map.of("equal", "B01"))   // z
+    .done();
+
+// WHERE x AND (y OR (z AND f))
+jooq.orGroup("G")
+        .or("t", "name",  Map.of("like", "ali"))          // y
+        .andBranch("zf")                                   // (z AND f)
+            .add("t", "amount",  Map.of("greaterThan", "100"))  // z
+            .add("t", "country", Map.of("equal",  "AZ"))        // f
+        .end()
+    .done();
+```
+
+---
+
+#### 2.7 EXISTS filterlər
+
+**`addExists` / `addNotExists`** — WHERE EXISTS inline builder:
+
+```java
+// WHERE EXISTS (SELECT 1 FROM cash_flow cf WHERE cf.fk_cash_group_id = t.id AND cf.status = 'A')
+jooq.addExists(CashFlowEntity.class)
+    .joinField("fkCashGroupId", "t", "id")
+    .filter("status", Op.EQUAl, "A")
+    .done();
+
+// WHERE NOT EXISTS
+jooq.addNotExists(BlockedEntity.class)
+    .joinField("userId", "u", "id")
+    .filter("active", Op.EQUAl, true)
+    .done();
+```
+
+**`addHavingExists` / `addHavingNotExists`** — HAVING EXISTS (aggregate sorğular üçün):
+
+```java
+jooq.addHavingExists(PaymentEntity.class)
+    .joinField("fkTaskId", "t", "id")
+    .filter("status", Op.EQUAl, "PAID")
+    .done();
+```
+
+**`addExistsFilter` / `addNotExistsFilter`** — hazır `ExistsSpec` ilə:
+
+```java
+ExistsSpec<Task, Permission> spec = ExistsSpec.exists(Permission.class)
+    .joinField("fkTaskId", "t", "id")
+    .in("fkRoleId", allowedRoles);
+jooq.addExistsFilter(spec);
+```
+
+**`addInSubQuery`** — WHERE field IN (SELECT ...):
+
+```java
+// WHERE u.id IN (SELECT o.user_id FROM orders o WHERE o.status = 'PAID')
+jooq.addInSubQuery("u.id",
+    SubQueryIn.from(Order.class, "o")
+        .select("o.userId")
+        .filter("status", Op.EQUAl, "PAID")
+);
+
+// Composite (çox sahəli):
+// WHERE (u.firstName, u.lastName) IN (SELECT bl.firstName, bl.lastName FROM blacklist bl)
+jooq.addInSubQuery(
+    new String[]{"u.firstName", "u.lastName"},
+    SubQueryIn.from(Blacklist.class, "bl")
+        .select("bl.firstName", "bl.lastName")
+);
+```
+
+---
+
+#### 2.8 GROUP BY
+
+```java
+// String varargs
+jooq.addGroupBy("t.department", "t.status");
+
+// List<String> — dinamik
+jooq.addGroupBy(request.getGroupBy());
+
+// Generated Field varargs
+jooq.addGroupBy(USERS.DEPARTMENT, USERS.STATUS);
+
+// List<Field<?>>
+jooq.addGroupByFields(List.of(USERS.DEPARTMENT, USERS.STATUS));
+```
+
+---
+
+#### 2.9 Aqreqat funksiyalar (SUM / COUNT / AVG / MIN / MAX)
+
+**Sadə aqreqat:**
+
+```java
+jooq.addAggFunction(Agg.SUM,   "t.totalPrice", "totalPrice");
+jooq.addAggFunction(Agg.COUNT, "t.id",         "cnt");
+jooq.addAggFunction(Agg.AVG,   "t.amount",     "avgAmount");
+jooq.addAggFunction(Agg.MIN,   "t.price",      "minPrice");
+jooq.addAggFunction(Agg.MAX,   "t.price",      "maxPrice");
+```
+
+**Yuvarlama ilə:**
+
+```java
+jooq.addAggFunction(Agg.SUM, "t.totalPrice", "totalPrice", 2);
+// → ROUND(SUM(t.total_price), 2) AS total_price
+```
+
+**ORDER BY ilə:**
+
+```java
+jooq.addAggFunction(Agg.SUM, "t.totalPrice", "totalPrice", "DESC");
+jooq.addAggFunction(Agg.SUM, "t.totalPrice", "totalPrice", 2, "DESC");
+```
+
+**Riyazi ifadəli aqreqat:**
+
+```java
+// SUM(t.price * t.qty)
+jooq.addAggFunctionWithMath(Agg.SUM, "t.price", MathOp.MULTIPLY, "t.qty", "totalAmount");
+
+// Yuvarlama ilə:
+jooq.addAggFunctionWithMath(Agg.SUM, "t.price", MathOp.MULTIPLY, "t.qty", "totalAmount", 2);
+```
+
+**`ComputedField` üzərindəki aqreqat:**
+
+```java
+// SUM((t.price * t.qty) - t.discount)
+ComputedField expr = ComputedField.of("t.price").multiply("t.qty").subtract("t.discount");
+jooq.addAggFunctionOnComputed(Agg.SUM, expr, "netTotal");
+jooq.addAggFunctionOnComputed(Agg.SUM, expr, "netTotal", 2);  // ROUND ilə
+```
+
+**Fluent `AggChain` builder:**
+
+```java
+// SUM(t.price + t.tax - t.discount) AS total_price
+jooq.addAggFunction(Agg.SUM, "t.price")
+    .add("t.tax")
+    .subtract("t.discount")
+    .as("totalPrice");
+
+// Yuvarlama ilə:
+jooq.addAggFunction(Agg.SUM, "t.price")
+    .subtract("t.discount")
+    .as("netTotal", 2);
+```
+
+**HAVING filterlər:**
+
+```java
+// HAVING alias üçün Map<String, String>:
+jooq.addHavingFilter("totalPrice", Map.of("greaterThan", "1000"));
+jooq.addHavingFilter("cnt",        Map.of("between",     "5,50"));
+
+// GROUP BY sahəsinə birbaşa Op ilə:
+jooq.addHavingFilter("t.operationType", Op.EQUAl,       "SELL");
+jooq.addHavingFilter("t.amount",        Op.GREATER_THAN, 100);
+jooq.addHavingFilter("t.category",      Op.IN,           List.of("A","B"));
+
+// Birbaşa jOOQ Condition:
+jooq.addRawHaving(DSL.condition("COUNT(t.id) > 5"));
+```
+
+---
+
+#### 2.10 CASE WHEN
+
+**Sadə CASE WHEN — tək şərt:**
+
+```java
+// CASE WHEN t.status = 'ACTIVE' THEN 'Aktiv' ELSE 'Deaktiv' END AS status_label
+jooq.addCaseColumn("t.status", Op.EQUAl, "ACTIVE", "Aktiv", "Deaktiv", "statusLabel");
+
+// ELSE olmadan (null qaytarır):
+jooq.addCaseColumn("t.status", Op.EQUAl, "ACTIVE", "Aktiv", "statusLabel");
+```
+
+**Mürəkkəb CASE — `CaseBuilder` ilə:**
+
+```java
+jooq.addCaseBuilder(
+    CaseBuilder.when("t.status", Op.EQUAl, "ACTIVE")
+        .then("Aktiv")
+        .when("t.status", Op.EQUAl, "BANNED")
+        .then("Qadağalı")
+        .otherwise("Bilinməyən")
+        .as("statusLabel")
+);
+```
+
+**Fluent `addCase()` — ən oxunaqlı sintaksis:**
+
+```java
+// Dəyər variantları:
+jooq.addCase()
+    .when("status", Op.EQUAl, "ACTIVE").then("Aktiv")
+    .when("status", Op.EQUAl, "INACTIVE").then("Deaktiv")
+    .else_("Naməlum")
+    .as("statusLabel");
+
+// Sütun referansı (thenField / elseField):
+jooq.addCase()
+    .when("type", Op.EQUAl, "A").thenField("t.priceA")
+    .when("type", Op.EQUAl, "B").thenField("t.priceB")
+    .elseField("t.defaultPrice")
+    .as("finalPrice");
+```
+
+---
+
+#### 2.11 ORDER BY
+
+```java
+// Sadə field + istiqamət:
+jooq.addOrderBy("t.insertDate", "DESC");
+jooq.addOrderBy("u.name",       "ASC");
+
+// Birləşmiş string (REST sort parametrindən birbaşa):
+jooq.addOrderBy("t.insertDate desc, f.createdDate");
+jooq.addOrderBy(request.getSort());   // "u.name asc, u.createdAt desc"
+
+// Map<String, String>:
+jooq.addOrderBy(Map.of("u.createdAt", "DESC", "u.name", "ASC"));
+
+// List<Map<String, String>> — ardıcıllıq mühümdür:
+jooq.addOrderBy(List.of(
+    Map.of("u.createdAt", "DESC"),
+    Map.of("u.name",      "ASC")
+));
+
+// Generated SortField varargs:
+jooq.addOrderBy(USERS.CREATED_AT.desc(), USERS.NAME.asc());
+
+// List<SortField<?>>:
+jooq.addOrderByFields(List.of(USERS.CREATED_AT.desc()));
+
+// Tək jOOQ SortField:
+jooq.addRawOrderBy(USERS.CREATED_AT.desc());
+```
+
+---
+
+#### 2.12 Pagination
+
+```java
+// Səhifə — 0-dan başlayır:
+jooq.setPage(0, 20);    // LIMIT 20 OFFSET 0
+jooq.setPage(2, 20);    // LIMIT 20 OFFSET 40
+
+// Bütün nəticəni al (LIMIT/OFFSET yox, COUNT da yox):
+jooq.noPagination();
+
+// COUNT sorğusunu aktiv et, LIMIT/OFFSET tətbiq etmə:
+jooq.withCount();
+
+// COUNT-u söndür (çox böyük cədvəllərdə performans üçün):
+jooq.skipCount();
+
+// Yalnız COUNT icra et, data sorğusu işlətmə:
+jooq.onlyCount();
+int total = jooq.getLastRowCount();
+```
+
+---
+
+#### 2.13 Fetch metodları
+
+`execute()` `SelectTable` qaytarır — sorğu hələ icra olunmayıb. Fetch metodları həm
+icra edir, həm nəticəni çevirir:
+
+**`fetchMaps()`** — `List<Map<String, Object>>` + sətir sayı:
+
+```java
+SelectFetchMapResponse resp = jooq
+    .setMainTable(User.class, "u")
+    .addColumns("u.id", "u.name")
+    .setPage(0, 20)
+    .fetchMaps();
+
+List<Map<String, Object>> list  = resp.getList();
+int                        total = resp.getRowCount();
+```
+
+**`fetchMapsNullSafe()`** — eyni, lakin null dəyərlər `""` ilə əvəzlənir:
+
+```java
+// JSON-da field silinmir, "" olaraq görünür
+SelectFetchMapResponse resp = jooq...fetchMapsNullSafe();
+```
+
+**`fetchMapper(RecordMapper)`** — özel mapper ilə DTO:
+
+```java
+SelectFetchResponse<MyDto> resp = jooq
+    .setMainTable(WarehouseFlow.class, "t")
+    .addColumns("t.id", "t1.productName")
+    .setPage(0, 20)
+    .fetchMapper(r -> new MyDto(
+        r.get("id",           String.class),
+        r.get("product_name", String.class)
+    ));
+
+List<MyDto> list  = resp.getList();
+int         total = resp.getRowCount();
+```
+
+**`fetchInto(Class<E>)`** — jOOQ auto-mapping ilə entity:
+
+```java
+SelectFetchResponse<UserDto> resp = jooq
+    .setMainTable(User.class, "u")
+    .addFilter("status", Op.EQUAl, "ACTIVE")
+    .setPage(0, 20)
+    .fetchInto(UserDto.class);
+```
+
+**`fetchMergedMap()`** — `key`/`value` sütunlu nəticəni `Map<String,Object>`-ə çevirir:
+
+```java
+// Cədvəl "key" və "value" sütunlarına sahib olmalıdır
+Map<String, Object> config = jooq
+    .setMainTable(Config.class, "c")
+    .addColumns("c.key", "c.value")
+    .fetchMergedMap();
+// → {"theme": "dark", "lang": "az"}
+```
+
+---
+
+#### 2.14 UPDATE
+
+```java
+// setMainTable + addFilter + update
+jooq.setMainTable(User.class, "u");
+jooq.addFilter("id", Op.EQUAl, userId);
+int rows = jooq.update("status", "INACTIVE");
+// → UPDATE users SET status = 'INACTIVE' WHERE id = ?
+```
+
+> **Xəbərdarlıq:** `update()` WHERE filtri olmadan çağrılanda `IllegalStateException` atılır —
+> bütün cədvəli silmək qorundur.
+
+---
+
+#### 2.15 `reset()`
+
+State-i əl ilə sıfırlar. `execute()`, `update()` və bütün `fetch*()` metodları onu
+avtomatik çağırır, ona görə adətən birbaşa çağırmağa ehtiyac olmur:
+
+```java
+jooq.reset();  // current = null, updateFilters.clear()
+```
 
 ---
 
