@@ -187,8 +187,7 @@ manager.addComputedColumn("t.price")
 // → ((price + tax) - discount) * qty AS netTotal
 ```
 
-### 2.6 COALESCE
-### 2.5 compute — mötərizəli qrup ifadəsi
+### 2.6 compute — mötərizəli qrup ifadəsi
 
 `compute()` / `addComputedColumn()` metodlarında boş `add()`, `subtract()`, `multiply()`, `divide()` çağırışı mötərizəli alt-ifadə (qrup) açır. Qrup `.of("field")` ilə başlayır, `.done()` ilə bağlanır və əsas zəncirə qayıdır.
 
@@ -237,7 +236,6 @@ JooqQuery.from(User.class, "u")
 // → SELECT COALESCE(u."first_name", u."last_name", 'Naməlum') AS "displayName"
 ```
 
-### 2.7 selectRound — yuvarlama sütunu
 ### 2.8 selectRound — yuvarlama sütunu
 
 `selectRound` ilə həmin alias-a `filter()` tətbiq edildikdə avtomatik `WHERE ROUND(field, scale)` yaranır:
@@ -250,7 +248,6 @@ JooqQuery.from(Order.class, "o")
 //   WHERE  ROUND(o."total_price", 2) > 100
 ```
 
-### 2.8 subSelect — scalar subquery sütunu
 ### 2.9 subSelect — scalar subquery sütunu
 
 ```java
@@ -268,7 +265,6 @@ JooqQuery.from(User.class, "u")
 //          (SELECT o.total_price FROM orders o WHERE o.user_id = u.id) AS last_order_total
 ```
 
-### 2.9 CONCAT — sütunları birləşdir
 ### 2.10 CONCAT — sütunları birləşdir
 
 Separator ilə sütunları birləşdirir, `null` dəyərlər boş string kimi işlənir:
@@ -1402,7 +1398,133 @@ WHERE olmadan UPDATE qadağandır — `IllegalStateException` atır.
 
 ---
 
-## 15. Generated mode — jOOQ generated cədvəllər
+## 15. INSERT — InsertQueryBuilder
+
+`InsertQueryBuilder` bir entity cədvəlinə yeni sətir əlavə edir.
+
+### Sadə INSERT
+
+```java
+int rows = new InsertQueryBuilder<>(User.class, dsl)
+    .value("firstName", "Əli")
+    .value("lastName",  "Əliyev")
+    .value("status",    "ACTIVE")
+    .value("createdAt", LocalDateTime.now())
+    .execute();
+// → INSERT INTO users (first_name, last_name, status, created_at)
+//   VALUES ('Əli', 'Əliyev', 'ACTIVE', ...)
+```
+
+### ID qaytaran INSERT
+
+```java
+Long newId = new InsertQueryBuilder<>(User.class, dsl)
+    .value("firstName", "Bəhruz")
+    .value("status",    "ACTIVE")
+    .executeAndReturnId(Long.class);
+```
+
+### Null dəyərlərlə INSERT
+
+Default olaraq `null` dəyərlər atlanır. `allowNulls()` ilə null-ları da daxil etmək olar:
+
+```java
+new InsertQueryBuilder<>(User.class, dsl)
+    .allowNulls()
+    .value("firstName", "Cavid")
+    .value("deletedAt", null)    // null — allowNulls varsa daxil edilir
+    .execute();
+```
+
+### Batch INSERT (çoxlu sətir)
+
+`addRow()` cari sıranı tamamlayır, yeni boş sıra açır:
+
+```java
+int rows = new InsertQueryBuilder<>(Product.class, dsl)
+    .value("name", "Məhsul A").value("price", 10.0).addRow()
+    .value("name", "Məhsul B").value("price", 20.0).addRow()
+    .value("name", "Məhsul C").value("price", 30.0).addRow()
+    .executeBatch();
+// → INSERT INTO products (name, price) VALUES (...), (...), (...)
+```
+
+### ON CONFLICT / ON DUPLICATE KEY UPDATE
+
+```java
+new InsertQueryBuilder<>(User.class, dsl)
+    .value("email",  "ali@example.com")
+    .value("status", "ACTIVE")
+    .onDuplicateKeyUpdate("status", "ACTIVE")
+    .execute();
+// → INSERT INTO users (email, status) VALUES (...)
+//   ON CONFLICT DO UPDATE SET status = 'ACTIVE'
+```
+
+### SQL debug (icrасız)
+
+```java
+String sql = new InsertQueryBuilder<>(User.class, dsl)
+    .value("firstName", "Test")
+    .value("status",    "ACTIVE")
+    .toSQL();
+```
+
+**`QueryFactory` ilə (`@Autowired`):**
+
+```java
+@Service
+@RequiredArgsConstructor
+public class UserService {
+    private final QueryFactory qf;
+
+    public void create(String name) {
+        qf.insert(User.class)
+          .value("firstName", name)
+          .value("status", "ACTIVE")
+          .execute();
+    }
+}
+```
+
+---
+
+## 16. JooqQuery — birbaşa fetch metodları
+
+`JooqQuery` özündə `execute(dsl)` + ayrıca `SelectFetchJooq` çağırışı əvəzinə fetch
+metodlarını birbaşa çağırmaq mümkündür:
+
+### fetchMaps — `List<Map<String,Object>>`
+
+```java
+List<Map<String, Object>> rows = JooqQuery.from(User.class, "u")
+    .select("u.id", "u.firstName", "u.email")
+    .filter("u.status", Op.EQUAl, "ACTIVE")
+    .page(0, 20)
+    .fetchMaps(dsl);
+
+for (Map<String, Object> row : rows) {
+    Long   id   = (Long)   row.get("id");
+    String name = (String) row.get("firstName");
+}
+```
+
+### fetchInto — auto-mapping ilə DTO
+
+```java
+List<UserDto> users = JooqQuery.from(User.class, "u")
+    .select("u.id", "u.firstName", "u.email")
+    .filter("u.status", Op.EQUAl, "ACTIVE")
+    .page(0, 20)
+    .fetchInto(dsl, UserDto.class);
+```
+
+> **Qeyd:** `fetchMaps(dsl)` / `fetchInto(dsl, Class)` COUNT sorğusunu işlətmir —
+> yalnız data sətirləri qaytarır. Sətir sayı + siyahı lazım olduqda `execute(dsl)` + `SelectFetchJooq` istifadə et.
+
+---
+
+## 17. Generated mode — jOOQ generated cədvəllər
 
 ```java
 import static com.example.jooq.Tables.*;
@@ -1420,7 +1542,7 @@ SelectTable result = JooqQuery.from(USERS, "u")
 
 ---
 
-## 16. Tam nümunə — mürəkkəb sorğu
+## 18. Tam nümunə — mürəkkəb sorğu
 
 ```java
 public SelectTable getTaskReport(TaskFilterRequest req) {
@@ -1474,7 +1596,7 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 
 ---
 
-## 17. Qısa referans
+## 19. Qısa referans
 
 ### JooqQuery metodları
 
@@ -1531,7 +1653,17 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | Metod | Təsvir |
 |---|---|
 | `setMainTable(Class, alias)` | Ana cədvəl təyini |
-| `addSelect(cols...)` | SELECT sütunları |
+| `addColumns(cols...)` | SELECT sütunları |
+| `addColumns(List<String>)` | SELECT — dinamik siyahı |
+| `addColumns(Field<?>...)` | SELECT — generated field-lər |
+| `addColumnFields(List<Field<?>>)` | SELECT — generated field siyahısı |
+| `addSelectAs(field, alias)` | Özəl alias ilə SELECT |
+| `addRawSelectField(Field<?>)` | Birbaşa jOOQ Field SELECT-ə |
+| `addComputedField(ComputedField)` | Hazır ComputedField obyekti ilə |
+| `addCoalesceColumn(alias, default, fields...)` | COALESCE sütunu |
+| `addConcatColumn(alias, sep, fields...)` | CONCAT sütunu |
+| `addSubQueryColumn(SubSelectBuilder)` | Scalar subquery sütunu |
+| `setDistinct()` | SELECT DISTINCT |
 | `addFilter(field, Op, value)` | WHERE filter (Op ilə) |
 | `addFilter(Filters)` | Filters builder ilə |
 | `addFilter(Condition)` | Birbaşa jOOQ şərti |
@@ -1570,9 +1702,42 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `setPage(page, size)` | Səhifələmə |
 | `skipCount()` | COUNT işlətmə (rowCount = -1) |
 | `onlyCount()` | Yalnız COUNT |
-| `fetchMaps()` | `List<Map<String,Object>>` qaytarır |
-| `fetchMapsNullSafe()` | null-safe `List<Map>` |
+| `fetchMaps()` | `List<Map<String,Object>>` + sətir sayı qaytarır |
+| `fetchMapsNullSafe()` | null-safe `List<Map>` + sətir sayı |
+| `fetchMapper(RecordMapper)` | Özel mapper ilə `SelectFetchResponse<V>` |
+| `fetchInto(Class<V>)` | jOOQ auto-mapping ilə `SelectFetchResponse<V>` |
+| `fetchMergedMap()` | Bütün sətirləri tək `Map<String,Object>`-ə birləşdirir |
+| `noPagination()` | LIMIT olmadan bütün nəticə |
+| `withCount()` | Bütün data + COUNT |
+| `reset()` | State-i əl ilə sıfırla |
+| `update(setField, setValue)` | Mövcud filtrlərlə UPDATE icra et |
 | `getLastRowCount()` | Son `onlyCount()` nəticəsi |
+
+### InsertQueryBuilder metodları
+
+| Metod | Təsvir |
+|---|---|
+| `new InsertQueryBuilder<>(Class, dsl)` | INSERT builder yaradır |
+| `.value(field, value)` | Sütun dəyərini təyin edir (null → atlanır) |
+| `.allowNulls()` | Null dəyərləri daxil etməyə icazə verir |
+| `.addRow()` | Cari sıranı tamamlayır, yeni boş sıra açır (batch üçün) |
+| `.onDuplicateKeyUpdate(field, value)` | ON CONFLICT DO UPDATE SET |
+| `.execute()` | INSERT icra edir, dəyişdirilmiş sətir sayı qaytarır |
+| `.executeAndReturnId(Class<K>)` | INSERT icra edir, yeni ID qaytarır |
+| `.executeBatch()` | Batch INSERT (addRow ilə yığılan sıraları) |
+| `.toSQL()` | SQL sətri qaytarır (icrасız) |
+| `qf.insert(Class)` | QueryFactory vasitəsilə builder yaradır |
+
+### UpdateQueryBuilder metodları
+
+| Metod | Təsvir |
+|---|---|
+| `new UpdateQueryBuilder<>(Class, dsl)` | UPDATE builder yaradır |
+| `.set(field, value)` | SET dəyərini təyin edir |
+| `.where(Specification)` | WHERE şərti (Spec.eq, Spec.in və s.) |
+| `.execute()` | UPDATE icra edir, dəyişdirilmiş sətir sayı qaytarır |
+| `.toSQL()` | SQL sətri qaytarır (icrасız) |
+| `qf.update(Class)` | QueryFactory vasitəsilə builder yaradır |
 
 ### ExistsSpec metodları
 
