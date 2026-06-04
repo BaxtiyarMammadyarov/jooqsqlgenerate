@@ -101,9 +101,12 @@ public final class IfExpr {
 
         Condition cond = condCol.eq(DSL.val(condValue));
 
-        Field<?> thenField = resolveValue(thenValue, mainTable, tableMap);
-        Field<?> elseField = resolveValue(elseValue, mainTable, tableMap);
+        @SuppressWarnings("rawtypes")
+        Field thenField = resolveValue(thenValue, mainTable, tableMap);
+        @SuppressWarnings("rawtypes")
+        Field elseField = resolveValue(elseValue, mainTable, tableMap);
 
+        //noinspection unchecked
         return DSL.when(cond, thenField).otherwise(elseField);
     }
 

@@ -610,7 +610,9 @@ public class ComputedField {
 
         // ─── CAST varsa — nəticəni hədəf tipə çevir ──────────────────────
         if (datePattern != null) {
-            result = (Field<Object>) DateFormatHelper.toDialectField(result, datePattern, dialect);
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            Field<Object> dateResult = (Field<Object>) (Field) DateFormatHelper.toDialectField(result, datePattern, dialect);
+            result = dateResult;
         } else if (castType != null) {
             result = (Field<Object>) result.cast(castType);
         }
