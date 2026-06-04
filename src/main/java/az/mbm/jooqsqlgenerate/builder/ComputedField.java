@@ -1,7 +1,9 @@
 package az.mbm.jooqsqlgenerate.builder;
 
 import org.jooq.Condition;
+import org.jooq.DataType;
 import org.jooq.Field;
+import org.jooq.SQLDialect;
 import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
 import az.mbm.jooqsqlgenerate.enums.Op;
@@ -79,22 +81,50 @@ public class ComputedField {
     private final String             firstFieldName;
     /** {@code sumOf()} üçün: ilk hissə başqa bir ComputedField ifadəsidir */
     private final ComputedField      firstNested;
+    /** {@code ifExpr()} üçün: ilk element CASE WHEN ifadəsidir */
+    private final IfExpr             firstIfExpr;
+    /** {@code coalesce()} üçün: ilk element COALESCE ifadəsidir */
+    private final CoalesceExpr       firstCoalesceExpr;
     private final List<Step>         steps         = new ArrayList<>();
     private final List<FilterClause> filterClauses = new ArrayList<>();
     private       String             alias         = null;
+    private       DataType<?>        castType      = null;
+    private       String             datePattern   = null;
 
     /** Sadə sahə konstruktoru */
     private ComputedField(String tableAlias, String fieldName) {
-        this.firstTableAlias = tableAlias;
-        this.firstFieldName  = fieldName;
-        this.firstNested     = null;
+        this.firstTableAlias    = tableAlias;
+        this.firstFieldName     = fieldName;
+        this.firstNested        = null;
+        this.firstIfExpr        = null;
+        this.firstCoalesceExpr  = null;
     }
 
     /** sumOf() üçün: ilk element ComputedField ifadəsidir */
     private ComputedField(ComputedField firstNested) {
-        this.firstTableAlias = null;
-        this.firstFieldName  = null;
-        this.firstNested     = firstNested;
+        this.firstTableAlias   = null;
+        this.firstFieldName    = null;
+        this.firstNested       = firstNested;
+        this.firstIfExpr       = null;
+        this.firstCoalesceExpr = null;
+    }
+
+    /** ifExpr() üçün: ilk element CASE WHEN ifadəsidir */
+    private ComputedField(IfExpr firstIfExpr) {
+        this.firstTableAlias   = null;
+        this.firstFieldName    = null;
+        this.firstNested       = null;
+        this.firstIfExpr       = firstIfExpr;
+        this.firstCoalesceExpr = null;
+    }
+
+    /** coalesce() üçün: ilk element COALESCE ifadəsidir */
+    private ComputedField(CoalesceExpr firstCoalesceExpr) {
+        this.firstTableAlias   = null;
+        this.firstFieldName    = null;
+        this.firstNested       = null;
+        this.firstIfExpr       = null;
+        this.firstCoalesceExpr = firstCoalesceExpr;
     }
 
     // ─── Giriş nöqtəsi ───────────────────────────────────────────────────
@@ -166,6 +196,91 @@ public class ComputedField {
         return cf;
     }
 
+    /**
+     * {@code CASE WHEN condField = equalTo THEN thenVal ELSE elseVal END} ifadəsindən başlayan zəncir.
+     *
+     * <pre>{@code
+     *   // Sadə if — literal dəyərlərlə
+     *   ComputedField.ifExpr("o.status", "PAID", "1", "0")
+     *       .as("isPaid")
+     *
+     *   // Sütun referansları ilə — PAID olduqda amount, əks halda penalty
+     *   ComputedField.ifExpr("o.status", "PAID", "o.amount", "o.penalty")
+     *       .as("adjustedAmount")
+     *
+     *   // Hesablamaya qoşulur
+     *   ComputedField.ifExpr("o.status", "PAID", "o.amount", "0")
+     *       .add("o.tax")
+     *       .as("result")
+     *   // → (CASE WHEN o.status='PAID' THEN o.amount ELSE 0 END) + o.tax AS result
+     * }</pre>
+     *
+     * @param condField  şərt sütunu — {@code "alias.field"}
+     * @param equalTo    bərabərlik dəyəri
+     * @param thenVal    doğru isə — sütun adı ({@code "alias.field"}) və ya literal
+     * @param elseVal    yanlış isə — sütun adı ({@code "alias.field"}) və ya literal
+     */
+    public static ComputedField ifExpr(String condField, Object equalTo,
+                                       Object thenVal,   Object elseVal) {
+        return new ComputedField(IfExpr.of(condField, equalTo, thenVal, elseVal));
+    }
+
+    /**
+     * {@code COALESCE(f1, f2, ...)} ifadəsindən başlayan zəncir.
+     *
+     * <pre>{@code
+     *   // Sadə COALESCE sütun kimi:
+     *   ComputedField.coalesce("u.nickname", "u.firstName", "u.email")
+     *       .as("displayName")
+     *
+     *   // Default dəyər ilə:
+     *   ComputedField.coalesce("u.nickname", "u.firstName")
+     *       .orElse("Anonim")
+     *       .as("displayName")
+     *
+     *   // Hesablamaya qoşulur:
+     *   ComputedField.coalesce("o.discount", "o.promoDiscount")
+     *       .orElse("0")
+     *       .subtract("o.fee")
+     *       .as("netDiscount")
+     * }</pre>
+     *
+     * @param fieldsOrValues  sütun adları ({@code "alias.field"}) və ya literal dəyərlər
+     */
+    public static CoalesceExprStep coalesce(Object... fieldsOrValues) {
+        return new CoalesceExprStep(new ComputedField(CoalesceExpr.of(fieldsOrValues)));
+    }
+
+    /**
+     * {@code coalesce()} üçün ara-addım — {@code .orElse()} əlavəsindən sonra zəncirə qayıdır.
+     */
+    public static final class CoalesceExprStep {
+        private final ComputedField cf;
+        CoalesceExprStep(ComputedField cf) { this.cf = cf; }
+
+        /** Default dəyər əlavə edir. */
+        public ComputedField orElse(Object defaultValue) {
+            cf.firstCoalesceExpr.orElse(defaultValue);
+            return cf;
+        }
+
+        /** Default olmadan birbaşa zəncirə keçir (məs. {@code .add(...)}) */
+        public ComputedField as(String alias)              { return cf.as(alias); }
+        public ComputedField add(String f)                 { return cf.add(f); }
+        public ComputedField subtract(String f)            { return cf.subtract(f); }
+        public ComputedField multiply(String f)            { return cf.multiply(f); }
+        public ComputedField divide(String f)              { return cf.divide(f); }
+        public ComputedField castToString()                                                         { return cf.castToString(); }
+        public ComputedField castToLong()                                                            { return cf.castToLong(); }
+        public ComputedField castToInteger()                                                         { return cf.castToInteger(); }
+        public ComputedField castToBigDecimal()                                                      { return cf.castToBigDecimal(); }
+        public ComputedField castToDateTime(String p)                                                { return cf.castToDateTime(p); }
+        public ComputedField addIf(String c, Object eq, Object t, Object e)                         { return cf.addIf(c, eq, t, e); }
+        public ComputedField subtractIf(String c, Object eq, Object t, Object e)                    { return cf.subtractIf(c, eq, t, e); }
+        public ComputedField multiplyIf(String c, Object eq, Object t, Object e)                    { return cf.multiplyIf(c, eq, t, e); }
+        public ComputedField divideIf(String c, Object eq, Object t, Object e)                      { return cf.divideIf(c, eq, t, e); }
+    }
+
     // ─── Əməliyyat zənciri — sadə sahə ──────────────────────────────────
 
     /** {@code + field} */
@@ -186,6 +301,63 @@ public class ComputedField {
     /** {@code / field} */
     public ComputedField divide(String tableAliasAndField) {
         return fieldStep(MathOp.DIVIDE, tableAliasAndField);
+    }
+
+    // ─── Əməliyyat zənciri — IfExpr operand ─────────────────────────────
+
+    /**
+     * {@code + CASE WHEN condField=equalTo THEN thenVal ELSE elseVal END}
+     *
+     * <pre>{@code
+     *   ComputedField.of("t.base")
+     *       .addIf("t.type", "BONUS", "t.bonusAmount", 0)
+     *       .as("total")
+     *   // → base + CASE WHEN type='BONUS' THEN bonusAmount ELSE 0 END AS total
+     * }</pre>
+     */
+    public ComputedField addIf(String condField, Object equalTo, Object thenVal, Object elseVal) {
+        return add(ComputedField.ifExpr(condField, equalTo, thenVal, elseVal));
+    }
+
+    /**
+     * {@code - CASE WHEN condField=equalTo THEN thenVal ELSE elseVal END}
+     *
+     * <pre>{@code
+     *   ComputedField.of("t.revenue")
+     *       .subtractIf("t.type", "REFUND", "t.refundAmount", 0)
+     *       .as("netRevenue")
+     * }</pre>
+     */
+    public ComputedField subtractIf(String condField, Object equalTo, Object thenVal, Object elseVal) {
+        return subtract(ComputedField.ifExpr(condField, equalTo, thenVal, elseVal));
+    }
+
+    /**
+     * {@code * CASE WHEN condField=equalTo THEN thenVal ELSE elseVal END}
+     *
+     * <pre>{@code
+     *   // purchaseExpense * CASE WHEN actionType='medaxil' THEN 1 ELSE 0 END + averageCostIn
+     *   ComputedField.of("t.purchaseExpense")
+     *       .multiplyIf("t.actionType", "medaxil", 1, 0)
+     *       .add("t.averageCostIn")
+     *       .as("averageCostIn")
+     * }</pre>
+     */
+    public ComputedField multiplyIf(String condField, Object equalTo, Object thenVal, Object elseVal) {
+        return multiply(ComputedField.ifExpr(condField, equalTo, thenVal, elseVal));
+    }
+
+    /**
+     * {@code / CASE WHEN condField=equalTo THEN thenVal ELSE elseVal END}
+     *
+     * <pre>{@code
+     *   ComputedField.of("t.profit")
+     *       .divideIf("t.type", "SALE", "t.saleCount", "t.totalCount")
+     *       .as("avgProfit")
+     * }</pre>
+     */
+    public ComputedField divideIf(String condField, Object equalTo, Object thenVal, Object elseVal) {
+        return divide(ComputedField.ifExpr(condField, equalTo, thenVal, elseVal));
     }
 
     // ─── Əməliyyat zənciri — iç içə ifadə (mötərizəli qrup) ─────────────
@@ -281,6 +453,71 @@ public class ComputedField {
         return this;
     }
 
+    // ─── Cast ────────────────────────────────────────────────────────────
+
+    /**
+     * İfadənin nəticəsini verilmiş SQL tipinə cast edir.
+     *
+     * <p>Həm sadə select-də, həm də riyazi hesablamada işləyir:
+     * <pre>{@code
+     *   // INTEGER sütunu VARCHAR-a çevir
+     *   ComputedField.of("u.age")
+     *       .castTo(SQLDataType.VARCHAR)
+     *       .as("ageText")
+     *
+     *   // Hesablama nəticəsini cast et: (price - discount) CAST AS NUMERIC(10,2)
+     *   ComputedField.of("o.price")
+     *       .subtract("o.discount")
+     *       .castTo(SQLDataType.NUMERIC.precision(10, 2))
+     *       .as("netPrice")
+     * }</pre>
+     *
+     * @param targetType  jOOQ {@link DataType} — məs. {@code SQLDataType.VARCHAR},
+     *                    {@code SQLDataType.INTEGER}, {@code SQLDataType.NUMERIC}
+     */
+    public ComputedField castTo(DataType<?> targetType) {
+        this.castType = Objects.requireNonNull(targetType, "castTo: targetType null ola bilməz");
+        return this;
+    }
+
+    /** İfadəni {@code VARCHAR} tipinə cast edir. */
+    public ComputedField castToString() {
+        return castTo(org.jooq.impl.SQLDataType.VARCHAR);
+    }
+
+    /** İfadəni {@code BIGINT} tipinə cast edir. */
+    public ComputedField castToLong() {
+        return castTo(org.jooq.impl.SQLDataType.BIGINT);
+    }
+
+    /** İfadəni {@code INTEGER} tipinə cast edir. */
+    public ComputedField castToInteger() {
+        return castTo(org.jooq.impl.SQLDataType.INTEGER);
+    }
+
+    /** İfadəni {@code NUMERIC} tipinə cast edir. */
+    public ComputedField castToBigDecimal() {
+        return castTo(org.jooq.impl.SQLDataType.DECIMAL);
+    }
+
+    /**
+     * Tarix/vaxt ifadəsini format pattern ilə string-ə çevirir.
+     *
+     * <p>SQL nəticəsi: {@code TO_CHAR(expr, 'pattern')}
+     *
+     * <pre>{@code
+     *   ComputedField.of("o.createdAt")
+     *       .castToDateTime("YYYY-MM-DD")
+     *       .as("createdDate")
+     * }</pre>
+     *
+     * @param pattern  PostgreSQL TO_CHAR formatı — məs. {@code "YYYY-MM-DD"}
+     */
+    public ComputedField castToDateTime(String pattern) {
+        this.datePattern = Objects.requireNonNull(pattern, "castToDateTime: pattern null ola bilməz");
+        return this;
+    }
+
     // ─── Alias ───────────────────────────────────────────────────────────
 
     /**
@@ -307,22 +544,41 @@ public class ComputedField {
     @SuppressWarnings({"unchecked", "rawtypes"})
     public Field<?> toField(EntityTable<?> mainTable,
                             java.util.Map<String, EntityTable<?>> tableMap) {
+        return toField(mainTable, tableMap, SQLDialect.DEFAULT);
+    }
+
+    /** Dialekt-aware variant — {@link az.mbm.jooqsqlgenerate.builder.SelectQueryBuilder} tərəfindən çağrılır. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public Field<?> toField(EntityTable<?> mainTable,
+                            java.util.Map<String, EntityTable<?>> tableMap,
+                            SQLDialect dialect) {
         if (alias == null)
             throw new IllegalStateException("ComputedField: .as(alias) tələb olunur");
-        return buildExpr(mainTable, tableMap).as(alias);
+        return buildExpr(mainTable, tableMap, dialect).as(alias);
     }
 
     /**
      * Alias olmadan ifadə qurur — iç içə {@code expr()} üçün istifadə edilir.
-     * Nəticə avtomatik mötərizəyə alınır ki, xarici əməliyyatla düzgün birləşsin.
+     * Geri uyğunluq üçün saxlanılır; {@code SQLDialect.DEFAULT} ilə çağırır.
      */
-    @SuppressWarnings({"unchecked", "rawtypes"})
     Field<Object> buildExpr(EntityTable<?> mainTable,
                             java.util.Map<String, EntityTable<?>> tableMap) {
-        // Birinci element: ya sadə sahə, ya da sumOf()-dan gələn nested ifadə
+        return buildExpr(mainTable, tableMap, SQLDialect.DEFAULT);
+    }
+
+    /** Dialekt-aware əsas implementasiya. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    Field<Object> buildExpr(EntityTable<?> mainTable,
+                            java.util.Map<String, EntityTable<?>> tableMap,
+                            SQLDialect dialect) {
+        // Birinci element: sadə sahə / nested ComputedField / IfExpr / CoalesceExpr
         Field<Object> result;
-        if (firstNested != null) {
-            result = firstNested.buildExpr(mainTable, tableMap);
+        if (firstIfExpr != null) {
+            result = (Field<Object>) firstIfExpr.toField(mainTable, tableMap);
+        } else if (firstCoalesceExpr != null) {
+            result = (Field<Object>) firstCoalesceExpr.toField(mainTable, tableMap);
+        } else if (firstNested != null) {
+            result = firstNested.buildExpr(mainTable, tableMap, dialect);
         } else {
             EntityTable<?> t0 = resolve(firstTableAlias, mainTable, tableMap);
             result = (Field<Object>) t0.getField(firstFieldName);
@@ -334,7 +590,7 @@ public class ComputedField {
 
             if (s.isNested()) {
                 // İç içə ifadə — mötərizəyə alınmış alt-ifadə
-                operand = s.nested().buildExpr(mainTable, tableMap);
+                operand = s.nested().buildExpr(mainTable, tableMap, dialect);
             } else {
                 // Sadə sahə
                 EntityTable<?> t = resolve(s.tableAlias(), mainTable, tableMap);
@@ -350,6 +606,13 @@ public class ComputedField {
                 case DIVIDE   -> result.div(numOperand);
                 default       -> result;
             };
+        }
+
+        // ─── CAST varsa — nəticəni hədəf tipə çevir ──────────────────────
+        if (datePattern != null) {
+            result = (Field<Object>) DateFormatHelper.toDialectField(result, datePattern, dialect);
+        } else if (castType != null) {
+            result = (Field<Object>) result.cast(castType);
         }
 
         // ─── WHERE filter varsa → CASE WHEN cond THEN result ELSE NULL END ──

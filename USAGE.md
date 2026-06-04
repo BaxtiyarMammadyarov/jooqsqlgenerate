@@ -7,13 +7,13 @@
 <dependency>
     <groupId>az.mbm</groupId>
     <artifactId>jooq-sql-generate</artifactId>
-    <version>1.1.7</version>
+    <version>1.1.10</version>
 </dependency>
 ```
 
 ```kotlin
 // Gradle
-implementation("az.mbm:jooq-sql-generate:1.1.7")
+implementation("az.mbm:jooq-sql-generate:1.1.10")
 ```
 
 ---
@@ -290,6 +290,250 @@ manager.addConcatColumn("userCode", "-", literal("USR"), field("u.id"))
 // Çox qarışıq
 manager.addConcatColumn("label", " ", literal("Ad:"), field("u.firstName"), field("u.lastName"))
 // → 'Ad:' || ' ' || COALESCE(first_name,'') || ' ' || COALESCE(last_name,'')
+```
+
+**`ConcatItem.ifExpr` — CONCAT daxilində şərtli dəyər:**
+
+```java
+// Şərtli label CONCAT-a qoşulur
+manager.addConcatColumn("statusLabel", " | ",
+    field("u.name"),
+    ifExpr("o.status", "PAID", "Ödənilib", "Gözlənilir"))
+// → COALESCE(name,'') || ' | ' || CASE WHEN status='PAID' THEN 'Ödənilib' ELSE 'Gözlənilir' END
+```
+
+**`ConcatItem.coalesce` — CONCAT daxilində COALESCE:**
+
+```java
+// nickname → firstName → "Anonim" sırası ilə CONCAT
+manager.addConcatColumn("displayName", " ",
+    literal("Ad:"),
+    coalesce(CoalesceExpr.of("u.nickname", "u.firstName").orElse("Anonim")))
+// → 'Ad:' || ' ' || COALESCE(nickname, first_name, 'Anonim')
+```
+
+---
+
+### 2.11 CAST — Tip Çevrilməsi
+
+Sütunun SQL tipini dəyişdirmək üçün.
+
+#### Sadə SELECT-də cast
+
+```java
+JooqQuery.from(User.class, "u")
+    .castString("u.age", "ageText")          // CAST(age AS VARCHAR)
+    .castInteger("u.score", "scoreInt")       // CAST(score AS INTEGER)
+    .castLong("u.code", "codeLong")           // CAST(code AS BIGINT)
+    .castBigDecimal("o.price", "priceNum")    // CAST(price AS NUMERIC)
+    .execute(dsl);
+```
+
+#### Tarix/vaxt formatı — bütün DB-lərlə işləyir
+
+Pattern PostgreSQL/Oracle sintaksisindədir — MySQL və MSSQL üçün avtomatik çevrilir:
+
+```java
+.castDateTime("o.createdAt", "YYYY-MM-DD", "createdDate")
+// PostgreSQL/Oracle: TO_CHAR(created_at, 'YYYY-MM-DD')
+// MySQL/MariaDB:     DATE_FORMAT(created_at, '%Y-%m-%d')
+// SQL Server:        FORMAT(created_at, 'yyyy-MM-dd')
+
+.castDateTime("o.orderTime", "YYYY-MM-DD HH24:MI:SS", "orderTimeStr")
+.castDateTime("u.birthDate", "DD MON YYYY", "birthFormatted")
+```
+
+**Tez-tez istifadə olunan pattern-lər:**
+
+| Pattern | Nümunə çıxış |
+|---|---|
+| `YYYY-MM-DD` | `2024-03-15` |
+| `DD/MM/YYYY` | `15/03/2024` |
+| `YYYY-MM-DD HH24:MI:SS` | `2024-03-15 14:30:00` |
+| `HH24:MI` | `14:30` |
+| `DD MON YYYY` | `15 Mar 2024` |
+| `MONTH YYYY` | `March 2024` |
+
+#### ComputedField zəncirinə cast
+
+```java
+// Hesablama nəticəsini NUMERIC-ə çevir
+.computedColumn(
+    ComputedField.of("o.price")
+        .subtract("o.discount")
+        .castToBigDecimal()
+        .as("netPrice")
+)
+
+// Sadə sütunu STRING-ə çevir
+.computedColumn(
+    ComputedField.of("u.age")
+        .castToString()
+        .as("ageText")
+)
+
+// Tarixi formatla
+.computedColumn(
+    ComputedField.of("o.createdAt")
+        .castToDateTime("YYYY-MM-DD")
+        .as("createdDate")
+)
+```
+
+#### Aşağı səviyyəli metod — istənilən DataType
+
+```java
+import org.jooq.impl.SQLDataType;
+
+.castColumn("o.price", SQLDataType.NUMERIC.precision(10, 2), "priceFormatted")
+```
+
+#### JooqManager ilə
+
+```java
+manager.addCastStringColumn("u.age", "ageText");
+manager.addCastLongColumn("u.code", "codeLong");
+manager.addCastIntegerColumn("u.score", "scoreInt");
+manager.addCastBigDecimalColumn("o.price", "priceNum");
+manager.addCastDateTimeColumn("o.createdAt", "YYYY-MM-DD", "createdDate");
+```
+
+> **Qeyd:** `castDateTime` DB dialektini `DSLContext`-dən avtomatik alır — heç bir əlavə konfiqurasiya lazım deyil.
+
+---
+
+### 2.12 IfExpr — Şərtli dəyər (CASE WHEN)
+
+`CASE WHEN field = val THEN x ELSE y END` ifadəsini **ComputedField**, **AggregateBuilder** və **ConcatItem** daxilindən istifadə etməyə imkan verir.
+
+#### ComputedField — başlanğıc nöqtəsi kimi
+
+```java
+// Sadə şərtli sütun
+ComputedField.ifExpr("o.status", "PAID", 1, 0)
+    .as("isPaid")
+// → CASE WHEN status='PAID' THEN 1 ELSE 0 END AS isPaid
+
+// Sütun referansı ilə — PAID olarsa amount, əks halda 0
+ComputedField.ifExpr("o.status", "PAID", "o.amount", 0)
+    .add("o.tax")
+    .as("result")
+// → (CASE WHEN status='PAID' THEN amount ELSE 0 END) + tax AS result
+```
+
+#### ComputedField — zəncirdə IfExpr operandı
+
+`multiplyIf`, `addIf`, `subtractIf`, `divideIf` — CASE WHEN ifadəsini birbaşa riyazi əməliyyat operandı kimi istifadə edir:
+
+```java
+// purchaseExpense * CASE WHEN actionType='medaxil' THEN 1 ELSE 0 END + averageCostIn
+ComputedField.of("t.purchaseExpense")
+    .multiplyIf("t.actionType", "medaxil", 1, 0)
+    .add("t.averageCostIn")
+    .as("averageCostIn")
+
+// base + CASE WHEN type='BONUS' THEN bonusAmount ELSE 0 END
+ComputedField.of("t.base")
+    .addIf("t.type", "BONUS", "t.bonusAmount", 0)
+    .as("total")
+
+// revenue - CASE WHEN type='REFUND' THEN amount ELSE 0 END
+ComputedField.of("t.revenue")
+    .subtractIf("t.type", "REFUND", "t.amount", 0)
+    .as("netRevenue")
+```
+
+> **Qısa vs uzun sintaksis** — eyni nəticəni verir:
+> ```java
+> // Qısa (tövsiyə edilir)
+> ComputedField.of("t.price").multiplyIf("t.type", "SALE", 1, 0).as("salePrice")
+>
+> // Uzun (nested ComputedField)
+> ComputedField.of("t.price").multiply(ComputedField.ifExpr("t.type", "SALE", 1, 0)).as("salePrice")
+> ```
+
+#### AggregateBuilder — şərtli aqreqat funksiyaları
+
+```java
+AggregateBuilder.<Order>groupBy("o.customerId")
+    // SUM(CASE WHEN status='PAID' THEN amount ELSE 0 END)
+    .sumIf("o.status", "PAID", "o.amount", 0).as("paidRevenue").done()
+    // SUM(CASE WHEN type='OUT' THEN 1 ELSE 0 END)  ← conditional count
+    .sumIf("o.type", "OUT", 1, 0).as("outCount").done()
+    // COUNT(CASE WHEN status='PAID' THEN 1 END)
+    .countIf("o.status", "PAID").as("paidCount").done()
+    // AVG / MAX / MIN şərtli
+    .avgIf("o.status", "PAID", "o.amount", 0).as("avgPaid").done()
+    .maxIf("o.type",   "SALE", "o.amount", 0).as("maxSale").done()
+    .minIf("o.type",   "SALE", "o.amount", 0).as("minSale").done()
+```
+
+#### AggStep — IfExpr math operandı
+
+Sadə `.sum()` ilə başlayan zəncirə IfExpr-i operand kimi qoşmaq:
+
+```java
+AggregateBuilder.<CashFlow>groupBy("t.actionType")
+    // SUM(purchaseExpense * CASE WHEN actionType='medaxil' THEN 1 ELSE 0 END)
+    .sum("t.purchaseExpense")
+        .multiplyIf("t.actionType", "medaxil", 1, 0)
+        .as("expense").done()
+    // SUM(revenue - CASE WHEN type='REFUND' THEN amount ELSE 0 END)
+    .sum("t.revenue")
+        .subtractIf("t.type", "REFUND", "t.amount", 0)
+        .as("netRevenue").done()
+    // SUM(base + CASE WHEN type='BONUS' THEN bonusAmount ELSE 0 END)
+    .sum("t.base")
+        .addIf("t.type", "BONUS", "t.bonusAmount", 0)
+        .as("total").done()
+```
+
+**IfExpr metod parametrləri:**
+
+| Parametr | Məna |
+|---|---|
+| `condField` (`"alias.field"`) | Şərt sütunu |
+| `equalTo` | Bərabərlik dəyəri |
+| `thenVal` | `"alias.field"` → sütun ref; digər → literal |
+| `elseVal` | `"alias.field"` → sütun ref; digər → literal |
+
+---
+
+### 2.13 CoalesceExpr — COALESCE ifadəsi
+
+`COALESCE(f1, f2, ..., default)` — ilk null olmayan dəyəri götürür. **ComputedField**, **ConcatItem** və **AggregateBuilder** daxilindən istifadə edilə bilər.
+
+#### ComputedField — başlanğıc nöqtəsi
+
+```java
+// Sütunlar arasında COALESCE
+ComputedField.coalesce("u.nickname", "u.firstName", "u.email")
+    .as("displayName")
+// → COALESCE(nickname, first_name, email) AS displayName
+
+// Default dəyər ilə
+ComputedField.coalesce("u.nickname", "u.firstName")
+    .orElse("Anonim")
+    .as("displayName")
+// → COALESCE(nickname, first_name, 'Anonim') AS displayName
+
+// Hesablamaya qoşulur
+ComputedField.coalesce("o.discount", "o.promoDiscount")
+    .orElse("0")
+    .subtract("o.fee")
+    .as("netDiscount")
+// → COALESCE(discount, promo_discount, '0') - fee AS netDiscount
+```
+
+#### ConcatItem — CONCAT daxilində COALESCE
+
+```java
+import static az.mbm.jooqsqlgenerate.builder.ConcatItem.*;
+
+manager.addConcatColumn("displayName", " ",
+    literal("Ad:"),
+    coalesce(CoalesceExpr.of("u.nickname", "u.firstName").orElse("Anonim")))
+// → 'Ad:' || ' ' || COALESCE(nickname, first_name, 'Anonim')
 ```
 
 ---
@@ -958,6 +1202,12 @@ manager.addAggFunction(Agg.SUM, "t.price")
 manager.addAggFunction(Agg.SUM, "t.price")
        .as("totalPrice")
 // → SUM(price) AS totalPrice
+
+// IfExpr math operandı ilə
+manager.addAggFunction(Agg.SUM, "t.purchaseExpense")
+       .multiplyIf("t.actionType", "medaxil", 1, 0)
+       .as("expense")
+// → SUM(purchaseExpense * CASE WHEN actionType='medaxil' THEN 1 ELSE 0 END)
 ```
 
 ### 7.4 AggregateBuilder — fluent API
@@ -974,6 +1224,45 @@ JooqQuery.from(Order.class, "o")
     )
     .execute(dsl);
 // → HAVING ROUND(SUM(total_price),2) > 1000
+```
+
+### 7.4.1 AggregateBuilder — şərtli aqreqat funksiyaları (sumIf / countIf)
+
+```java
+AggregateBuilder.<CashFlow>groupBy("t.actionType")
+    // SUM(CASE WHEN status='PAID' THEN amount ELSE 0 END)
+    .sumIf("t.status", "PAID", "t.amount", 0)
+        .as("paidTotal").done()
+    // SUM(CASE WHEN type='OUT' THEN 1 ELSE 0 END) — şərtli count
+    .sumIf("t.type", "OUT", 1, 0)
+        .as("outCount").done()
+    // COUNT(CASE WHEN status='PAID' THEN 1 END)
+    .countIf("t.status", "PAID")
+        .as("paidCount").done()
+    // Qalan şərtli funksiyalar
+    .avgIf("t.status", "PAID", "t.amount", 0).as("avgPaid").done()
+    .maxIf("t.type",   "SALE", "t.amount", 0).as("maxSale").done()
+    .minIf("t.type",   "SALE", "t.amount", 0).as("minSale").done()
+```
+
+### 7.4.2 AggStep — IfExpr riyazi operandı
+
+Sadə `.sum()` ilə başlayan zəncirə `CASE WHEN` ifadəsini operand kimi qoşmaq:
+
+```java
+AggregateBuilder.<CashFlow>groupBy("t.actionType")
+    // SUM(purchaseExpense * CASE WHEN actionType='medaxil' THEN 1 ELSE 0 END)
+    .sum("t.purchaseExpense")
+        .multiplyIf("t.actionType", "medaxil", 1, 0)
+        .as("expense").done()
+    // SUM(revenue - CASE WHEN type='REFUND' THEN amount ELSE 0 END)
+    .sum("t.revenue")
+        .subtractIf("t.type", "REFUND", "t.amount", 0)
+        .as("netRevenue").done()
+    // SUM(base + CASE WHEN type='BONUS' THEN bonusAmount ELSE 0 END)
+    .sum("t.base")
+        .addIf("t.type", "BONUS", "t.bonusAmount", 0)
+        .as("total").done()
 ```
 
 ### 7.5 Set ilə GROUP BY
@@ -1613,7 +1902,19 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `computedColumn(...)` | Riyazi ifadə sütunu |
 | `compute(field).add/subtract/multiply/divide(field).as(alias)` | Fluent riyazi zəncir |
 | `compute(field).subtract().of(field)...done().as(alias)` | Mötərizəli qrup ifadəsi |
+| `ComputedField.ifExpr(cond,eq,then,else).as(alias)` | CASE WHEN sütun kimi |
+| `ComputedField.of(f).multiplyIf(cond,eq,t,e).as(alias)` | `f * CASE WHEN ...` |
+| `ComputedField.of(f).addIf(cond,eq,t,e).as(alias)` | `f + CASE WHEN ...` |
+| `ComputedField.of(f).subtractIf(cond,eq,t,e).as(alias)` | `f - CASE WHEN ...` |
+| `ComputedField.of(f).divideIf(cond,eq,t,e).as(alias)` | `f / CASE WHEN ...` |
+| `ComputedField.coalesce(fields...).orElse(def).as(alias)` | COALESCE sütun kimi |
 | `coalesce(alias, def, fields...)` | COALESCE sütunu |
+| `castString(field, alias)` | `CAST(field AS VARCHAR)` |
+| `castLong(field, alias)` | `CAST(field AS BIGINT)` |
+| `castInteger(field, alias)` | `CAST(field AS INTEGER)` |
+| `castBigDecimal(field, alias)` | `CAST(field AS NUMERIC)` |
+| `castDateTime(field, pattern, alias)` | Tarix → string, bütün DB-lərlə |
+| `castColumn(field, DataType, alias)` | İstənilən SQLDataType ilə cast |
 | `subSelect(SubSelectBuilder)` | Scalar subquery sütunu |
 | `caseWhen(...)` | CASE WHEN sütunu |
 | `leftJoin(entity, alias, from, to)` | Sadə LEFT JOIN |
@@ -1636,6 +1937,7 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `agg(Agg, field, alias, round, dir)` | Aqreqat funksiya |
 | `aggWithMath(...)` | Riyazi aqreqat SUM(f1*f2) |
 | `aggOnComputed(...)` | ComputedField aqreqat |
+| `aggregate(AggregateBuilder.groupBy(...).sumIf(...).done())` | Şərtli aqreqat |
 | `havingFilter(field, Map)` | HAVING filter |
 | `havingFilter(field, Op, value)` | HAVING birbaşa filter |
 | `orderBy(field, dir)` | ORDER BY |
@@ -1685,6 +1987,8 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `addFieldFilter(left, Op, right)` | İki sahə arasında WHERE müqayisəsi |
 | `addComputedColumn(field).add/subtract/multiply/divide(field).as(alias)` | Fluent riyazi zəncir |
 | `addComputedColumn(field).subtract().of(field)...done().as(alias)` | Mötərizəli qrup ifadəsi |
+| `addComputedColumn(field).multiplyIf(cond,eq,t,e).as(alias)` | `field * CASE WHEN ...` |
+| `addComputedColumn(field).addIf(cond,eq,t,e).as(alias)` | `field + CASE WHEN ...` |
 | `addLeftJoin(Class, alias).on(...).done()` | Builder LEFT JOIN |
 | `addInnerJoin(Class, alias).onFrom(...).done()` | Builder INNER JOIN |
 | `.onFrom(fromAlias, fromField, Op, toField)` | JOIN ON ilə Op operatoru |

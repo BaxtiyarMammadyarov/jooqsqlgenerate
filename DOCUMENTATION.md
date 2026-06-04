@@ -7,6 +7,60 @@
 
 ## Dəyişikliklər — Versiya Tarixi
 
+### v1.1.10 — IfExpr, CoalesceExpr, şərtli zəncir metodları
+
+**Nə əlavə edildi?**
+
+SQL `CASE WHEN` və `COALESCE` ifadələrini **ComputedField**, **AggregateBuilder** və **ConcatItem** daxilindən istifadə etmək üçün tam dəstək əlavə edildi.
+
+**Yeni siniflər:**
+- `IfExpr` — `CASE WHEN field=val THEN x ELSE y END` ifadəsi; standalone istifadə üçün
+- `CoalesceExpr` — `COALESCE(f1, f2, ..., default)` ifadəsi; standalone istifadə üçün
+
+**ComputedField-ə əlavə edilən metodlar:**
+- `ComputedField.ifExpr(cond, eq, then, else)` — CASE WHEN-dən başlayan zəncir
+- `ComputedField.coalesce(fields...)` — COALESCE-dən başlayan zəncir
+- `.multiplyIf(cond, eq, then, else)` — `field * CASE WHEN ...`
+- `.addIf(cond, eq, then, else)` — `field + CASE WHEN ...`
+- `.subtractIf(cond, eq, then, else)` — `field - CASE WHEN ...`
+- `.divideIf(cond, eq, then, else)` — `field / CASE WHEN ...`
+
+**AggregateBuilder-ə əlavə edilən metodlar:**
+- `sumIf`, `countIf`, `avgIf`, `maxIf`, `minIf` — `SUM/COUNT/AVG/MAX/MIN(CASE WHEN ...)`
+- `AggStep.multiplyIf`, `addIf`, `subtractIf`, `divideIf` — `SUM(f * CASE WHEN ...)`
+
+**ConcatItem-ə əlavə edilən tiplər:**
+- `ConcatItem.ifExpr(...)` — CONCAT daxilində CASE WHEN ifadəsi
+- `ConcatItem.coalesce(CoalesceExpr)` — CONCAT daxilində COALESCE
+
+---
+
+### v1.1.9 — CAST dəstəyi
+
+**Nə əlavə edildi?**
+
+Sütunların SQL tipini dəyişdirmək üçün (INTEGER → VARCHAR, VARCHAR → INTEGER, tarix → string və s.) tam CAST dəstəyi əlavə edildi.
+
+**`SelectQueryBuilder` — sadə select üçün:**
+- `castString(field, alias)` — `CAST(field AS VARCHAR)`
+- `castLong(field, alias)` — `CAST(field AS BIGINT)`
+- `castInteger(field, alias)` — `CAST(field AS INTEGER)`
+- `castBigDecimal(field, alias)` — `CAST(field AS NUMERIC)`
+- `castDateTime(field, pattern, alias)` — tarix/vaxt formatı, bütün DB-lərlə uyğun
+- `castColumn(field, DataType, alias)` — istənilən `SQLDataType` ilə aşağı səviyyəli metod
+
+**`ComputedField` — hesablama zəncirinə cast:**
+- `castToString()`, `castToLong()`, `castToInteger()`, `castToBigDecimal()` — tip cast
+- `castToDateTime(pattern)` — tarix/vaxt format
+- `castTo(DataType)` — ixtiyari tip
+
+**`DateFormatHelper` — yeni yardımçı sinif:**
+- `dsl.dialect()` ilə DB-ni avtomatik tanıyır
+- PostgreSQL/Oracle → `TO_CHAR(field, 'pattern')`
+- MySQL/MariaDB → `DATE_FORMAT(field, '%Y-%m-%d')`
+- SQL Server → `FORMAT(field, 'yyyy-MM-dd')`
+- Pattern avtomatik çevrilir — bir dəfə yazırsınız, hər DB-də işləyir
+
 ### v1.1.8 — REGEXP/NOT_REGEXP düzəlişi
 **Problem:** `Op.REGEXP` və `Op.NOT_REGEXP` filterlərinə `List<String>` dəyər verildikdə
 Java-nın `List.toString()` onu `[isMusteri]` formatına çevirirdi. PostgreSQL regex-ində
@@ -1453,6 +1507,64 @@ ComputedField.of("o.price")
 
 Yaranan SQL: `(o.price * o.quantity) - o.discount AS netAmount`
 
+**Cast metodları (v1.1.9-dan)**
+
+Hesablama nəticəsini SQL tipinə çevirmək üçün:
+
+| Metod | SQL nəticəsi |
+|---|---|
+| `.castToString()` | `CAST(expr AS VARCHAR)` |
+| `.castToLong()` | `CAST(expr AS BIGINT)` |
+| `.castToInteger()` | `CAST(expr AS INTEGER)` |
+| `.castToBigDecimal()` | `CAST(expr AS NUMERIC)` |
+| `.castToDateTime(pattern)` | `TO_CHAR / DATE_FORMAT / FORMAT` — DB-yə görə |
+| `.castTo(DataType)` | İstənilən `SQLDataType` |
+
+```java
+// Riyazi nəticəni NUMERIC-ə çevir
+ComputedField.of("o.price")
+    .subtract("o.discount")
+    .castToBigDecimal()
+    .as("netPrice")
+
+// Sadə sütunu STRING-ə çevir
+ComputedField.of("u.age")
+    .castToString()
+    .as("ageText")
+
+// Tarixi format ilə string-ə çevir
+ComputedField.of("o.createdAt")
+    .castToDateTime("YYYY-MM-DD")
+    .as("createdDate")
+```
+
+---
+
+### 14a. `DateFormatHelper` — Çox-DB Tarix Format Yardımçısı
+
+**Fayl:** `builder/DateFormatHelper.java`
+
+**Niyə yaradıldı?**
+
+Hər verilənlər bazasının tarix/vaxt formatlaması üçün fərqli funksiyası var:
+
+| DB | Funksiya |
+|---|---|
+| PostgreSQL, Oracle, H2 | `TO_CHAR(field, 'YYYY-MM-DD')` |
+| MySQL, MariaDB | `DATE_FORMAT(field, '%Y-%m-%d')` |
+| SQL Server | `FORMAT(field, 'yyyy-MM-dd')` |
+
+`DateFormatHelper` `dsl.dialect()`-dən DB-ni avtomatik tanıyır və pattern-i uyğun formata çevirir. Developer yalnız PostgreSQL/Oracle sintaksisində pattern yazır — qalanı avtomatikdir.
+
+**Pattern çevrilmə nümunəsi:**
+
+| PostgreSQL pattern | MySQL | MSSQL |
+|---|---|---|
+| `YYYY-MM-DD` | `%Y-%m-%d` | `yyyy-MM-dd` |
+| `HH24:MI:SS` | `%H:%i:%s` | `HH:mm:ss` |
+| `YYYY-MM-DD HH24:MI` | `%Y-%m-%d %H:%i` | `yyyy-MM-dd HH:mm` |
+| `MON DD, YYYY` | `%b %d, %Y` | `MMM dd, yyyy` |
+
 ---
 
 ### 15. `SubQueryIn` — WHERE field IN (SELECT ...)
@@ -1693,3 +1805,6 @@ JooqQuery.from(Product.class, "p")
 | `Filter.java` LIKE bypass | `like()` / `startWith()` / `endWith()` `FilterStrategies` üzərindən işləyir — tip yoxlaması daxildir |
 | `REGEXP` / `NOT_REGEXP` `List` dəyəri `[val]` formatına düşür | `toRegexPattern()` — Collection-ı `\|` ilə birləşdirir, Java `List.toString()` brackets-ni silir |
 | `NOT_REGEXP` ikiqat mötərizə `NOT ((field ~ p))` | `field.notLikeRegex(p)` — birbaşa `field !~ 'p'` yaradır |
+| SELECT-də tip çevrilməsi (INTEGER → VARCHAR, tarix → string) | `castString/castLong/castInteger/castBigDecimal/castDateTime` metodları — `castColumn(DataType)` üzərindən işləyir |
+| `castDateTime` hər DB-də fərqli funksiya tələb edir | `DateFormatHelper.toDialectField()` — `dsl.dialect()` ilə PG/Oracle/MySQL/MSSQL fərqləndirir, pattern avtomatik çevrilir |
+| `ComputedField` zəncirinə cast əlavə etmək | `castTo(DataType)` + `castToString/Long/Integer/BigDecimal/DateTime` — `buildExpr()` sonunda tətbiq edilir |

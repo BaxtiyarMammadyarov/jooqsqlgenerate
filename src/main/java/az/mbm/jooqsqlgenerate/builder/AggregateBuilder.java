@@ -56,7 +56,9 @@ public class AggregateBuilder<T> {
             Op havingOp,
             Object           havingValue,
             String           orderDirection,
-            ComputedField    computedExpr      // null → sadə sahə; non-null → çox sahəli ifadə
+            ComputedField    computedExpr,     // null → sadə sahə; non-null → çox sahəli ifadə
+            IfExpr           ifExpr,           // null → sadə/computed; non-null → CASE WHEN ifadəsi (tam operand)
+            IfExpr           mathIfExpr        // null → sadə math; non-null → math operandı CASE WHEN ifadəsidir
     ) {}
 
     private final List<String>        groupByFields  = new ArrayList<>();
@@ -164,6 +166,61 @@ public class AggregateBuilder<T> {
     public AggStep<T> max(String tableAliasAndField)   { return new AggStep<>(this, Agg.MAX,   tableAliasAndField); }
     public AggStep<T> min(String tableAliasAndField)   { return new AggStep<>(this, Agg.MIN,   tableAliasAndField); }
 
+    // ─── IfExpr ilə şərtli aqreqat funksiyaları ─────────────────────────
+
+    /**
+     * {@code SUM(CASE WHEN condField = equalTo THEN thenVal ELSE elseVal END)}
+     *
+     * <pre>{@code
+     *   .sumIf("o.status", "PAID", "o.amount", "0").as("paidRevenue").done()
+     *   // → SUM(CASE WHEN o.status='PAID' THEN o.amount ELSE 0 END) AS paidRevenue
+     *
+     *   // Conditional count (PAID sifariş sayı):
+     *   .sumIf("o.status", "PAID", "1", "0").as("paidCount").done()
+     *   // → SUM(CASE WHEN o.status='PAID' THEN 1 ELSE 0 END) AS paidCount
+     * }</pre>
+     */
+    public AggStep<T> sumIf(String condField, Object equalTo, Object thenVal, Object elseVal) {
+        return new AggStep<>(this, Agg.SUM, IfExpr.of(condField, equalTo, thenVal, elseVal));
+    }
+
+    /**
+     * {@code COUNT(CASE WHEN condField = equalTo THEN 1 END)}
+     *
+     * <pre>{@code
+     *   .countIf("o.status", "PAID").as("paidCount").done()
+     *   // → COUNT(CASE WHEN o.status='PAID' THEN 1 ELSE NULL END) AS paidCount
+     * }</pre>
+     */
+    public AggStep<T> countIf(String condField, Object equalTo) {
+        return new AggStep<>(this, Agg.COUNT, IfExpr.of(condField, equalTo, 1, null));
+    }
+
+    /**
+     * {@code AVG(CASE WHEN condField = equalTo THEN thenVal ELSE elseVal END)}
+     *
+     * <pre>{@code
+     *   .avgIf("o.status", "PAID", "o.amount", "0").as("avgPaidAmount").done()
+     * }</pre>
+     */
+    public AggStep<T> avgIf(String condField, Object equalTo, Object thenVal, Object elseVal) {
+        return new AggStep<>(this, Agg.AVG, IfExpr.of(condField, equalTo, thenVal, elseVal));
+    }
+
+    /**
+     * {@code MAX(CASE WHEN condField = equalTo THEN thenVal ELSE elseVal END)}
+     */
+    public AggStep<T> maxIf(String condField, Object equalTo, Object thenVal, Object elseVal) {
+        return new AggStep<>(this, Agg.MAX, IfExpr.of(condField, equalTo, thenVal, elseVal));
+    }
+
+    /**
+     * {@code MIN(CASE WHEN condField = equalTo THEN thenVal ELSE elseVal END)}
+     */
+    public AggStep<T> minIf(String condField, Object equalTo, Object thenVal, Object elseVal) {
+        return new AggStep<>(this, Agg.MIN, IfExpr.of(condField, equalTo, thenVal, elseVal));
+    }
+
     // ─── ComputedField ilə aqreqat funksiyaları (çox sahə) ──────────────
 
     /**
@@ -245,7 +302,11 @@ public class AggregateBuilder<T> {
                                          Map<String, EntityTable<?>> tableMap) {
         Field<Object> operand;
 
-        if (agg.computedExpr() != null) {
+        if (agg.ifExpr() != null) {
+            // ─── CASE WHEN ifadəsi — IfExpr
+            operand = (Field<Object>) agg.ifExpr().toField(table, tableMap);
+
+        } else if (agg.computedExpr() != null) {
             // ─── Çox sahəli ifadə — ComputedField (alias olmadan, aggregate operandı kimi)
             operand = (Field<Object>) agg.computedExpr().buildExpr(table, tableMap);
 
@@ -254,18 +315,26 @@ public class AggregateBuilder<T> {
             Field<Object> baseField = (Field<Object>) table.getField(agg.fieldName());
             operand = baseField;
 
-            if (agg.mathOp() != null && agg.mathOp() != MathOp.NONOPERATION
-                    && agg.mathField() != null) {
-                Field<?> mathF = table.getField(agg.mathField());
-                @SuppressWarnings("unchecked")
-                Field<? extends Number> numMathF = (Field<? extends Number>) (Field<?>) mathF;
-                operand = (Field<Object>) switch (agg.mathOp()) {
-                    case ADD      -> baseField.add(mathF);
-                    case SUBTRACT -> baseField.subtract(mathF);
-                    case MULTIPLY -> baseField.mul(numMathF);
-                    case DIVIDE   -> baseField.div(numMathF);
-                    default       -> baseField;
-                };
+            if (agg.mathOp() != null && agg.mathOp() != MathOp.NONOPERATION) {
+                Field<?> mathF = null;
+                if (agg.mathIfExpr() != null) {
+                    // CASE WHEN ifadəsi math operandı kimi
+                    mathF = agg.mathIfExpr().toField(table, tableMap);
+                } else if (agg.mathField() != null) {
+                    // Sadə sahə math operandı
+                    mathF = table.getField(agg.mathField());
+                }
+                if (mathF != null) {
+                    @SuppressWarnings("unchecked")
+                    Field<? extends Number> numMathF = (Field<? extends Number>) (Field<?>) mathF;
+                    operand = (Field<Object>) switch (agg.mathOp()) {
+                        case ADD      -> baseField.add(mathF);
+                        case SUBTRACT -> baseField.subtract(mathF);
+                        case MULTIPLY -> baseField.mul(numMathF);
+                        case DIVIDE   -> baseField.div(numMathF);
+                        default       -> baseField;
+                    };
+                }
             }
         }
 
@@ -321,6 +390,10 @@ public class AggregateBuilder<T> {
         private       String              mathField = null;
         // Çox sahəli ifadə
         private final ComputedField       computedExpr;
+        // CASE WHEN ifadəsi (tam operand)
+        private final IfExpr              ifExpr;
+        // CASE WHEN ifadəsi (math operandı)
+        private       IfExpr              mathIfExpr = null;
         // Ümumi
         private       String              alias     = null;
         private       Integer             round     = null;
@@ -333,6 +406,7 @@ public class AggregateBuilder<T> {
             this.parent       = parent;
             this.function     = fn;
             this.computedExpr = null;
+            this.ifExpr       = null;
             String[] parts    = tableAliasAndField.split("\\.", 2);
             this.tableAlias   = parts.length == 2 ? parts[0] : "";
             this.fieldName    = parts.length == 2 ? parts[1] : parts[0];
@@ -343,6 +417,17 @@ public class AggregateBuilder<T> {
             this.parent       = parent;
             this.function     = fn;
             this.computedExpr = expr;
+            this.ifExpr       = null;
+            this.tableAlias   = "";
+            this.fieldName    = "";
+        }
+
+        /** IfExpr konstruktoru */
+        AggStep(AggregateBuilder<T> parent, Agg fn, IfExpr expr) {
+            this.parent       = parent;
+            this.function     = fn;
+            this.computedExpr = null;
+            this.ifExpr       = expr;
             this.tableAlias   = "";
             this.fieldName    = "";
         }
@@ -383,6 +468,62 @@ public class AggregateBuilder<T> {
             return this;
         }
 
+        // ─── IfExpr ilə riyazi əməliyyatlar ─────────────────────────────
+
+        /**
+         * {@code SUM(f1 + CASE WHEN cond THEN thenVal ELSE elseVal END)}
+         *
+         * <pre>{@code
+         *   .sum("t.base").addIf("t.type", "BONUS", "t.bonus", 0).as("total").done()
+         *   // → SUM(base + CASE WHEN type='BONUS' THEN bonus ELSE 0 END)
+         * }</pre>
+         */
+        public AggStep<T> addIf(String condField, Object equalTo, Object thenVal, Object elseVal) {
+            return mathIf(MathOp.ADD, condField, equalTo, thenVal, elseVal);
+        }
+
+        /**
+         * {@code SUM(f1 - CASE WHEN cond THEN thenVal ELSE elseVal END)}
+         *
+         * <pre>{@code
+         *   .sum("t.revenue").subtractIf("t.type", "REFUND", "t.amount", 0).as("net").done()
+         *   // → SUM(revenue - CASE WHEN type='REFUND' THEN amount ELSE 0 END)
+         * }</pre>
+         */
+        public AggStep<T> subtractIf(String condField, Object equalTo, Object thenVal, Object elseVal) {
+            return mathIf(MathOp.SUBTRACT, condField, equalTo, thenVal, elseVal);
+        }
+
+        /**
+         * {@code SUM(f1 * CASE WHEN cond THEN thenVal ELSE elseVal END)}
+         *
+         * <pre>{@code
+         *   .sum("t.purchaseExpense").multiplyIf("t.actionType", "medaxil", 1, 0).as("expense").done()
+         *   // → SUM(purchaseExpense * CASE WHEN actionType='medaxil' THEN 1 ELSE 0 END)
+         * }</pre>
+         */
+        public AggStep<T> multiplyIf(String condField, Object equalTo, Object thenVal, Object elseVal) {
+            return mathIf(MathOp.MULTIPLY, condField, equalTo, thenVal, elseVal);
+        }
+
+        /**
+         * {@code SUM(f1 / CASE WHEN cond THEN thenVal ELSE elseVal END)}
+         *
+         * <pre>{@code
+         *   .sum("t.profit").divideIf("t.type", "SALE", "t.saleCount", 1).as("avg").done()
+         *   // → SUM(profit / CASE WHEN type='SALE' THEN saleCount ELSE 1 END)
+         * }</pre>
+         */
+        public AggStep<T> divideIf(String condField, Object equalTo, Object thenVal, Object elseVal) {
+            return mathIf(MathOp.DIVIDE, condField, equalTo, thenVal, elseVal);
+        }
+
+        private AggStep<T> mathIf(MathOp op, String condField, Object equalTo, Object thenVal, Object elseVal) {
+            this.mathOp     = op;
+            this.mathIfExpr = IfExpr.of(condField, equalTo, thenVal, elseVal);
+            return this;
+        }
+
         // ─── HAVING ─────────────────────────────────────────────────────
 
         public AggStep<T> having(Op op, Object value) {
@@ -410,6 +551,13 @@ public class AggregateBuilder<T> {
         public AggStep<T> maxOf(ComputedField e)   { commit(); return parent.maxOf(e);   }
         public AggStep<T> minOf(ComputedField e)   { commit(); return parent.minOf(e);   }
 
+        // ─── Yeni aqreqat başlatmaq üçün chain pass-through-lar ─────────────
+        public AggStep<T> sumIf(String c, Object eq, Object t, Object e)   { commit(); return parent.sumIf(c, eq, t, e);   }
+        public AggStep<T> countIf(String c, Object eq)                     { commit(); return parent.countIf(c, eq);        }
+        public AggStep<T> avgIf(String c, Object eq, Object t, Object e)   { commit(); return parent.avgIf(c, eq, t, e);   }
+        public AggStep<T> maxIf(String c, Object eq, Object t, Object e)   { commit(); return parent.maxIf(c, eq, t, e);   }
+        public AggStep<T> minIf(String c, Object eq, Object t, Object e)   { commit(); return parent.minIf(c, eq, t, e);   }
+
         /** AggStep-i tamamlayır və AggregateBuilder-ə qayıdır */
         public AggregateBuilder<T> done() {
             commit();
@@ -423,7 +571,7 @@ public class AggregateBuilder<T> {
                     function, tableAlias, fieldName,
                     mathOp, mathField, alias, round,
                     havingOp, havingVal, orderDir,
-                    computedExpr));
+                    computedExpr, ifExpr, mathIfExpr));
         }
     }
 

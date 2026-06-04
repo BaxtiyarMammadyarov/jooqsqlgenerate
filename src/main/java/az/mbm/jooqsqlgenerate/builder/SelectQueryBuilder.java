@@ -2,6 +2,7 @@ package az.mbm.jooqsqlgenerate.builder;
 
 import org.jooq.*;
 import org.jooq.Record;
+import org.jooq.SQLDialect;
 import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
 import az.mbm.jooqsqlgenerate.core.SelectTable;
@@ -67,6 +68,7 @@ public class SelectQueryBuilder<T> {
     private final List<CoalesceCol>       coalesceCols   = new ArrayList<>();
     private final List<SubSelectBuilder>  subSelectCols  = new ArrayList<>();
     private final List<Field<?>>          rawSelectFields = new ArrayList<>(); // birbaşa jOOQ Field
+    private final List<CastCol>           castCols        = new ArrayList<>();
 
     // ─── JOIN ─────────────────────────────────────────────────────────────
     private final List<JoinConfig>              joins                  = new ArrayList<>();
@@ -142,6 +144,19 @@ public class SelectQueryBuilder<T> {
 
     /** COALESCE SELECT sütunu — ilk null olmayan sahəni qaytarır */
     private record CoalesceCol(String alias, List<String> fields, Object defaultValue) {}
+
+    /**
+     * CAST SELECT sütunu.
+     * {@code datePattern != null} olduqda {@code TO_CHAR(field, pattern)} istifadə edilir,
+     * əks halda {@code CAST(field AS targetType)}.
+     */
+    private record CastCol(String tableAliasAndField, DataType<?> targetType,
+                           String alias, String datePattern) {
+        /** Tipə cast üçün qısa konstruktor */
+        CastCol(String tableAliasAndField, DataType<?> targetType, String alias) {
+            this(tableAliasAndField, targetType, alias, null);
+        }
+    }
 
     /** Entity-to-entity JOIN konfiqurasiyası */
     private record JoinConfig(
@@ -642,6 +657,72 @@ public class SelectQueryBuilder<T> {
      *   .rawSelectField(DSL.coalesce(...).as("displayName"))
      * }</pre>
      */
+    /**
+     * Sütunu hədəf SQL tipinə cast edərək SELECT-ə əlavə edir.
+     *
+     * <pre>{@code
+     *   // INTEGER → VARCHAR
+     *   .castColumn("u.age", SQLDataType.VARCHAR, "ageText")
+     *
+     *   // VARCHAR → INTEGER
+     *   .castColumn("u.code", SQLDataType.INTEGER, "codeNum")
+     *
+     *   // NUMERIC precision ilə
+     *   .castColumn("o.price", SQLDataType.NUMERIC.precision(10, 2), "priceFormatted")
+     * }</pre>
+     *
+     * @param tableAliasAndField  "alias.field" formatında sahə (məs. "u.age")
+     * @param targetType          hədəf jOOQ DataType (məs. {@code SQLDataType.VARCHAR})
+     * @param alias               SELECT alias-ı
+     */
+    public SelectQueryBuilder<T> castColumn(String tableAliasAndField,
+                                            DataType<?> targetType,
+                                            String alias) {
+        if (tableAliasAndField != null && targetType != null && alias != null)
+            castCols.add(new CastCol(tableAliasAndField, targetType, alias));
+        return this;
+    }
+
+    /** Sahəni {@code VARCHAR} tipinə cast edir. */
+    public SelectQueryBuilder<T> castString(String tableAliasAndField, String alias) {
+        return castColumn(tableAliasAndField, org.jooq.impl.SQLDataType.VARCHAR, alias);
+    }
+
+    /** Sahəni {@code BIGINT} tipinə cast edir. */
+    public SelectQueryBuilder<T> castLong(String tableAliasAndField, String alias) {
+        return castColumn(tableAliasAndField, org.jooq.impl.SQLDataType.BIGINT, alias);
+    }
+
+    /** Sahəni {@code INTEGER} tipinə cast edir. */
+    public SelectQueryBuilder<T> castInteger(String tableAliasAndField, String alias) {
+        return castColumn(tableAliasAndField, org.jooq.impl.SQLDataType.INTEGER, alias);
+    }
+
+    /** Sahəni {@code NUMERIC} tipinə cast edir. */
+    public SelectQueryBuilder<T> castBigDecimal(String tableAliasAndField, String alias) {
+        return castColumn(tableAliasAndField, org.jooq.impl.SQLDataType.DECIMAL, alias);
+    }
+
+    /**
+     * Tarix/vaxt sahəsini format pattern ilə string-ə çevirir.
+     *
+     * <p>SQL nəticəsi: {@code TO_CHAR(alias.field, 'pattern') AS alias}
+     *
+     * <pre>{@code
+     *   .castDateTime("u.createdAt", "YYYY-MM-DD", "createdDate")
+     *   .castDateTime("o.orderTime", "YYYY-MM-DD HH24:MI", "orderTimeStr")
+     * }</pre>
+     *
+     * @param pattern  PostgreSQL TO_CHAR formatı — məs. {@code "YYYY-MM-DD"}
+     */
+    public SelectQueryBuilder<T> castDateTime(String tableAliasAndField,
+                                              String pattern,
+                                              String alias) {
+        if (tableAliasAndField != null && pattern != null && alias != null)
+            castCols.add(new CastCol(tableAliasAndField, null, alias, pattern));
+        return this;
+    }
+
     public SelectQueryBuilder<T> rawSelectField(Field<?> field) {
         if (field != null) rawSelectFields.add(field);
         return this;
@@ -1108,7 +1189,8 @@ public class SelectQueryBuilder<T> {
         }
 
         // Addım 1 — SELECT sahələri
-        List<SelectFieldOrAsterisk> selectFields = buildSelectFields(mainTable, tableMap);
+        SQLDialect dialect = dsl.dialect();
+        List<SelectFieldOrAsterisk> selectFields = buildSelectFields(mainTable, tableMap, dialect);
 
         // Addım 2 — FROM
         SelectJoinStep<Record> query = distinct
@@ -1125,7 +1207,7 @@ public class SelectQueryBuilder<T> {
         Condition whereCondition = buildWhereCondition(mainTable, tableMap);
 
         // Addım 6 — GROUP BY + HAVING
-        SelectHavingStep<Record> afterGroupBy = buildGroupBy(query, mainTable, whereCondition, tableMap);
+        SelectHavingStep<Record> afterGroupBy = buildGroupBy(query, mainTable, whereCondition, tableMap, dialect);
 
         // Addım 7 — ORDER BY sahələri (normal + aqreqat)
         List<SortField<?>> allOrderFields = buildAllOrderFields();
@@ -1160,13 +1242,14 @@ public class SelectQueryBuilder<T> {
 
     private List<SelectFieldOrAsterisk> buildSelectFields(
             EntityTable<T> mainTable,
-            Map<String, EntityTable<?>> tableMap) {
+            Map<String, EntityTable<?>> tableMap,
+            SQLDialect dialect) {
 
         boolean hasCustomFields = selectMainEntityFields
                 || !columns.isEmpty() || !selectAsCols.isEmpty()
                 || !computed.isEmpty() || !computedChain.isEmpty() || !caseCols.isEmpty()
                 || !concatCols.isEmpty() || !coalesceCols.isEmpty() || !subSelectCols.isEmpty()
-                || !rawSelectFields.isEmpty()
+                || !rawSelectFields.isEmpty() || !castCols.isEmpty()
                 || (aggregator != null && !aggregator.getAggFields().isEmpty());
 
         if (!hasCustomFields) return List.of(DSL.asterisk());
@@ -1253,7 +1336,7 @@ public class SelectQueryBuilder<T> {
 
         // Riyazi əməliyyatla hesablanmış sütunlar — çox sahəli zəncir form
         for (ComputedField cf : computedChain) {
-            fields.add(cf.toField(mainTable, tableMap));
+            fields.add(cf.toField(mainTable, tableMap, dialect));
         }
 
         // CASE WHEN sütunlar
@@ -1274,6 +1357,17 @@ public class SelectQueryBuilder<T> {
         // Subquery sütunlar
         for (SubSelectBuilder sub : subSelectCols) {
             fields.add(sub.toField(tableMap));
+        }
+
+        // Cast sütunlar
+        for (CastCol cc : castCols) {
+            EntityTable<?> t = tableMap.getOrDefault(aliasPart(cc.tableAliasAndField()), mainTable);
+            Field<?> src = t.getField(fieldPart(cc.tableAliasAndField()));
+            if (cc.datePattern() != null) {
+                fields.add(DateFormatHelper.toDialectField(src, cc.datePattern(), dialect).as(cc.alias()));
+            } else {
+                fields.add(src.cast(cc.targetType()).as(cc.alias()));
+            }
         }
 
         // Birbaşa jOOQ Field-lər
@@ -1481,7 +1575,8 @@ public class SelectQueryBuilder<T> {
             SelectJoinStep<Record> query,
             EntityTable<T> mainTable,
             Condition where,
-            Map<String, EntityTable<?>> tableMap) {
+            Map<String, EntityTable<?>> tableMap,
+            SQLDialect dialect) {
 
         SelectConditionStep<Record> conditioned = (where != null)
                 ? query.where(where)
@@ -1545,8 +1640,20 @@ public class SelectQueryBuilder<T> {
         // Ən təhlükəsiz yol: ComputedField-in toField() nəticəsini alias-sız vermək.
         for (ComputedField cf : computedChain) {
             // GROUP BY-da alias deyil, ifadənin özü lazımdır
-            Field<?> expr = cf.buildExpr(mainTable, tableMap);
+            Field<?> expr = cf.buildExpr(mainTable, tableMap, dialect);
             groupFieldMap.putIfAbsent("__cf_" + cf.getAlias(), expr);
+        }
+
+        // Cast sütunlar — ifadənin özü GROUP BY-a verilir
+        for (CastCol cc : castCols) {
+            if (!aggAliases.contains(cc.alias())) {
+                EntityTable<?> t = tableMap.getOrDefault(aliasPart(cc.tableAliasAndField()), mainTable);
+                Field<?> src = t.getField(fieldPart(cc.tableAliasAndField()));
+                Field<?> expr = cc.datePattern() != null
+                        ? DateFormatHelper.toDialectField(src, cc.datePattern(), dialect)
+                        : src.cast(cc.targetType());
+                groupFieldMap.putIfAbsent("__cast_" + cc.alias(), expr);
+            }
         }
 
         SelectHavingStep<Record> grouped = conditioned.groupBy(new ArrayList<>(groupFieldMap.values()));
@@ -1667,6 +1774,12 @@ public class SelectQueryBuilder<T> {
             } else if (item instanceof ConcatItem.ColField cf) {
                 EntityTable<?> t = tableMap.getOrDefault(aliasPart(cf.aliasAndField()), mainTable);
                 parts.add(DSL.coalesce(t.getField(fieldPart(cf.aliasAndField())), DSL.inline("")));
+            } else if (item instanceof ConcatItem.IfItem ii) {
+                // CASE WHEN ifadəsi — COALESCE ilə null qorunması
+                parts.add(DSL.coalesce(ii.expr().toField(mainTable, tableMap), DSL.inline("")));
+            } else if (item instanceof ConcatItem.CoalesceItem ci) {
+                // COALESCE ifadəsi — özü artıq null-safe-dir
+                parts.add(ci.expr().toField(mainTable, tableMap));
             }
         }
         return DSL.concat(parts.toArray(new Field[0])).as(cc.alias());
