@@ -17,6 +17,7 @@ import az.mbm.jooqsqlgenerate.enums.Op;
 import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 import az.mbm.jooqsqlgenerate.enums.Agg;
 import az.mbm.jooqsqlgenerate.enums.MathOp;
+import az.mbm.jooqsqlgenerate.enums.NullDefault;
 import az.mbm.jooqsqlgenerate.spec.ExistsSpec;
 import az.mbm.jooqsqlgenerate.spec.Filter;
 import az.mbm.jooqsqlgenerate.spec.Filters;
@@ -129,7 +130,8 @@ public final class JooqQuery<T> {
                            Object then, Object els, String alias) {}
     private record ComputedRow(String alias,
                                String ta1, String f1, MathOp op,
-                               String ta2, String f2) {}
+                               String ta2, String f2,
+                               NullDefault nullDefault) {}
     private record ComputedFieldEntry(ComputedField cf,
                                       Op filterOp,
                                       Object filterValue) {}
@@ -329,7 +331,25 @@ public final class JooqQuery<T> {
                                        String ta1, MathOp op, String f1,
                                        String ta2, String f2) {
         if (alias != null && f1 != null && f2 != null && op != null)
-            computedCols.add(new ComputedRow(alias, ta1, f1, op, ta2, f2));
+            computedCols.add(new ComputedRow(alias, ta1, f1, op, ta2, f2, NullDefault.NONE));
+        return this;
+    }
+
+    /**
+     * 2 sahəli riyazi ifadə sütunu + NULL default strategiyası.
+     *
+     * <pre>{@code
+     *   .computedColumn("lineTotal", "o", MathOp.MULTIPLY, "price", "o", "qty", NullDefault.ZERO)
+     *   // → COALESCE(price,0) * COALESCE(qty,0) AS lineTotal
+     * }</pre>
+     */
+    public JooqQuery<T> computedColumn(String alias,
+                                       String ta1, MathOp op, String f1,
+                                       String ta2, String f2,
+                                       NullDefault nullDefault) {
+        if (alias != null && f1 != null && f2 != null && op != null)
+            computedCols.add(new ComputedRow(alias, ta1, f1, op, ta2, f2,
+                    nullDefault != null ? nullDefault : NullDefault.NONE));
         return this;
     }
 
@@ -1559,7 +1579,8 @@ public final class JooqQuery<T> {
         if (!columns.isEmpty())
             builder.columns(columns.toArray(new String[0]));
         for (ComputedRow cr : computedCols)
-            builder.computedColumn(cr.alias(), cr.ta1(), cr.op(), cr.f1(), cr.ta2(), cr.f2());
+            builder.computedColumn(cr.alias(), cr.ta1(), cr.op(), cr.f1(), cr.ta2(), cr.f2(),
+                    cr.nullDefault());
         for (ComputedFieldEntry entry : computedFields)
             builder.computedColumn(entry.cf(), entry.filterOp(), entry.filterValue());
         for (CoalesceRow cr : coalesceCols)
