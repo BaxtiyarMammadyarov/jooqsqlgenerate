@@ -6,8 +6,9 @@ import org.jooq.Field;
 import org.jooq.SQLDialect;
 import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
-import az.mbm.jooqsqlgenerate.enums.Op;
 import az.mbm.jooqsqlgenerate.enums.MathOp;
+import az.mbm.jooqsqlgenerate.enums.NullDefault;
+import az.mbm.jooqsqlgenerate.enums.Op;
 import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 
 import java.util.ArrayList;
@@ -56,16 +57,23 @@ import java.util.Objects;
  */
 public class ComputedField {
 
-    /** Bir addım: əməliyyat + ya sahə adı, ya da iç içə ComputedField ifadəsi */
+    /**
+     * Bir addım: əməliyyat + ya sahə adı, ya da iç içə ComputedField ifadəsi.
+     * {@code nullAs != null} olduqda həmin addım üçün {@code COALESCE(field, nullAs)} tətbiq edilir.
+     */
     private record Step(MathOp op, String tableAlias, String fieldName,
-                        ComputedField nested) {
-        /** Sadə sahə addımı */
+                        ComputedField nested, Number nullAs) {
+        /** Sadə sahə addımı — global nullDefault istifadə edilir */
         static Step of(MathOp op, String tableAlias, String fieldName) {
-            return new Step(op, tableAlias, fieldName, null);
+            return new Step(op, tableAlias, fieldName, null, null);
+        }
+        /** Sadə sahə addımı — per-step null default ilə */
+        static Step ofNullAs(MathOp op, String tableAlias, String fieldName, Number nullAs) {
+            return new Step(op, tableAlias, fieldName, null, nullAs);
         }
         /** İç içə ifadə addımı */
         static Step nested(MathOp op, ComputedField nested) {
-            return new Step(op, null, null, nested);
+            return new Step(op, null, null, nested, null);
         }
         boolean isNested() { return nested != null; }
     }
@@ -90,6 +98,8 @@ public class ComputedField {
     private       String             alias         = null;
     private       DataType<?>        castType      = null;
     private       String             datePattern   = null;
+    /** Bütün zəncirə tətbiq olunan NULL default strategiyası */
+    private       NullDefault        nullDefault   = NullDefault.NONE;
 
     /** Sadə sahə konstruktoru */
     private ComputedField(String tableAlias, String fieldName) {
@@ -421,6 +431,78 @@ public class ComputedField {
         return this;
     }
 
+    private ComputedField fieldStepNullAs(MathOp op, String tableAliasAndField, Number nullAs) {
+        String[] parts = split(tableAliasAndField);
+        steps.add(Step.ofNullAs(op, parts[0], parts[1], nullAs));
+        return this;
+    }
+
+    // ─── NullDefault — bütün zəncirə global tətbiq ───────────────────────
+
+    /**
+     * LEFT JOIN null sahələri üçün COALESCE strategiyasını bütün zəncirə tətbiq edir.
+     *
+     * <pre>{@code
+     *   ComputedField.of("o.price")
+     *       .multiply("o.qty")
+     *       .withNullDefault(NullDefault.ZERO)
+     *       .as("lineTotal")
+     *   // → COALESCE(price, 0) * COALESCE(qty, 0) AS lineTotal
+     * }</pre>
+     */
+    public ComputedField withNullDefault(NullDefault nd) {
+        this.nullDefault = (nd != null) ? nd : NullDefault.NONE;
+        return this;
+    }
+
+    // ─── Per-step NullAs — IF məntiqli dəqiq nəzarət ─────────────────────
+
+    /**
+     * {@code + COALESCE(field, nullAs)} — yalnız bu addım üçün null default.
+     *
+     * <pre>{@code
+     *   .addNullAs("o.bonus", 0)   // bonus null → 0, price + 0 = price
+     * }</pre>
+     */
+    public ComputedField addNullAs(String tableAliasAndField, Number nullAs) {
+        return fieldStepNullAs(MathOp.ADD, tableAliasAndField, nullAs);
+    }
+
+    /**
+     * {@code - COALESCE(field, nullAs)} — yalnız bu addım üçün null default.
+     *
+     * <pre>{@code
+     *   .subtractNullAs("o.discount", 0)   // discount null → 0, price - 0 = price
+     * }</pre>
+     */
+    public ComputedField subtractNullAs(String tableAliasAndField, Number nullAs) {
+        return fieldStepNullAs(MathOp.SUBTRACT, tableAliasAndField, nullAs);
+    }
+
+    /**
+     * {@code * COALESCE(field, nullAs)} — yalnız bu addım üçün null default.
+     *
+     * <pre>{@code
+     *   .multiplyNullAs("o.qty", 0)   // qty null → 0, price * 0 = 0
+     *   .multiplyNullAs("o.rate", 1)  // rate null → 1, price * 1 = price
+     * }</pre>
+     */
+    public ComputedField multiplyNullAs(String tableAliasAndField, Number nullAs) {
+        return fieldStepNullAs(MathOp.MULTIPLY, tableAliasAndField, nullAs);
+    }
+
+    /**
+     * {@code / COALESCE(field, nullAs)} — yalnız bu addım üçün null default.
+     * Sıfıra bölünməni önləmək üçün daxili {@code NULLIF(denom, 0)} avtomatik tətbiq edilir.
+     *
+     * <pre>{@code
+     *   .divideNullAs("o.rate", 1)   // rate null → 1, amount / 1 = amount
+     * }</pre>
+     */
+    public ComputedField divideNullAs(String tableAliasAndField, Number nullAs) {
+        return fieldStepNullAs(MathOp.DIVIDE, tableAliasAndField, nullAs);
+    }
+
     // ─── WHERE filter (group funksiyasız CASE WHEN) ──────────────────────
 
     /**
@@ -581,7 +663,9 @@ public class ComputedField {
             result = firstNested.buildExpr(mainTable, tableMap, dialect);
         } else {
             EntityTable<?> t0 = resolve(firstTableAlias, mainTable, tableMap);
-            result = (Field<Object>) t0.getField(firstFieldName);
+            Field<?> rawFirst = t0.getField(firstFieldName);
+            // Global nullDefault varsa ilk sahəyə də tətbiq et
+            result = (Field<Object>) applyNullDefault(rawFirst, nullDefault);
         }
 
         // Zəncir əməliyyatlar
@@ -589,12 +673,19 @@ public class ComputedField {
             Field<?> operand;
 
             if (s.isNested()) {
-                // İç içə ifadə — mötərizəyə alınmış alt-ifadə
+                // İç içə ifadə — nested öz nullDefault-unu özü idarə edir
                 operand = s.nested().buildExpr(mainTable, tableMap, dialect);
             } else {
-                // Sadə sahə
                 EntityTable<?> t = resolve(s.tableAlias(), mainTable, tableMap);
-                operand = t.getField(s.fieldName());
+                Field<?> rawField = t.getField(s.fieldName());
+
+                if (s.nullAs() != null) {
+                    // Per-step dəqiq nəzarət — withNullDefault-dan üstündür
+                    operand = DSL.coalesce(rawField, DSL.val(s.nullAs()));
+                } else {
+                    // Global nullDefault
+                    operand = applyNullDefault(rawField, nullDefault);
+                }
             }
 
             Field<? extends Number> numOperand = (Field<? extends Number>) (Field<?>) operand;
@@ -603,7 +694,8 @@ public class ComputedField {
                 case ADD      -> result.add(operand);
                 case SUBTRACT -> result.subtract(operand);
                 case MULTIPLY -> result.mul(numOperand);
-                case DIVIDE   -> result.div(numOperand);
+                // DIVIDE: sıfıra bölünməni önləmək üçün NULLIF(denom, 0)
+                case DIVIDE   -> result.div(DSL.nullif(numOperand, DSL.val(0)));
                 default       -> result;
             };
         }
@@ -649,6 +741,15 @@ public class ComputedField {
                 tableAliasAndField.substring(dot + 1)
             };
         return new String[]{"", tableAliasAndField};
+    }
+
+    /**
+     * {@link NullDefault} strategiyasına görə sahəni COALESCE ilə bükür.
+     * {@code NONE} olduqda sahəni olduğu kimi qaytarır.
+     */
+    private static Field<?> applyNullDefault(Field<?> field, NullDefault nd) {
+        if (nd == null || nd == NullDefault.NONE) return field;
+        return DSL.coalesce(field, DSL.val(nd.numericValue()));
     }
 
     private static EntityTable<?> resolve(String tableAlias,
