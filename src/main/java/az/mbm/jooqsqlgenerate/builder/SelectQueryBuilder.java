@@ -1778,14 +1778,16 @@ public class SelectQueryBuilder<T> {
             };
         }
         // NullDefault.ZERO / ONE → hər iki sahəni COALESCE ilə bük
-        Field<? extends Number> n1 = (Field<? extends Number>) DSL.coalesce(f1, DSL.val(nd.numericValue()));
-        Field<? extends Number> n2 = (Field<? extends Number>) DSL.coalesce(f2, DSL.val(nd.numericValue()));
+        // Field<Object>→Field<? extends Number>: Field<?> üzərindən double-cast lazımdır
+        Field<? extends Number> n1 = (Field<? extends Number>)(Field<?>) DSL.coalesce(f1, DSL.val(nd.numericValue()));
+        Field<? extends Number> n2 = (Field<? extends Number>)(Field<?>) DSL.coalesce(f2, DSL.val(nd.numericValue()));
+        // DSL.nullif tip inference uğursuzluğuna görə raw Field cast istifadə edilir
+        Field<? extends Number> safeDenom = (Field<? extends Number>)(Field<?>) DSL.nullif((Field) n2, 0);
         return switch (op) {
             case ADD      -> n1.add(n2);
             case SUBTRACT -> n1.subtract(n2);
             case MULTIPLY -> n1.mul(n2);
-            // DIVIDE: sıfıra bölünməni önləmək üçün NULLIF(denom, 0)
-            case DIVIDE   -> n1.div(DSL.nullif(n2, DSL.val(0)));
+            case DIVIDE   -> n1.div(safeDenom);
             default       -> f1;
         };
     }
