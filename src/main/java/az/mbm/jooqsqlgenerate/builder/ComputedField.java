@@ -689,13 +689,14 @@ public class ComputedField {
             }
 
             Field<? extends Number> numOperand = (Field<? extends Number>) (Field<?>) operand;
+            // DSL.nullif tip inference uğursuzluğuna görə raw Field cast istifadə edilir
+            Field<? extends Number> safeDenom = (Field<? extends Number>)(Field<?>) DSL.nullif((Field) numOperand, 0);
 
             result = (Field<Object>) switch (s.op()) {
                 case ADD      -> result.add(operand);
                 case SUBTRACT -> result.subtract(operand);
                 case MULTIPLY -> result.mul(numOperand);
-                // DIVIDE: sıfıra bölünməni önləmək üçün NULLIF(denom, 0)
-                case DIVIDE   -> result.div(DSL.nullif(numOperand, DSL.val(0)));
+                case DIVIDE   -> result.div(safeDenom);
                 default       -> result;
             };
         }
