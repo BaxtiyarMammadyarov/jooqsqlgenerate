@@ -187,6 +187,54 @@ manager.addComputedColumn("t.price")
 // → ((price + tax) - discount) * qty AS netTotal
 ```
 
+### 2.5a NullDefault — LEFT JOIN null idarəetməsi
+
+LEFT JOIN edilmiş cədvəldə uyğun sətir olmadıqda sahə `NULL` olur, riyazi ifadə bütünlüklə `NULL` qaytarır. `NullDefault` ilə bu davranışı idarə etmək olar.
+
+**2-sahəli sadə forma + NullDefault:**
+```java
+// qty LEFT JOIN-dən null gəldikdə → COALESCE(price,0) * COALESCE(qty,0) = 0
+JooqQuery.from(Order.class, "o")
+    .leftJoin(OrderDetail.class, "d", "id", "fkOrderId")
+    .computedColumn("lineTotal", "o", MathOp.MULTIPLY, "price", "d", "qty",
+                    NullDefault.ZERO)
+    .execute(dsl);
+```
+
+**`ComputedField.withNullDefault` — bütün zəncirə:**
+```java
+// Bütün sahələr COALESCE(field, 0) ilə bükülür
+ComputedField.of("o.price")
+    .multiply("o.qty")
+    .subtract("o.discount")
+    .withNullDefault(NullDefault.ZERO)
+    .as("net")
+// → COALESCE(price,0) * COALESCE(qty,0) - COALESCE(discount,0)
+```
+
+**Per-step `*NullAs` metodları — IF məntiq, dəqiq nəzarət:**
+```java
+// Hər addıma öz default dəyərini ver
+ComputedField.of("o.price")
+    .multiplyNullAs("d.qty",      0)  // qty null → 0  (ədəd yoxdur)
+    .subtractNullAs("d.discount", 0)  // discount null → 0  (endirim yoxdur)
+    .as("net")
+
+// DIVIDE — məxrəc null olduqda NULLIF(COALESCE(field,1), 0) avtomatik:
+ComputedField.of("t.revenue")
+    .divideNullAs("t.unitCount", 1)   // unitCount null → 1 (sıfıra bölünmə yoxdur)
+    .as("avgRevenue")
+```
+
+| `NullDefault` | Dəyər | Nə zaman istifadə et |
+|---|---|---|
+| `ZERO` | 0 | ADD, SUBTRACT, MULTIPLY — yoxluq = 0 |
+| `ONE` | 1 | DIVIDE məxrəci — yoxluq = 1 (sıfıra bölünmə yoxdur) |
+| `NONE` | tətbiq edilmir | Default davranış, DB null qaytarır |
+
+> **Per-step `*NullAs` metodları `withNullDefault`-dan üstündür** — eyni sahəyə hər ikisi
+> tətbiq olunsa per-step qalib gəlir.
+
 ### 2.6 compute — mötərizəli qrup ifadəsi
 
 `compute()` / `addComputedColumn()` metodlarında boş `add()`, `subtract()`, `multiply()`, `divide()` çağırışı mötərizəli alt-ifadə (qrup) açır. Qrup `.of("field")` ilə başlayır, `.done()` ilə bağlanır və əsas zəncirə qayıdır.
@@ -1900,8 +1948,14 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `selectRound(field, scale, alias)` | ROUND SELECT + filter |
 | `distinct()` | SELECT DISTINCT |
 | `computedColumn(...)` | Riyazi ifadə sütunu |
+| `computedColumn(..., NullDefault)` | Riyazi ifadə + LEFT JOIN null idarəetməsi |
 | `compute(field).add/subtract/multiply/divide(field).as(alias)` | Fluent riyazi zəncir |
 | `compute(field).subtract().of(field)...done().as(alias)` | Mötərizəli qrup ifadəsi |
+| `ComputedField.of(f).withNullDefault(NullDefault).as(alias)` | Bütün zəncirə null default |
+| `ComputedField.of(f).multiplyNullAs(field, n).as(alias)` | `* COALESCE(field, n)` |
+| `ComputedField.of(f).addNullAs(field, n).as(alias)` | `+ COALESCE(field, n)` |
+| `ComputedField.of(f).subtractNullAs(field, n).as(alias)` | `- COALESCE(field, n)` |
+| `ComputedField.of(f).divideNullAs(field, n).as(alias)` | `/ NULLIF(COALESCE(field,n),0)` |
 | `ComputedField.ifExpr(cond,eq,then,else).as(alias)` | CASE WHEN sütun kimi |
 | `ComputedField.of(f).multiplyIf(cond,eq,t,e).as(alias)` | `f * CASE WHEN ...` |
 | `ComputedField.of(f).addIf(cond,eq,t,e).as(alias)` | `f + CASE WHEN ...` |

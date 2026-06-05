@@ -10,8 +10,8 @@
 ## Proyekt haqqında
 
 **Ad:** `jooq-sql-generate`
-**Versiya:** 1.1.5
-**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.5`
+**Versiya:** 1.1.11
+**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.11`
 **Repo:** https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate
 **Java:** 17
 **Asılılıqlar:** jOOQ 3.18.6, Spring Boot 3.2.5 (compileOnly), Jakarta Persistence 3.1.0
@@ -27,7 +27,7 @@
 
 ## Cari vəziyyət
 
-Versiya 1.1.5 hazırdır, Maven Central-a release gözləyir. `DOCUMENTATION.md` (siniflərin izahı) və `USAGE.md` (istifadə təlimatı) tam doludur.
+Versiya 1.1.11 Maven Central-a release edildi. `DOCUMENTATION.md` və `USAGE.md` tam yenidir.
 
 **Əsas sinif strukturu:**
 ```
@@ -42,7 +42,8 @@ az.mbm.jooqsqlgenerate
 ├── strategy/                      — FilterStrategy, FilterStrategies
 └── enums/                         — Op, Agg, FilterOperationConstants,
                                      LogicalOperator, MathOperation,
-                                     JoinConditionType, SqlFunction
+                                     JoinConditionType, SqlFunction,
+                                     NullDefault
 ```
 
 **Yadda saxlanmalı arxitektura qərarları:**
@@ -59,6 +60,54 @@ az.mbm.jooqsqlgenerate
 ---
 
 ## İş Jurnalı
+
+### 2026-06-05 — v1.1.11: NullDefault — LEFT JOIN null idarəetməsi
+
+**Problem:** LEFT JOIN edilmiş cədvəldə uyğun sətir olmadıqda sahə `NULL` olur,
+riyazi ifadənin (`computedColumn`, `ComputedField`, `aggWithMath`) nəticəsi bütünlüklə
+`NULL` qaytarır. Framework əvvəlki hardcoded COALESCE cəhdi düzgün deyildi (memarlıq baxımından).
+
+**Həll — eksplisit `NullDefault` API:**
+
+**Yeni enum `enums/NullDefault.java`:** `ZERO`, `ONE`, `NONE`
+
+**`ComputedField` dəyişiklikləri:**
+- `Step` record-a `nullAs` (per-step null default) əlavə edildi
+- `nullDefault` field + `withNullDefault(NullDefault)` — bütün zəncirə global default
+- `addNullAs`, `subtractNullAs`, `multiplyNullAs`, `divideNullAs` — per-step IF məntiq
+- `applyNullDefault()` private yardımçı metod
+- `buildExpr()` — per-step `nullAs` > global `nullDefault` > heç nə (prioritet sırası)
+- DIVIDE-da `NULLIF(denom, 0)` — sıfıra bölünmə qoruması
+
+**`SelectQueryBuilder` dəyişiklikləri:**
+- `ComputedCol` record-a `NullDefault nullDefault` əlavə edildi
+- `computedColumn(..., NullDefault)` yeni overload
+- `applyMathOp(f1, op, f2, NullDefault)` — NullDefault.NONE olduqda coalesce yoxdur
+
+**`JooqQuery` dəyişiklikləri:**
+- `ComputedRow` record-a `NullDefault nullDefault` əlavə edildi
+- `computedColumn(..., NullDefault)` yeni overload
+- `aggWithMath` — hardcoded coalesce geri alındı (SUM/AVG SQL özü NULL sətirləri ignore edir)
+
+**İstifadə:**
+```java
+// Global — bütün zəncirə
+ComputedField.of("o.price").multiply("o.qty")
+    .withNullDefault(NullDefault.ZERO).as("lineTotal")
+
+// Per-step dəqiq nəzarət
+ComputedField.of("o.price")
+    .multiplyNullAs("d.qty", 0)
+    .subtractNullAs("d.discount", 0)
+    .as("net")
+
+// 2-sahəli sadə forma
+.computedColumn("net", "o", MathOp.SUBTRACT, "amount", "d", "discount", NullDefault.ZERO)
+```
+
+**Versiya:** 1.1.11 → Maven Central-a release edildi.
+
+---
 
 ### 2026-05-01 — Cowork sessiyası (ilkin setup)
 - PROGRESS.md yaradıldı (cross-device kontekst saxlamaq üçün)
@@ -286,14 +335,6 @@ istifadəçi yalnız `JooqManager` ilə işləməlidir.
 ## Yarımçıq işlər / TODO
 
 <!-- Burada açıq tapşırıqlar, bug-lar, ideyalar -->
-
-- [ ] **Maven Central-a release (1.1.6):**
-  - `~/.gradle/gradle.properties` və `~/.gradle/secret.pgp` iş kompüterinə köçürüldü ✓
-  - Növbəti addımlar (gələcək sessiyada):
-    1. `./gradlew clean publishToMavenLocal` — signing test
-    2. `build.gradle.kts`-də versiya artıq `1.1.6`-dır — dəyişmə lazım deyil
-    3. `./gradlew clean publishToSonatype closeAndReleaseSonatypeStagingRepository`
-    4. `git add -A && git commit -m "release: 1.1.6" && git push && git tag v1.1.6 && git push --tags`
 - [ ] `JooqQuery.executeGenerated()` daxilində COUNT sorğusu (sətr ~1882) də
       JOIN-ləri tətbiq etmir. Tövsiyə: `dsl.selectCount().from(grouped.asTable("_count"))`
       üzərinə keçmək (entity mode-dakı kimi düzgün count almaq üçün).

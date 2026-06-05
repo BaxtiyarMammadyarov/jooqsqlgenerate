@@ -7,6 +7,30 @@
 
 ## Dəyişikliklər — Versiya Tarixi
 
+### v1.1.11 — NullDefault: LEFT JOIN null idarəetməsi
+
+**Problem:** LEFT JOIN edilmiş cədvəldə uyğun sətir olmadıqda həmin cədvəlin bütün sahələri `NULL` qaytarır. Riyazi ifadədə (`computedColumn`, `ComputedField`) hər hansı operand `NULL` olduqda SQL nəticəsi bütünlüklə `NULL` olur.
+
+**Həll:** Eksplisit `NullDefault` API — framework avtomatik coalesce etmir, istifadəçi özü seçir.
+
+**Yeni enum `NullDefault`:**
+- `ZERO` — `COALESCE(field, 0)` — ADD/SUBTRACT üçün tövsiyə edilir
+- `ONE`  — `COALESCE(field, 1)` — nadir hallarda
+- `NONE` — COALESCE tətbiq edilmir, DB davranışı (default)
+
+**`ComputedField`-ə əlavə edilən metodlar:**
+- `.withNullDefault(NullDefault)` — bütün zəncirlərə eyni default
+- `.addNullAs(field, nullAs)` — `+ COALESCE(field, nullAs)`
+- `.subtractNullAs(field, nullAs)` — `- COALESCE(field, nullAs)`
+- `.multiplyNullAs(field, nullAs)` — `* COALESCE(field, nullAs)`
+- `.divideNullAs(field, nullAs)` — `/ COALESCE(field, nullAs)` + auto `NULLIF(denom, 0)`
+
+**`computedColumn` — yeni overload:**
+- `JooqQuery.computedColumn(alias, ta1, op, f1, ta2, f2, NullDefault)`
+- `SelectQueryBuilder.computedColumn(alias, alias1, op, f1, alias2, f2, NullDefault)`
+
+---
+
 ### v1.1.10 — IfExpr, CoalesceExpr, şərtli zəncir metodları
 
 **Nə əlavə edildi?**
@@ -1506,6 +1530,42 @@ ComputedField.of("o.price")
 ```
 
 Yaranan SQL: `(o.price * o.quantity) - o.discount AS netAmount`
+
+**NullDefault — LEFT JOIN null idarəetməsi (v1.1.11-dən)**
+
+LEFT JOIN edilmiş cədvəldə uyğun sətir olmadıqda sahə `NULL` olur, riyazi ifadə bütünlüklə `NULL` qaytarır. `NullDefault` API ilə bu davranışı idarə etmək olar.
+
+**Global — bütün zəncirə:**
+
+```java
+// qty null → 0: COALESCE(price,0) * COALESCE(qty,0)
+ComputedField.of("o.price")
+    .multiply("o.qty")
+    .withNullDefault(NullDefault.ZERO)
+    .as("lineTotal")
+```
+
+**Per-step (IF məntiq) — dəqiq nəzarət:**
+
+```java
+ComputedField.of("o.price")
+    .multiplyNullAs("o.qty", 0)       // qty null → 0  → price * 0 = 0
+    .subtractNullAs("o.discount", 0)  // discount null → 0  → result - 0 = result
+    .as("net")
+```
+
+| Metod | SQL nəticəsi |
+|---|---|
+| `.withNullDefault(NullDefault.ZERO)` | Bütün sadə sahələr `COALESCE(field, 0)` |
+| `.withNullDefault(NullDefault.ONE)` | Bütün sadə sahələr `COALESCE(field, 1)` |
+| `.addNullAs(field, n)` | `+ COALESCE(field, n)` |
+| `.subtractNullAs(field, n)` | `- COALESCE(field, n)` |
+| `.multiplyNullAs(field, n)` | `* COALESCE(field, n)` |
+| `.divideNullAs(field, n)` | `/ NULLIF(COALESCE(field, n), 0)` |
+
+> **Qeyd:** `withNullDefault` yalnız sadə sahələrə tətbiq olunur — `nested`, `ifExpr`, `coalesce` ilə başlayan addımlara deyil. Per-step `*NullAs` metodları `withNullDefault`-dan üstündür.
+
+---
 
 **Cast metodları (v1.1.9-dan)**
 
