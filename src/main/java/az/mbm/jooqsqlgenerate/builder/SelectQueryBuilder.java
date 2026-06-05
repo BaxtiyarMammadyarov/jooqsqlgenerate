@@ -6,8 +6,9 @@ import org.jooq.SQLDialect;
 import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
 import az.mbm.jooqsqlgenerate.core.SelectTable;
-import az.mbm.jooqsqlgenerate.enums.Op;
 import az.mbm.jooqsqlgenerate.enums.MathOp;
+import az.mbm.jooqsqlgenerate.enums.NullDefault;
+import az.mbm.jooqsqlgenerate.enums.Op;
 import az.mbm.jooqsqlgenerate.spec.Specification;
 import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 
@@ -137,7 +138,8 @@ public class SelectQueryBuilder<T> {
             String alias,
             String tableAlias1, String field1,
             MathOp op,
-            String tableAlias2, String field2) {}
+            String tableAlias2, String field2,
+            NullDefault nullDefault) {}
 
     /** CONCAT SELECT sütunu */
     private record ConcatCol(String alias, String separator, List<ConcatItem> items) {}
@@ -275,7 +277,25 @@ public class SelectQueryBuilder<T> {
             String alias,
             String alias1, MathOp op, String field1,
             String alias2, String field2) {
-        computed.add(new ComputedCol(alias, alias1, field1, op, alias2, field2));
+        computed.add(new ComputedCol(alias, alias1, field1, op, alias2, field2, NullDefault.NONE));
+        return this;
+    }
+
+    /**
+     * Riyazi əməliyyatla hesablanmış sütun — 2 sahə + NULL default strategiyası.
+     *
+     * <pre>{@code
+     *   .computedColumn("lineTotal", "o", MathOp.MULTIPLY, "price", "o", "qty", NullDefault.ZERO)
+     *   // → COALESCE(price,0) * COALESCE(qty,0) AS lineTotal
+     * }</pre>
+     */
+    public SelectQueryBuilder<T> computedColumn(
+            String alias,
+            String alias1, MathOp op, String field1,
+            String alias2, String field2,
+            NullDefault nullDefault) {
+        computed.add(new ComputedCol(alias, alias1, field1, op, alias2, field2,
+                nullDefault != null ? nullDefault : NullDefault.NONE));
         return this;
     }
 
@@ -1331,7 +1351,7 @@ public class SelectQueryBuilder<T> {
             EntityTable<?> t2 = tableMap.getOrDefault(c.tableAlias2(), mainTable);
             Field<Object> f1 = (Field<Object>) t1.getField(c.field1());
             Field<Object> f2 = (Field<Object>) t2.getField(c.field2());
-            fields.add(applyMathOp(f1, c.op(), f2).as(c.alias()));
+            fields.add(applyMathOp(f1, c.op(), f2, c.nullDefault()).as(c.alias()));
         }
 
         // Riyazi əməliyyatla hesablanmış sütunlar — çox sahəli zəncir form
@@ -1744,14 +1764,28 @@ public class SelectQueryBuilder<T> {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private Field<?> applyMathOp(Field<Object> f1, MathOp op, Field<Object> f2) {
-        // mul/div Field<? extends Number> tələb edir — double cast ilə keçir
-        Field<? extends Number> numF2 = (Field<? extends Number>) (Field<?>) f2;
+    private Field<?> applyMathOp(Field<Object> f1, MathOp op, Field<Object> f2,
+                                  NullDefault nd) {
+        // NullDefault.NONE → COALESCE tətbiq edilmir
+        if (nd == null || nd == NullDefault.NONE) {
+            Field<? extends Number> numF2 = (Field<? extends Number>) (Field<?>) f2;
+            return switch (op) {
+                case ADD      -> f1.add(f2);
+                case SUBTRACT -> f1.subtract(f2);
+                case MULTIPLY -> f1.mul(numF2);
+                case DIVIDE   -> f1.div(numF2);
+                default       -> f1;
+            };
+        }
+        // NullDefault.ZERO / ONE → hər iki sahəni COALESCE ilə bük
+        Field<? extends Number> n1 = (Field<? extends Number>) DSL.coalesce(f1, DSL.val(nd.numericValue()));
+        Field<? extends Number> n2 = (Field<? extends Number>) DSL.coalesce(f2, DSL.val(nd.numericValue()));
         return switch (op) {
-            case ADD      -> f1.add(f2);
-            case SUBTRACT -> f1.subtract(f2);
-            case MULTIPLY -> f1.mul(numF2);
-            case DIVIDE   -> f1.div(numF2);
+            case ADD      -> n1.add(n2);
+            case SUBTRACT -> n1.subtract(n2);
+            case MULTIPLY -> n1.mul(n2);
+            // DIVIDE: sıfıra bölünməni önləmək üçün NULLIF(denom, 0)
+            case DIVIDE   -> n1.div(DSL.nullif(n2, DSL.val(0)));
             default       -> f1;
         };
     }
