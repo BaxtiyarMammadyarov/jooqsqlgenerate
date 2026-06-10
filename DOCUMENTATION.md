@@ -7,6 +7,36 @@
 
 ## Dəyişikliklər — Versiya Tarixi
 
+### v1.1.12 — JOIN alias dəstəyi, orderBy düzəlişi, andOnEqual/andOnNotEqual
+
+**Düzəlişlər:**
+
+- **`addOrderBy("tax.accountNo")`** — entity mode-da join table alias-ı (`tax`, `i`, vs.) ilə verilən ORDER BY sahəsi artıq düzgün table-dan resolve edilir. Əvvəl main table-da axtarıb `Field not found` xətası verirdi.
+- **`andOn("tax.status", Op.EQUAL, "A")`** — `andOn`-da alias ilə field verilə bilər. Əvvəl yalnız join table-ın öz sahəsi (alias-sız) dəstəklənirdi.
+- **`onFrom("i.fkTaxIndicatorId", "tax.id")`** — `onFrom`-un ikinci parametrində `alias.field` formatı dəstəklənir. Əvvəl ikinci parametr həmişə join table-ın sadə field adı kimi qəbul edilirdi.
+
+**Yeni metodlar (`JoinBuilder`):**
+- `andOnEqual(field, value)` — `equal()` ilə eynidir, daha oxunaqlı ad
+- `andOnNotEqual(field, value)` — `notEqual()` ilə eynidir, daha oxunaqlı ad
+
+**İstifadə nümunəsi:**
+```java
+factory.create()
+    .setMainTable(IncomeFlowEntity.class, "t")
+    .addInnerJoin(IncomeItem.class, "i")
+        .onFrom("t.fkIncomeItemId", "i.id")   // ikinci parametrdə alias
+        .andOnEqual("i.status", "A")            // alias ilə andOn
+        .done()
+    .addInnerJoin(ProfitTaxIndicator.class, "tax")
+        .onFrom("i.fkTaxIndicatorId", "tax.id")
+        .andOnEqual("tax.status", "A")
+        .done()
+    .addOrderBy("tax.accountNo", "asc")         // join table field-i ilə orderBy
+    .fetch();
+```
+
+---
+
 ### v1.1.11 — NullDefault: LEFT JOIN null idarəetməsi
 
 **Problem:** LEFT JOIN edilmiş cədvəldə uyğun sətir olmadıqda həmin cədvəlin bütün sahələri `NULL` qaytarır. Riyazi ifadədə (`computedColumn`, `ComputedField`) hər hansı operand `NULL` olduqda SQL nəticəsi bütünlüklə `NULL` olur.

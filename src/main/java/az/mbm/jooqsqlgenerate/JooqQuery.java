@@ -682,8 +682,18 @@ public final class JooqQuery<T> {
             return andOn(field, Op.EQUAl, value);
         }
 
+        /** Alias: {@code equal} ilə eynidir */
+        public JoinBuilder andOnEqual(String field, Object value) {
+            return andOn(field, Op.EQUAl, value);
+        }
+
         /** Shortcut: {@code AND join.field != value} */
         public JoinBuilder notEqual(String field, Object value) {
+            return andOn(field, Op.NOT_EQUAL, value);
+        }
+
+        /** Alias: {@code notEqual} ilə eynidir */
+        public JoinBuilder andOnNotEqual(String field, Object value) {
             return andOn(field, Op.NOT_EQUAL, value);
         }
 
@@ -1621,16 +1631,44 @@ public final class JooqQuery<T> {
                 EntityTable<?> fromTable = new EntityTable<>(fromClass, fp.fromAlias());
                 @SuppressWarnings("unchecked")
                 Field<Object> fromField = (Field<Object>) fromTable.getField(fp.fromField());
+
+                // toField "alias.field" formatında ola bilər (məs: "tax.id")
+                String rawToField = fp.toField();
+                int toDot = rawToField.indexOf('.');
+                EntityTable<?> resolvedToTable;
+                String resolvedToFieldName;
+                if (toDot > 0) {
+                    String toAlias = rawToField.substring(0, toDot);
+                    resolvedToFieldName = rawToField.substring(toDot + 1);
+                    Class<?> toClass = entityClassMap.getOrDefault(toAlias, jr.entity());
+                    resolvedToTable = new EntityTable<>(toClass, toAlias);
+                } else {
+                    resolvedToFieldName = rawToField;
+                    resolvedToTable = toTable;
+                }
                 @SuppressWarnings("unchecked")
-                Field<Object> toField   = (Field<Object>) toTable.getField(fp.toField());
+                Field<Object> toField = (Field<Object>) resolvedToTable.getField(resolvedToFieldName);
                 Condition c = applyFieldOp(fp.op(), fromField, toField);
                 on = (on == null) ? c : on.and(c);
             }
 
-            // Əlavə value şərtlər (t1.status = 'A' kimi)
+            // Əlavə value şərtlər (t1.status = 'A' və ya tax.status = 'A' kimi)
             for (JoinFilterRow extra : jr.extras()) {
+                String rawField = extra.field();
+                int dot = rawField.indexOf('.');
+                EntityTable<?> filterTable;
+                String fieldName;
+                if (dot > 0) {
+                    String fieldAlias = rawField.substring(0, dot);
+                    fieldName = rawField.substring(dot + 1);
+                    Class<?> cls = entityClassMap.getOrDefault(fieldAlias, jr.entity());
+                    filterTable = new EntityTable<>(cls, fieldAlias);
+                } else {
+                    fieldName = rawField;
+                    filterTable = toTable;
+                }
                 @SuppressWarnings("unchecked")
-                Field<Object> f = (Field<Object>) toTable.getField(extra.field());
+                Field<Object> f = (Field<Object>) filterTable.getField(fieldName);
                 Condition c = FilterStrategies.get(extra.op()).apply(f, extra.value());
                 on = (on == null) ? c : on.and(c);
             }

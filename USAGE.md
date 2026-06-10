@@ -7,13 +7,13 @@
 <dependency>
     <groupId>az.mbm</groupId>
     <artifactId>jooq-sql-generate</artifactId>
-    <version>1.1.10</version>
+    <version>1.1.12</version>
 </dependency>
 ```
 
 ```kotlin
 // Gradle
-implementation("az.mbm:jooq-sql-generate:1.1.10")
+implementation("az.mbm:jooq-sql-generate:1.1.12")
 ```
 
 ---
@@ -610,6 +610,25 @@ JooqQuery.from(WarehouseFlow.class, "t")
     .execute(dsl);
 ```
 
+**v1.1.12-dən:** `andOn`-da alias ilə field verilə bilər:
+```java
+.andOnEqual("p.status", "A")      // AND p.status = 'A'
+.andOnNotEqual("p.status", "D")   // AND p.status != 'D'
+```
+
+**`andOn` shortcut metodları:**
+
+| Metod | SQL |
+|---|---|
+| `andOnEqual(field, value)` | `AND field = value` |
+| `andOnNotEqual(field, value)` | `AND field != value` |
+| `equal(field, value)` | `AND field = value` (eyni) |
+| `notEqual(field, value)` | `AND field != value` (eyni) |
+| `greaterThan(field, value)` | `AND field > value` |
+| `lessThan(field, value)` | `AND field < value` |
+| `isNull(field)` | `AND field IS NULL` |
+| `isNotNull(field)` | `AND field IS NOT NULL` |
+
 ### 3.3 onFrom — zəncir JOIN (ikinci cədvəl üçüncüyə)
 
 Birinci → ikinci cədvəl normal leftJoin, ikinci → üçüncü `onFrom()` ilə:
@@ -641,6 +660,15 @@ jooq.addInnerJoin(RequestEntity.class, "r")
 //       ON t.fk_request_id = r.id
 //      AND t.amount > r.min_amount
 //      AND r.status = 'A'
+```
+
+**v1.1.12-dən:** `onFrom`-un ikinci parametrində `alias.field` formatı dəstəklənir:
+
+```java
+.addInnerJoin(ProfitTaxIndicator.class, "tax")
+    .onFrom("i.fkTaxIndicatorId", "tax.id")   // i.fk_tax_indicator_id = tax.id
+    .andOnEqual("tax.status", "A")             // AND tax.status = 'A'
+    .done()
 ```
 
 `onFrom()` dəstəklənən operatorlar: `EQUAl`, `NOT_EQUAL`, `LESS_THAN`, `LESS_THAN_OR_EQUAL_TO`, `GREATER_THAN`, `GREATER_THAN_OR_EQUAL_TO`.
@@ -1576,6 +1604,17 @@ manager.addCase()
 
 // Generated field ilə
 .orderBy(USERS.CREATED_AT.desc(), USERS.FIRST_NAME.asc())
+```
+
+**v1.1.12-dən:** entity mode-da join table alias-ları ORDER BY-da düzgün işləyir:
+```java
+factory.create()
+    .setMainTable(IncomeFlowEntity.class, "t")
+    .addInnerJoin(ProfitTaxIndicator.class, "tax")
+        .onFrom("i.fkTaxIndicatorId", "tax.id")
+        .done()
+    .addOrderBy("tax.accountNo", "asc")   // ✓ tax alias-ı tanınır
+    .fetch();
 ```
 
 **JooqManager:**

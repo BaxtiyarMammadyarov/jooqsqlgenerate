@@ -115,6 +115,8 @@ public class SelectQueryBuilder<T> {
 
     // ─── ORDER BY ────────────────────────────────────────────────────────
     private final List<SortField<?>> orderFields = new ArrayList<>();
+    private record PendingOrder(String tableAliasAndField, boolean asc) {}
+    private final List<PendingOrder> pendingOrders = new ArrayList<>();
 
     // ─── Flags ───────────────────────────────────────────────────────────
     private boolean distinct              = false;
@@ -1115,8 +1117,7 @@ public class SelectQueryBuilder<T> {
      * <pre>{@code .orderByDesc("u.createdAt") }</pre>
      */
     public SelectQueryBuilder<T> orderByDesc(String tableAliasAndField) {
-        Field<Object> f = (Field<Object>) resolveTable(tableAliasAndField).getField(fieldPart(tableAliasAndField));
-        orderFields.add(f.desc());
+        pendingOrders.add(new PendingOrder(tableAliasAndField, false));
         return this;
     }
 
@@ -1126,8 +1127,7 @@ public class SelectQueryBuilder<T> {
      * <pre>{@code .orderByAsc("u.name") }</pre>
      */
     public SelectQueryBuilder<T> orderByAsc(String tableAliasAndField) {
-        Field<Object> f = (Field<Object>) resolveTable(tableAliasAndField).getField(fieldPart(tableAliasAndField));
-        orderFields.add(f.asc());
+        pendingOrders.add(new PendingOrder(tableAliasAndField, true));
         return this;
     }
 
@@ -1230,7 +1230,7 @@ public class SelectQueryBuilder<T> {
         SelectHavingStep<Record> afterGroupBy = buildGroupBy(query, mainTable, whereCondition, tableMap, dialect);
 
         // Addım 7 — ORDER BY sahələri (normal + aqreqat)
-        List<SortField<?>> allOrderFields = buildAllOrderFields();
+        List<SortField<?>> allOrderFields = buildAllOrderFields(tableMap, mainTable);
 
         // Addım 8 — ORDER BY tətbiqi
         SelectSeekStepN<Record> ordered = afterGroupBy.orderBy(allOrderFields);
@@ -1697,8 +1697,21 @@ public class SelectQueryBuilder<T> {
         return (allHaving != null) ? (SelectHavingStep<Record>) grouped.having(allHaving) : grouped;
     }
 
-    private List<SortField<?>> buildAllOrderFields() {
+    private List<SortField<?>> buildAllOrderFields(Map<String, EntityTable<?>> tableMap, EntityTable<T> mainTable) {
         List<SortField<?>> all = new ArrayList<>(orderFields);
+
+        // pendingOrders — tableMap ilə düzgün resolve et
+        for (PendingOrder po : pendingOrders) {
+            String alias = aliasPart(po.tableAliasAndField());
+            String field = fieldPart(po.tableAliasAndField());
+            EntityTable<?> t = alias != null
+                    ? tableMap.getOrDefault(alias, mainTable)
+                    : mainTable;
+            @SuppressWarnings("unchecked")
+            Field<Object> f = (Field<Object>) t.getField(field);
+            all.add(po.asc() ? f.asc() : f.desc());
+        }
+
         if (aggregator != null) {
             for (AggregateBuilder.AggField agg : aggregator.getAggFields()) {
                 if (agg.orderDirection() != null) {
