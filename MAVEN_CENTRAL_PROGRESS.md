@@ -20,9 +20,9 @@
 
 ### 3. GPG açarı yaradıldı
 - `gpg --gen-key` ilə `ed25519` açarı yaradıldı
-- **Fingerprint:** `3174A18056536731813E20AB14758D72E48BDA28`
+- **Fingerprint:** `5647658`
 - **Key ID (son 8):** `E48BDA28`
-- Açar keyserver-ə göndərildi: `gpg --keyserver keyserver.ubuntu.com --send-keys 3174A18056536731813E20AB14758D72E48BDA28`
+- Açar keyserver-ə göndərildi: `gpg --keyserver keyserver.ubuntu.com --send-keys 546456546544654656546`
 - ASCII armor formatda export edildi: `gpg --export-secret-keys --armor E48BDA28 > ~/.gradle/secret.pgp`
 
 ### 4. `~/.gradle/gradle.properties` faylı
