@@ -2,6 +2,7 @@ package az.mbm.jooqsqlgenerate.builder;
 
 import org.jooq.Condition;
 import org.jooq.Field;
+import org.jooq.Table;
 import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
 
@@ -141,5 +142,48 @@ public final class IfExpr {
         int dot = s.indexOf('.');
         if (dot > 0) return new String[]{s.substring(0, dot), s.substring(dot + 1)};
         return new String[]{"", s};
+    }
+
+    // ─── Generated mode (derived table) — EntityTable-suz çevirmə ───────
+
+    /**
+     * Generated mode üçün jOOQ {@link Field}-ə çevirir — {@code EntityTable}
+     * əvəzinə birbaşa {@link Table} istifadə edir.
+     *
+     * @param mainTable ana generated table
+     * @param tableMap  alias → Table xəritəsi (joinTableRegistry)
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public Field<?> toFieldGenerated(Table<?> mainTable, java.util.Map<String, Table<?>> tableMap) {
+        Table<?> ct = GeneratedFieldResolver.resolveTable(condAlias, mainTable, tableMap);
+        Field<?> rawCond = GeneratedFieldResolver.resolveField(ct, condField);
+        if (rawCond == null) rawCond = DSL.field(DSL.name(condAlias, condField));
+        Field<Object> condCol = (Field<Object>) rawCond;
+
+        Condition cond = condCol.eq(DSL.val(condValue));
+
+        Field thenField = resolveValueGenerated(thenValue, mainTable, tableMap);
+        Field elseField = resolveValueGenerated(elseValue, mainTable, tableMap);
+
+        //noinspection unchecked
+        return DSL.when(cond, thenField).otherwise(elseField);
+    }
+
+    /** Generated mode üçün {@link #resolveValue} ekvivalenti — Table əsaslı. */
+    static Field<?> resolveValueGenerated(Object value,
+                                          Table<?> mainTable,
+                                          java.util.Map<String, Table<?>> tableMap) {
+        if (value instanceof String s) {
+            int dot = s.indexOf('.');
+            if (dot > 0) {
+                String alias     = s.substring(0, dot);
+                String fieldName = s.substring(dot + 1);
+                if (tableMap.containsKey(alias)) {
+                    Field<?> f = GeneratedFieldResolver.resolveField(tableMap.get(alias), fieldName);
+                    if (f != null) return f;
+                }
+            }
+        }
+        return DSL.inline(value);
     }
 }

@@ -1,6 +1,7 @@
 package az.mbm.jooqsqlgenerate.builder;
 
 import org.jooq.Field;
+import org.jooq.Table;
 import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
 
@@ -95,6 +96,31 @@ public final class CoalesceExpr {
 
         for (Object v : values) {
             parts.add(IfExpr.resolveValue(v, mainTable, tableMap));
+        }
+
+        if (defaultValue != null) {
+            parts.add(DSL.inline(defaultValue));
+        }
+
+        if (parts.isEmpty())
+            throw new IllegalStateException("CoalesceExpr: siyahı boşdur");
+
+        Field<?> first = parts.get(0);
+        Field<?>[] rest = parts.subList(1, parts.size()).toArray(new Field[0]);
+        return DSL.coalesce(first, rest);
+    }
+
+    // ─── Generated mode (derived table) — EntityTable-suz çevirmə ───────
+
+    /**
+     * Generated mode üçün jOOQ {@link Field}-ə çevirir — {@code EntityTable}
+     * əvəzinə birbaşa {@link Table} istifadə edir.
+     */
+    public Field<?> toFieldGenerated(Table<?> mainTable, java.util.Map<String, Table<?>> tableMap) {
+        List<Field<?>> parts = new ArrayList<>();
+
+        for (Object v : values) {
+            parts.add(IfExpr.resolveValueGenerated(v, mainTable, tableMap));
         }
 
         if (defaultValue != null) {

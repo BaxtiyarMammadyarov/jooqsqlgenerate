@@ -196,6 +196,391 @@ public final class Filter<T> {
         return add(table -> table.getField(field).likeRegex(pattern));
     }
 
+    // ─── ROUND müqayisə əməliyyatları (hesablanmayan sütunlar üçün) ──────
+    //
+    // WHERE ROUND(field, scale) OP value — value null-dursa atlanır
+    //   .gtRound2("unitCost", 9.99)   → WHERE ROUND(unit_cost, 2) > 9.99
+
+    // ── Scale 0 — tam ədədə yuvarlama ──────────────────────────────────────
+
+    /** {@code WHERE ROUND(field, 0) = value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> eqRound0(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.EQUAL_ROUND_0).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 0) != value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> notEqRound0(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.NOT_EQUAL_ROUND_0).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 0) > value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> gtRound0(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.GREATER_THAN_ROUND_0).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 0) >= value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> gteRound0(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.GREATER_THAN_OR_EQUAL_TO_ROUND_0).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 0) < value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> ltRound0(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.LESS_THAN_ROUND_0).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 0) <= value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> lteRound0(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.LESS_THAN_OR_EQUAL_TO_ROUND_0).apply(f, value);
+        });
+    }
+
+
+    // ── Scale 1 — bir onluq rəqəm ──────────────────────────────────────
+
+    /** {@code WHERE ROUND(field, 1) = value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> eqRound1(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.EQUAL_ROUND_1).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 1) != value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> notEqRound1(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.NOT_EQUAL_ROUND_1).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 1) > value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> gtRound1(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.GREATER_THAN_ROUND_1).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 1) >= value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> gteRound1(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.GREATER_THAN_OR_EQUAL_TO_ROUND_1).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 1) < value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> ltRound1(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.LESS_THAN_ROUND_1).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 1) <= value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> lteRound1(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.LESS_THAN_OR_EQUAL_TO_ROUND_1).apply(f, value);
+        });
+    }
+
+
+    // ── Scale 2 — iki onluq rəqəm (qiymət/məbləğ üçün ən çox istifadə olunur) ──────────────────────────────────────
+
+    /** {@code WHERE ROUND(field, 2) = value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> eqRound2(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.EQUAL_ROUND_2).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 2) != value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> notEqRound2(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.NOT_EQUAL_ROUND_2).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 2) > value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> gtRound2(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.GREATER_THAN_ROUND_2).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 2) >= value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> gteRound2(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.GREATER_THAN_OR_EQUAL_TO_ROUND_2).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 2) < value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> ltRound2(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.LESS_THAN_ROUND_2).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 2) <= value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> lteRound2(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.LESS_THAN_OR_EQUAL_TO_ROUND_2).apply(f, value);
+        });
+    }
+
+
+    // ── Scale 3 — üç onluq rəqəm ──────────────────────────────────────
+
+    /** {@code WHERE ROUND(field, 3) = value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> eqRound3(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.EQUAL_ROUND_3).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 3) != value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> notEqRound3(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.NOT_EQUAL_ROUND_3).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 3) > value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> gtRound3(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.GREATER_THAN_ROUND_3).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 3) >= value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> gteRound3(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.GREATER_THAN_OR_EQUAL_TO_ROUND_3).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 3) < value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> ltRound3(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.LESS_THAN_ROUND_3).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 3) <= value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> lteRound3(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.LESS_THAN_OR_EQUAL_TO_ROUND_3).apply(f, value);
+        });
+    }
+
+
+    // ── Scale 4 — dörd onluq rəqəm ──────────────────────────────────────
+
+    /** {@code WHERE ROUND(field, 4) = value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> eqRound4(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.EQUAL_ROUND_4).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 4) != value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> notEqRound4(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.NOT_EQUAL_ROUND_4).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 4) > value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> gtRound4(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.GREATER_THAN_ROUND_4).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 4) >= value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> gteRound4(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.GREATER_THAN_OR_EQUAL_TO_ROUND_4).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 4) < value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> ltRound4(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.LESS_THAN_ROUND_4).apply(f, value);
+        });
+    }
+
+    /** {@code WHERE ROUND(field, 4) <= value} — value null-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> lteRound4(String field, Object value) {
+        if (isBlank(field) || value == null) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.LESS_THAN_OR_EQUAL_TO_ROUND_4).apply(f, value);
+        });
+    }
+
+
+    // ─── Türk əlifbası case-insensitive LIKE ─────────────────────────────
+
+    /** Türk İ/I-yə uyğun case-insensitive LIKE — value null/boş-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> likeIgnoreCase(String field, String value) {
+        if (isBlank(field) || isBlank(value)) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.LIKE_IGNORE_CASE).apply(f, value);
+        });
+    }
+
+    /** Türk İ/I-yə uyğun case-insensitive STARTWITH — value null/boş-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> startWithIgnoreCase(String field, String value) {
+        if (isBlank(field) || isBlank(value)) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.START_WITH_IGNORE_CASE).apply(f, value);
+        });
+    }
+
+    /** Türk İ/I-yə uyğun case-insensitive ENDWITH — value null/boş-dursa atlanır */
+    @SuppressWarnings("unchecked")
+    public Filter<T> endWithIgnoreCase(String field, String value) {
+        if (isBlank(field) || isBlank(value)) return this;
+        return add(table -> {
+            var f = (org.jooq.Field<Object>) table.getField(field);
+            return az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                    .get(az.mbm.jooqsqlgenerate.enums.Op.END_WITH_IGNORE_CASE).apply(f, value);
+        });
+    }
+
     // ─── OR bloku ────────────────────────────────────────────────────────
 
     /**

@@ -1619,6 +1619,60 @@ public class JooqManager {
             manager.q().aggOnComputed(fn, expr.as(alias), alias, scale);
             return manager;
         }
+
+        /**
+         * Alias + ORDER BY istiqaməti ilə (yuvarlama olmadan).
+         *
+         * <pre>{@code
+         *   .addAggFunction(Agg.SUM, "t.price").subtract("t.discount").as("netTotal", "DESC")
+         * }</pre>
+         */
+        public JooqManager as(String alias, String orderDir) {
+            manager.q().aggOnComputed(fn, expr.as(alias), alias, null, orderDir);
+            return manager;
+        }
+
+        /**
+         * Alias + yuvarlama + ORDER BY istiqaməti ilə.
+         *
+         * <pre>{@code
+         *   .addAggFunction(Agg.SUM, "t.price").subtract("t.discount").as("netTotal", 2, "DESC")
+         * }</pre>
+         */
+        public JooqManager as(String alias, int scale, String orderDir) {
+            manager.q().aggOnComputed(fn, expr.as(alias), alias, scale, orderDir);
+            return manager;
+        }
+
+        /**
+         * Alias + ORDER BY istiqaməti + açıq ORDER BY sıra nömrəsi ilə (yuvarlama olmadan).
+         *
+         * <p>{@code orderSeq} bu sıralama meyarının ORDER BY-da hansı mövqedə
+         * olacağını çağırış sırasından asılı olmayaraq təyin edir — kiçik dəyər
+         * daha əvvələ keçir. {@code orderSeq} verilməyən digər meyarlar öz çağırış
+         * sırasında bunlardan sonra gəlir.
+         *
+         * <pre>{@code
+         *   .addAggFunction(Agg.MAX, "d1.operationDate").as("operationDate", "DESC", 1)
+         * }</pre>
+         */
+        public JooqManager as(String alias, String orderDir, int orderSeq) {
+            manager.q().aggOnComputed(fn, expr.as(alias), alias, null, orderDir, orderSeq);
+            return manager;
+        }
+
+        /**
+         * Alias + yuvarlama + ORDER BY istiqaməti + açıq ORDER BY sıra nömrəsi ilə.
+         *
+         * <pre>{@code
+         *   .addAggFunction(Agg.SUM, "t.price").as("totalPrice", 2, "DESC", 1)
+         *   .addAggFunction(Agg.MAX, "d1.operationDate").as("operationDate", "DESC", 2)
+         * }</pre>
+         */
+        public JooqManager as(String alias, int scale, String orderDir, int orderSeq) {
+            manager.q().aggOnComputed(fn, expr.as(alias), alias, scale, orderDir, orderSeq);
+            return manager;
+        }
     }
 
     /** HAVING EXISTS / NOT EXISTS. */

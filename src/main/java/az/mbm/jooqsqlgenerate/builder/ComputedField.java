@@ -4,6 +4,7 @@ import org.jooq.Condition;
 import org.jooq.DataType;
 import org.jooq.Field;
 import org.jooq.SQLDialect;
+import org.jooq.Table;
 import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
 import az.mbm.jooqsqlgenerate.enums.MathOp;
@@ -13,6 +14,7 @@ import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -717,6 +719,99 @@ public class ComputedField {
                 EntityTable<?> ft = resolve(fc.tableAlias(), mainTable, tableMap);
                 @SuppressWarnings("unchecked")
                 Field<Object> ff = (Field<Object>) ft.getField(fc.fieldName());
+                Condition c = FilterStrategies.get(fc.op()).apply(ff, fc.value());
+                cond = (cond == null) ? c : cond.and(c);
+            }
+            result = (Field<Object>) DSL.when(cond, result).otherwise(DSL.castNull(Object.class));
+        }
+
+        return result;
+    }
+
+    // ─── Generated mode (derived table) — EntityTable-suz çevirmə ───────
+
+    /**
+     * Generated mode üçün jOOQ {@link Field}-ə çevirir — {@code EntityTable}
+     * əvəzinə birbaşa {@link Table} istifadə edir.
+     *
+     * <p>{@code JooqQuery.executeGenerated()} tərəfindən çağrılır — sahələr
+     * {@code joinTableRegistry} (alias → Table) üzərindən həll olunur.
+     *
+     * @param mainTable ana generated table
+     * @param tableMap  alias → Table xəritəsi (joinTableRegistry)
+     */
+    public Field<?> toFieldGenerated(Table<?> mainTable, Map<String, Table<?>> tableMap) {
+        if (alias == null)
+            throw new IllegalStateException("ComputedField: .as(alias) tələb olunur");
+        return buildExprGenerated(mainTable, tableMap).as(alias);
+    }
+
+    /**
+     * Generated mode üçün riyazi ifadəni {@code .as(alias)}-sız qaytarır —
+     * aqreqat funksiyaları (SUM/COUNT/...) ilə bükmək üçün lazımdır
+     * ({@code JooqQuery.executeGenerated()} — {@code aggOnComputed} yolu).
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public Field<Object> buildExprGenerated(Table<?> mainTable, Map<String, Table<?>> tableMap) {
+        Field<Object> result;
+        if (firstIfExpr != null) {
+            result = (Field<Object>) firstIfExpr.toFieldGenerated(mainTable, tableMap);
+        } else if (firstCoalesceExpr != null) {
+            result = (Field<Object>) firstCoalesceExpr.toFieldGenerated(mainTable, tableMap);
+        } else if (firstNested != null) {
+            result = firstNested.buildExprGenerated(mainTable, tableMap);
+        } else {
+            Table<?> t0 = GeneratedFieldResolver.resolveTable(firstTableAlias, mainTable, tableMap);
+            Field<?> rawFirst = GeneratedFieldResolver.resolveField(t0, firstFieldName);
+            if (rawFirst == null) rawFirst = DSL.field(DSL.name(firstTableAlias, firstFieldName));
+            result = (Field<Object>) applyNullDefault(rawFirst, nullDefault);
+        }
+
+        for (Step s : steps) {
+            Field<?> operand;
+
+            if (s.isNested()) {
+                operand = s.nested().buildExprGenerated(mainTable, tableMap);
+            } else {
+                Table<?> t = GeneratedFieldResolver.resolveTable(s.tableAlias(), mainTable, tableMap);
+                Field<?> rawField = GeneratedFieldResolver.resolveField(t, s.fieldName());
+                if (rawField == null) rawField = DSL.field(DSL.name(s.tableAlias(), s.fieldName()));
+
+                if (s.nullAs() != null) {
+                    operand = DSL.coalesce(rawField, DSL.val(s.nullAs()));
+                } else {
+                    operand = applyNullDefault(rawField, nullDefault);
+                }
+            }
+
+            Field<? extends Number> numOperand = (Field<? extends Number>) (Field<?>) operand;
+            Field<? extends Number> safeDenom = (Field<? extends Number>)(Field<?>) DSL.nullif((Field) numOperand, 0);
+
+            result = (Field<Object>) switch (s.op()) {
+                case ADD      -> result.add(operand);
+                case SUBTRACT -> result.subtract(operand);
+                case MULTIPLY -> result.mul(numOperand);
+                case DIVIDE   -> result.div(safeDenom);
+                default       -> result;
+            };
+        }
+
+        if (datePattern != null) {
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            Field<Object> dateResult = (Field<Object>) (Field) DateFormatHelper.toDialectField(result, datePattern, SQLDialect.DEFAULT);
+            result = dateResult;
+        } else if (castType != null) {
+            result = (Field<Object>) result.cast(castType);
+        }
+
+        if (!filterClauses.isEmpty()) {
+            Condition cond = null;
+            for (FilterClause fc : filterClauses) {
+                Table<?> ft = GeneratedFieldResolver.resolveTable(fc.tableAlias(), mainTable, tableMap);
+                Field<?> rawF = GeneratedFieldResolver.resolveField(ft, fc.fieldName());
+                if (rawF == null) rawF = DSL.field(DSL.name(fc.tableAlias(), fc.fieldName()));
+                @SuppressWarnings("unchecked")
+                Field<Object> ff = (Field<Object>) rawF;
                 Condition c = FilterStrategies.get(fc.op()).apply(ff, fc.value());
                 cond = (cond == null) ? c : cond.and(c);
             }

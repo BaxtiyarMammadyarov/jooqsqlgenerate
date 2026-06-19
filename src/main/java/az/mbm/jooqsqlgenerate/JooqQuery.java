@@ -88,7 +88,25 @@ public final class JooqQuery<T> {
     private final List<OrFilterEntry>       orFilterEntries  = new ArrayList<>();
     private record OrFilterEntry(String orGroup, String andGroup, String aliasAndField, Op op, Object value) {}
     private final List<Field<?>>            rawSelectFields  = new ArrayList<>();
+    /** Generated mode: alias.field referansları — joinTableRegistry doldurulana qədər (execute zamanı) həll təxirə salınır. */
+    private final List<String>              deferredSelectCols = new ArrayList<>();
+    /** Generated mode: GROUP BY üçün alias.field referansları — joinTableRegistry doldurulana qədər (execute zamanı) həll təxirə salınır. */
+    private final List<String>              deferredGroupByCols = new ArrayList<>();
     private final List<SortField<?>>        rawOrderFields   = new ArrayList<>();
+    /**
+     * Generated mode: ORDER BY tokenləri — həqiqi çağırış sırasını saxlamaq üçün.
+     * {@code orderBy("field","dir")} VƏ aqreqat alias-ının {@code orderDir} parametri
+     * eyni siyahıya yazılır ki, son ORDER BY-da çağırış sırası qorunsun
+     * (əks halda aqreqat-əsaslı sıralama həmişə sona düşürdü).
+     */
+    /**
+     * {@code seq} — istəyə bağlı açıq sıra nömrəsi (orderSeq). {@code null} olduqda
+     * çağırış sırası saxlanılır; əks halda bütün açıq {@code seq} dəyərləri ASC
+     * sıralanıb əvvələ qoyulur, sonra {@code seq}-i olmayanlar öz çağırış sırasında
+     * davam edir (bax: {@link #buildOrderTokens()}).
+     */
+    private record OrderToken(boolean isAlias, String fieldOrAlias, String dir, Integer seq) {}
+    private final List<OrderToken>          orderTokens      = new ArrayList<>();
     private final List<FilterRow>           filters          = new ArrayList<>();
     private final List<FiltersEntry>   globalFilters       = new ArrayList<>();
     private final List<FieldFilterEntry> fieldFilterEntries = new ArrayList<>();
@@ -277,10 +295,8 @@ public final class JooqQuery<T> {
     public JooqQuery<T> select(String... cols) {
         if (cols == null) return this;
         if (generatedTable != null) {
-            for (String col : cols) {
-                Field<?> f = resolveFieldByAlias(col);
-                if (f != null) rawSelectFields.add(f);
-            }
+            // Həll təxirə salınır — JOIN-lər hələ joinTableRegistry-yə yazılmayıb (bax executeGenerated)
+            deferredSelectCols.addAll(Arrays.asList(cols));
         } else {
             columns.addAll(Arrays.asList(cols));
         }
@@ -291,10 +307,8 @@ public final class JooqQuery<T> {
     public JooqQuery<T> select(List<String> cols) {
         if (cols == null) return this;
         if (generatedTable != null) {
-            for (String col : cols) {
-                Field<?> f = resolveFieldByAlias(col);
-                if (f != null) rawSelectFields.add(f);
-            }
+            // Həll təxirə salınır — JOIN-lər hələ joinTableRegistry-yə yazılmayıb (bax executeGenerated)
+            deferredSelectCols.addAll(cols);
         } else {
             columns.addAll(cols);
         }
@@ -1180,10 +1194,9 @@ public final class JooqQuery<T> {
     public JooqQuery<T> groupBy(String... fields) {
         if (fields == null) return this;
         if (generatedTable != null) {
-            for (String f : fields) {
-                Field<?> resolved = resolveFieldByAlias(f);
-                if (resolved != null) rawGroupByFields.add(resolved);
-            }
+            // joinTableRegistry execute() zamanı dolur — həll təxirə salınır
+            // (join alias-ları groupBy-dan SONRA əlavə oluna bilər).
+            deferredGroupByCols.addAll(Arrays.asList(fields));
         } else {
             groupByFields.addAll(Arrays.asList(fields));
         }
@@ -1194,10 +1207,9 @@ public final class JooqQuery<T> {
     public JooqQuery<T> groupBy(List<String> fields) {
         if (fields == null) return this;
         if (generatedTable != null) {
-            for (String f : fields) {
-                Field<?> resolved = resolveFieldByAlias(f);
-                if (resolved != null) rawGroupByFields.add(resolved);
-            }
+            // joinTableRegistry execute() zamanı dolur — həll təxirə salınır
+            // (join alias-ları groupBy-dan SONRA əlavə oluna bilər).
+            deferredGroupByCols.addAll(fields);
         } else {
             groupByFields.addAll(fields);
         }
@@ -1240,10 +1252,13 @@ public final class JooqQuery<T> {
      */
     public JooqQuery<T> agg(Agg fn, String field, String alias,
                             Integer round, String orderDir) {
-        if (fn != null && field != null && alias != null)
+        if (fn != null && field != null && alias != null) {
             // alias-da "t.totalPrice" kimi prefix gəlsə yalnız "totalPrice" saxlanır
             aggRows.add(new AggRow(fn, field, fieldPart(alias), round,
                                    orderDir, MathOp.NONOPERATION, null, null));
+            if (generatedTable != null && orderDir != null)
+                orderTokens.add(new OrderToken(true, fieldPart(alias), orderDir, null));
+        }
         return this;
     }
 
@@ -1265,9 +1280,12 @@ public final class JooqQuery<T> {
     public JooqQuery<T> aggWithMath(Agg fn,
                                     String field, MathOp mathOp, String mathField,
                                     String alias, Integer round, String orderDir) {
-        if (fn != null && field != null && alias != null)
+        if (fn != null && field != null && alias != null) {
             aggRows.add(new AggRow(fn, field, fieldPart(alias), round,
                                    orderDir, mathOp, mathField, null));
+            if (generatedTable != null && orderDir != null)
+                orderTokens.add(new OrderToken(true, fieldPart(alias), orderDir, null));
+        }
         return this;
     }
 
@@ -1292,21 +1310,44 @@ public final class JooqQuery<T> {
      */
     public JooqQuery<T> aggOnComputed(Agg fn, ComputedField expr,
                                       String alias, Integer round, String orderDir) {
-        if (fn != null && expr != null && alias != null)
+        return aggOnComputed(fn, expr, alias, round, orderDir, null);
+    }
+
+    /**
+     * ComputedField üzərindəki aqreqat — açıq ORDER BY sıra nömrəsi ilə.
+     *
+     * <p>{@code orderSeq} verildikdə bu sıralama meyarı, çağırış sırasından asılı
+     * olmayaraq, {@code orderSeq} dəyərinə görə (ASC) digər açıq {@code orderSeq}
+     * meyarları ilə birgə ORDER BY-ın əvvəlinə yerləşdirilir. {@code orderSeq}
+     * verilməyən (yəni {@code null}) meyarlar isə öz çağırış sırasında onlardan sonra
+     * gəlir.
+     *
+     * <pre>{@code
+     *   .addAggFunction(Agg.MAX, "d1.operationDate").as("operationDate", "DESC", 1)
+     *   .addAggFunction(Agg.SUM, "d1.totalPrice").as("totalPrice", 2, "DESC", 2)
+     * }</pre>
+     */
+    public JooqQuery<T> aggOnComputed(Agg fn, ComputedField expr,
+                                      String alias, Integer round, String orderDir,
+                                      Integer orderSeq) {
+        if (fn != null && expr != null && alias != null) {
             aggRows.add(new AggRow(fn, null, fieldPart(alias), round,
                                    orderDir, null, null, expr));
+            if (generatedTable != null && orderDir != null)
+                orderTokens.add(new OrderToken(true, fieldPart(alias), orderDir, orderSeq));
+        }
         return this;
     }
 
     /** ComputedField üzərindəki aqreqat — yalnız əsas parametrlər. */
     public JooqQuery<T> aggOnComputed(Agg fn, ComputedField expr, String alias) {
-        return aggOnComputed(fn, expr, alias, null, null);
+        return aggOnComputed(fn, expr, alias, null, null, null);
     }
 
     /** ComputedField üzərindəki aqreqat — yuvarlama ilə. */
     public JooqQuery<T> aggOnComputed(Agg fn, ComputedField expr,
                                       String alias, Integer round) {
-        return aggOnComputed(fn, expr, alias, round, null);
+        return aggOnComputed(fn, expr, alias, round, null, null);
     }
 
     /** HAVING EXISTS / NOT EXISTS (GROUP BY ilə birlikdə). */
@@ -1429,11 +1470,19 @@ public final class JooqQuery<T> {
      * </ul>
      */
     public JooqQuery<T> orderBy(String field, String direction) {
+        return orderBy(field, direction, null);
+    }
+
+    /**
+     * ORDER BY — açıq sıra nömrəsi (orderSeq) ilə. Bax: {@link #aggOnComputed}
+     * metodundaki {@code orderSeq} izahı.
+     */
+    public JooqQuery<T> orderBy(String field, String direction, Integer orderSeq) {
         if (field == null || field.isBlank()) return this;
         if (generatedTable != null) {
-            Field<?> resolved = resolveFromTable(generatedTable, fieldPart(field));
-            if (resolved != null)
-                rawOrderFields.add("DESC".equalsIgnoreCase(direction) ? resolved.desc() : resolved.asc());
+            // joinTableRegistry execute() zamanı dolur, aqreqat alias-ları ilə
+            // çağırış sırasını qorumaq üçün — həll təxirə salınır.
+            orderTokens.add(new OrderToken(false, field, direction, orderSeq));
         } else {
             sortRows.add(new SortRow(field, direction));
         }
@@ -1908,30 +1957,50 @@ public final class JooqQuery<T> {
             joinTableRegistry.put(jr.alias(), jr.subQuery().asTable(jr.alias()));
         }
 
+        // ─── deferredSelectCols — registry artıq doludur, indi həll et ────────
+        for (String col : deferredSelectCols) {
+            Field<?> f = resolveFieldByAlias(col);
+            if (f != null) rawSelectFields.add(f);
+        }
+
+        // ─── deferredGroupByCols — registry artıq doludur, indi həll et ───────
+        for (String col : deferredGroupByCols) {
+            Field<?> f = resolveFieldByAlias(col);
+            if (f != null) rawGroupByFields.add(f);
+        }
+
         // ─── SELECT — agg sütunlar + alias→expr xəritəsi (HAVING üçün lazım) ──
         List<SelectFieldOrAsterisk> selectList = new ArrayList<>(rawSelectFields);
         Map<String, Field<?>> aggExprByAlias   = new LinkedHashMap<>();
 
         for (AggRow ar : aggRows) {
-            if (ar.field() == null || ar.fn() == null) continue;
+            if (ar.fn() == null) continue;
+            if (ar.field() == null && ar.expr() == null) continue;
 
-            Field<?> baseField = resolveFieldByAlias(ar.field());
-            if (baseField == null) baseField = DSL.field(DSL.name(fieldPart(ar.field())));
+            Field<?> operand;
 
-            Field<?> operand = baseField;
-            if (ar.mathOp() != null && ar.mathOp() != MathOp.NONOPERATION
-                    && ar.mathField() != null) {
-                Field<?> mathF = resolveFieldByAlias(ar.mathField());
-                if (mathF == null) mathF = DSL.field(DSL.name(fieldPart(ar.mathField())));
-                Field<? extends Number> numBase = (Field<? extends Number>) baseField;
-                Field<? extends Number> numMath = (Field<? extends Number>) mathF;
-                operand = switch (ar.mathOp()) {
-                    case ADD      -> numBase.add(numMath);
-                    case SUBTRACT -> numBase.subtract(numMath);
-                    case MULTIPLY -> numBase.mul(numMath);
-                    case DIVIDE   -> numBase.div(numMath);
-                    default       -> baseField;
-                };
+            if (ar.expr() != null) {
+                // ─── aggOnComputed / addAggFunction(fn,field).add()...as(alias) ──
+                operand = ar.expr().buildExprGenerated(mainTable, joinTableRegistry);
+            } else {
+                Field<?> baseField = resolveFieldByAlias(ar.field());
+                if (baseField == null) baseField = DSL.field(DSL.name(fieldPart(ar.field())));
+
+                operand = baseField;
+                if (ar.mathOp() != null && ar.mathOp() != MathOp.NONOPERATION
+                        && ar.mathField() != null) {
+                    Field<?> mathF = resolveFieldByAlias(ar.mathField());
+                    if (mathF == null) mathF = DSL.field(DSL.name(fieldPart(ar.mathField())));
+                    Field<? extends Number> numBase = (Field<? extends Number>) baseField;
+                    Field<? extends Number> numMath = (Field<? extends Number>) mathF;
+                    operand = switch (ar.mathOp()) {
+                        case ADD      -> numBase.add(numMath);
+                        case SUBTRACT -> numBase.subtract(numMath);
+                        case MULTIPLY -> numBase.mul(numMath);
+                        case DIVIDE   -> numBase.div(numMath);
+                        default       -> baseField;
+                    };
+                }
             }
 
             Field<? extends Number> numOp = (Field<? extends Number>) operand;
@@ -1942,16 +2011,81 @@ public final class JooqQuery<T> {
                 case MAX   -> DSL.max(operand);
                 case MIN   -> DSL.min(operand);
             };
-            if (ar.round() != null)
+            // ROUND() yalnız ədədi tiplərə tətbiq edilə bilər — MAX/MIN tarix/string
+            // sahə üzərində ola bilər, belə halda round səssizcə ötürülür.
+            if (ar.round() != null && Number.class.isAssignableFrom(aggField.getType()))
                 aggField = DSL.round((Field<? extends Number>) aggField, ar.round());
 
             aggExprByAlias.put(ar.alias(), aggField);
             selectList.add(DSL.coalesce(aggField, DSL.val(0)).as(ar.alias()));
+        }
 
-            if ("DESC".equalsIgnoreCase(ar.orderDir()))
-                rawOrderFields.add(DSL.field(DSL.name(ar.alias())).desc());
-            else if ("ASC".equalsIgnoreCase(ar.orderDir()))
-                rawOrderFields.add(DSL.field(DSL.name(ar.alias())).asc());
+        // ─── orderTokens — ORDER BY qur ────────────────────────────────────────
+        // (orderBy("field","dir") və addAggFunction(...).as(alias,...,orderDir)
+        //  bir-birinə nəzərən hansı sırada çağırılıbsa, elə sırada tətbiq olunur —
+        //  YALNIZ açıq orderSeq verilməyibsə. orderSeq verilmiş meyarlar ASC
+        //  sıralanıb əvvələ keçir, stable sort sayəsində bərabər/boş seq-lər öz
+        //  çağırış sırasını saxlayır.)
+        List<OrderToken> orderedTokens = new ArrayList<>(orderTokens);
+        orderedTokens.sort((a, b) -> {
+            if (a.seq() != null && b.seq() != null) return Integer.compare(a.seq(), b.seq());
+            if (a.seq() != null) return -1;
+            if (b.seq() != null) return 1;
+            return 0;
+        });
+        for (OrderToken ot : orderedTokens) {
+            Field<?> f = ot.isAlias()
+                    ? DSL.field(DSL.name(ot.fieldOrAlias()))
+                    : resolveFieldByAlias(ot.fieldOrAlias());
+            if (f == null) continue;
+            rawOrderFields.add("DESC".equalsIgnoreCase(ot.dir()) ? f.desc() : f.asc());
+        }
+
+        // ─── computedCols — sadə 2-sahəli MathOp forma (addComputedColumn(alias,...)) ──
+        for (ComputedRow cr : computedCols) {
+            Field<?> f1 = resolveFieldByAlias(cr.ta1() + "." + cr.f1());
+            if (f1 == null) f1 = DSL.field(DSL.name(cr.ta1(), cr.f1()));
+            Field<?> f2 = resolveFieldByAlias(cr.ta2() + "." + cr.f2());
+            if (f2 == null) f2 = DSL.field(DSL.name(cr.ta2(), cr.f2()));
+
+            if (cr.nullDefault() != null && cr.nullDefault() != NullDefault.NONE) {
+                f1 = DSL.coalesce((Field) f1, DSL.val(cr.nullDefault().numericValue()));
+                f2 = DSL.coalesce((Field) f2, DSL.val(cr.nullDefault().numericValue()));
+            }
+
+            Field<? extends Number> n1 = (Field<? extends Number>) f1;
+            Field<? extends Number> n2 = (Field<? extends Number>) f2;
+            Field<?> safeDenom = (cr.op() == MathOp.DIVIDE)
+                    ? (Field<? extends Number>) (Field<?>) DSL.nullif((Field) n2, 0)
+                    : n2;
+            Field<?> expr = switch (cr.op()) {
+                case ADD      -> n1.add(n2);
+                case SUBTRACT -> n1.subtract(n2);
+                case MULTIPLY -> n1.mul(n2);
+                case DIVIDE   -> n1.div((Field<? extends Number>) safeDenom);
+                default       -> n1;
+            };
+
+            aggExprByAlias.put(cr.alias(), expr);
+            selectList.add(expr.as(cr.alias()));
+        }
+
+        // ─── computedFields — ComputedField zənciri (addComputedColumn(field).add()...as(alias)) ──
+        for (ComputedFieldEntry entry : computedFields) {
+            ComputedField cf = entry.cf();
+            if (cf == null) continue;
+
+            Field<?> expr = cf.toFieldGenerated(mainTable, joinTableRegistry);
+            String computedAlias = cf.getAlias();
+
+            aggExprByAlias.put(computedAlias, expr);
+            selectList.add(expr);
+
+            if (entry.filterOp() != null && entry.filterValue() != null) {
+                Field<Object> aliasField = (Field<Object>) DSL.field(DSL.name(computedAlias));
+                rawHavings.add(az.mbm.jooqsqlgenerate.strategy.FilterStrategies.get(entry.filterOp())
+                        .apply(aliasField, entry.filterValue()));
+            }
         }
 
         if (selectList.isEmpty()) selectList.add(DSL.asterisk());

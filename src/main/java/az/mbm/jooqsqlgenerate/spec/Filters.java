@@ -287,6 +287,497 @@ public final class Filters {
         return put(FilterOperationConstants.NOT_REGEXP, field, pattern);
     }
 
+    // ─── ROUND müqayisə əməliyyatları (hesablanmayan sütunlar üçün) ──────
+    //
+    // WHERE ROUND(field, scale) OP value
+    //   .equalRound2("unitCost", "9.99")        → WHERE ROUND(unit_cost, 2) = 9.99
+    //   .greaterThanRound0("totalPrice", 100)    → WHERE ROUND(total_price, 0) > 100
+
+    // ── Scale 0 — tam ədədə yuvarlama ──────────────────────────────────────
+
+    /** {@code WHERE ROUND(field, 0) = value} — null və ya boş dəyər atlanır */
+    public Filters equalRound0(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.EQUAL_ROUND_0, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 0) = value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters equalRound0(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.EQUAL_ROUND_0, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 0) != value} — null və ya boş dəyər atlanır */
+    public Filters notEqualRound0(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.NOT_EQUAL_ROUND_0, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 0) != value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters notEqualRound0(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.NOT_EQUAL_ROUND_0, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 0) > value} — null və ya boş dəyər atlanır */
+    public Filters greaterThanRound0(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.GREATER_THAN_ROUND_0, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 0) > value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters greaterThanRound0(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.GREATER_THAN_ROUND_0, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 0) >= value} — null və ya boş dəyər atlanır */
+    public Filters greaterThanOrEqualToRound0(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.GREATER_THAN_OR_EQUAL_TO_ROUND_0, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 0) >= value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters greaterThanOrEqualToRound0(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.GREATER_THAN_OR_EQUAL_TO_ROUND_0, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 0) < value} — null və ya boş dəyər atlanır */
+    public Filters lessThanRound0(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.LESS_THAN_ROUND_0, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 0) < value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters lessThanRound0(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.LESS_THAN_ROUND_0, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 0) <= value} — null və ya boş dəyər atlanır */
+    public Filters lessThanOrEqualToRound0(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.LESS_THAN_OR_EQUAL_TO_ROUND_0, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 0) <= value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters lessThanOrEqualToRound0(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.LESS_THAN_OR_EQUAL_TO_ROUND_0, field, value.toString());
+    }
+
+
+    // ── Scale 1 — bir onluq rəqəm ──────────────────────────────────────
+
+    /** {@code WHERE ROUND(field, 1) = value} — null və ya boş dəyər atlanır */
+    public Filters equalRound1(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.EQUAL_ROUND_1, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 1) = value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters equalRound1(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.EQUAL_ROUND_1, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 1) != value} — null və ya boş dəyər atlanır */
+    public Filters notEqualRound1(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.NOT_EQUAL_ROUND_1, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 1) != value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters notEqualRound1(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.NOT_EQUAL_ROUND_1, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 1) > value} — null və ya boş dəyər atlanır */
+    public Filters greaterThanRound1(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.GREATER_THAN_ROUND_1, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 1) > value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters greaterThanRound1(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.GREATER_THAN_ROUND_1, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 1) >= value} — null və ya boş dəyər atlanır */
+    public Filters greaterThanOrEqualToRound1(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.GREATER_THAN_OR_EQUAL_TO_ROUND_1, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 1) >= value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters greaterThanOrEqualToRound1(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.GREATER_THAN_OR_EQUAL_TO_ROUND_1, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 1) < value} — null və ya boş dəyər atlanır */
+    public Filters lessThanRound1(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.LESS_THAN_ROUND_1, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 1) < value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters lessThanRound1(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.LESS_THAN_ROUND_1, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 1) <= value} — null və ya boş dəyər atlanır */
+    public Filters lessThanOrEqualToRound1(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.LESS_THAN_OR_EQUAL_TO_ROUND_1, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 1) <= value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters lessThanOrEqualToRound1(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.LESS_THAN_OR_EQUAL_TO_ROUND_1, field, value.toString());
+    }
+
+
+    // ── Scale 2 — iki onluq rəqəm (qiymət/məbləğ üçün ən çox istifadə olunur) ──────────────────────────────────────
+
+    /** {@code WHERE ROUND(field, 2) = value} — null və ya boş dəyər atlanır */
+    public Filters equalRound2(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.EQUAL_ROUND_2, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 2) = value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters equalRound2(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.EQUAL_ROUND_2, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 2) != value} — null və ya boş dəyər atlanır */
+    public Filters notEqualRound2(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.NOT_EQUAL_ROUND_2, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 2) != value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters notEqualRound2(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.NOT_EQUAL_ROUND_2, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 2) > value} — null və ya boş dəyər atlanır */
+    public Filters greaterThanRound2(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.GREATER_THAN_ROUND_2, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 2) > value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters greaterThanRound2(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.GREATER_THAN_ROUND_2, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 2) >= value} — null və ya boş dəyər atlanır */
+    public Filters greaterThanOrEqualToRound2(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.GREATER_THAN_OR_EQUAL_TO_ROUND_2, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 2) >= value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters greaterThanOrEqualToRound2(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.GREATER_THAN_OR_EQUAL_TO_ROUND_2, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 2) < value} — null və ya boş dəyər atlanır */
+    public Filters lessThanRound2(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.LESS_THAN_ROUND_2, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 2) < value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters lessThanRound2(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.LESS_THAN_ROUND_2, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 2) <= value} — null və ya boş dəyər atlanır */
+    public Filters lessThanOrEqualToRound2(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.LESS_THAN_OR_EQUAL_TO_ROUND_2, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 2) <= value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters lessThanOrEqualToRound2(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.LESS_THAN_OR_EQUAL_TO_ROUND_2, field, value.toString());
+    }
+
+
+    // ── Scale 3 — üç onluq rəqəm ──────────────────────────────────────
+
+    /** {@code WHERE ROUND(field, 3) = value} — null və ya boş dəyər atlanır */
+    public Filters equalRound3(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.EQUAL_ROUND_3, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 3) = value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters equalRound3(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.EQUAL_ROUND_3, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 3) != value} — null və ya boş dəyər atlanır */
+    public Filters notEqualRound3(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.NOT_EQUAL_ROUND_3, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 3) != value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters notEqualRound3(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.NOT_EQUAL_ROUND_3, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 3) > value} — null və ya boş dəyər atlanır */
+    public Filters greaterThanRound3(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.GREATER_THAN_ROUND_3, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 3) > value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters greaterThanRound3(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.GREATER_THAN_ROUND_3, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 3) >= value} — null və ya boş dəyər atlanır */
+    public Filters greaterThanOrEqualToRound3(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.GREATER_THAN_OR_EQUAL_TO_ROUND_3, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 3) >= value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters greaterThanOrEqualToRound3(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.GREATER_THAN_OR_EQUAL_TO_ROUND_3, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 3) < value} — null və ya boş dəyər atlanır */
+    public Filters lessThanRound3(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.LESS_THAN_ROUND_3, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 3) < value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters lessThanRound3(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.LESS_THAN_ROUND_3, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 3) <= value} — null və ya boş dəyər atlanır */
+    public Filters lessThanOrEqualToRound3(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.LESS_THAN_OR_EQUAL_TO_ROUND_3, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 3) <= value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters lessThanOrEqualToRound3(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.LESS_THAN_OR_EQUAL_TO_ROUND_3, field, value.toString());
+    }
+
+
+    // ── Scale 4 — dörd onluq rəqəm ──────────────────────────────────────
+
+    /** {@code WHERE ROUND(field, 4) = value} — null və ya boş dəyər atlanır */
+    public Filters equalRound4(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.EQUAL_ROUND_4, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 4) = value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters equalRound4(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.EQUAL_ROUND_4, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 4) != value} — null və ya boş dəyər atlanır */
+    public Filters notEqualRound4(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.NOT_EQUAL_ROUND_4, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 4) != value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters notEqualRound4(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.NOT_EQUAL_ROUND_4, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 4) > value} — null və ya boş dəyər atlanır */
+    public Filters greaterThanRound4(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.GREATER_THAN_ROUND_4, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 4) > value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters greaterThanRound4(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.GREATER_THAN_ROUND_4, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 4) >= value} — null və ya boş dəyər atlanır */
+    public Filters greaterThanOrEqualToRound4(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.GREATER_THAN_OR_EQUAL_TO_ROUND_4, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 4) >= value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters greaterThanOrEqualToRound4(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.GREATER_THAN_OR_EQUAL_TO_ROUND_4, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 4) < value} — null və ya boş dəyər atlanır */
+    public Filters lessThanRound4(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.LESS_THAN_ROUND_4, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 4) < value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters lessThanRound4(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.LESS_THAN_ROUND_4, field, value.toString());
+    }
+
+    /** {@code WHERE ROUND(field, 4) <= value} — null və ya boş dəyər atlanır */
+    public Filters lessThanOrEqualToRound4(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.LESS_THAN_OR_EQUAL_TO_ROUND_4, field, value);
+    }
+
+    /**
+     * {@code WHERE ROUND(field, 4) <= value} — rəqəm tipləri üçün.
+     * Null dəyər atlanır.
+     */
+    public Filters lessThanOrEqualToRound4(String field, Number value) {
+        if (value == null) return this;
+        return put(FilterOperationConstants.LESS_THAN_OR_EQUAL_TO_ROUND_4, field, value.toString());
+    }
+
+
+    // ─── Türk əlifbası case-insensitive LIKE ─────────────────────────────
+
+    /** {@code WHERE LOWER(...) LIKE '%value%'} — Türk İ/I-yə uyğun case-insensitive. Null/boş dəyər atlanır */
+    public Filters likeIgnoreCase(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.LIKE_IGNORE_CASE, field, value);
+    }
+
+    /** {@code WHERE LOWER(...) LIKE 'value%'} — Türk İ/I-yə uyğun case-insensitive. Null/boş dəyər atlanır */
+    public Filters startWithIgnoreCase(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.START_WITH_IGNORE_CASE, field, value);
+    }
+
+    /** {@code WHERE LOWER(...) LIKE '%value'} — Türk İ/I-yə uyğun case-insensitive. Null/boş dəyər atlanır */
+    public Filters endWithIgnoreCase(String field, String value) {
+        if (value == null || value.isBlank()) return this;
+        return put(FilterOperationConstants.END_WITH_IGNORE_CASE, field, value);
+    }
+
     // ─── Birləşdirmə ─────────────────────────────────────────────────────
 
     /**
