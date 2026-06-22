@@ -261,7 +261,10 @@ public class SubSelectBuilder {
                     if (i > 0 && !concatSeparator.isEmpty())
                         parts.add(DSL.inline(concatSeparator));
                     Field<?> f = resolveField(concatFields.get(i), innerTable);
-                    parts.add(DSL.coalesce(f, DSL.inline("")));
+                    // CAST(... AS VARCHAR) vacibdir: sütun Long/Integer/Date və s.
+                    // tipindədirsə, COALESCE(numericField, '') Postgres-də
+                    // "types ... cannot be matched" xətası verir.
+                    parts.add(DSL.coalesce(f.cast(String.class), DSL.inline("")));
                 }
                 yield DSL.concat(parts.toArray(new Field[0]));
             }
@@ -270,8 +273,11 @@ public class SubSelectBuilder {
                 if (coalesceFields.isEmpty())
                     throw new IllegalStateException("SubSelectBuilder: .selectCoalesce() üçün sahə lazımdır");
                 List<Field<?>> coalesceList = new ArrayList<>();
-                for (String cf : coalesceFields)
-                    coalesceList.add(resolveField(cf, innerTable));
+                boolean stringDefault = coalesceDefault instanceof String;
+                for (String cf : coalesceFields) {
+                    Field<?> f = resolveField(cf, innerTable);
+                    coalesceList.add(stringDefault ? f.cast(String.class) : f);
+                }
                 coalesceList.add(DSL.inline(coalesceDefault));
                 yield DSL.coalesce(coalesceList.get(0),
                         Optional.of(coalesceList.subList(1, coalesceList.size()).toArray(new Field[0])));

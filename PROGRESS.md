@@ -10,8 +10,8 @@
 ## Proyekt haqqında
 
 **Ad:** `jooq-sql-generate`
-**Versiya:** 1.1.11
-**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.11`
+**Versiya:** 1.1.31
+**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.31`
 **Repo:** https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate
 **Java:** 17
 **Asılılıqlar:** jOOQ 3.18.6, Spring Boot 3.2.5 (compileOnly), Jakarta Persistence 3.1.0
@@ -60,6 +60,129 @@ az.mbm.jooqsqlgenerate
 ---
 
 ## İş Jurnalı
+
+### 2026-06-22 — v1.1.31: Bug fix — CONCAT/COALESCE/selectAs sütununa filter/HAVING qoyanda `column "alias" does not exist`
+
+**Simptom (real production xətası):** generated-mode sorğuda CONCAT sütununa (`carrierDescription`)
+LIKE-axınlı filter qoyulanda Postgres xəta verirdi:
+```
+ERROR: column "carrierDescription" does not exist
+```
+HAVING klozunda `lower(replace(replace("carrierDescription", 'İ', 'i'), 'I', 'i')) like ?` kimi
+sadəcə alias adı görünürdü — real CONCAT ifadəsi yox.
+
+**Səbəb:** `executeGenerated()` daxilində `aggExprByAlias` map-i (HAVING/`.filter()`/`.havingFilter()`
+şərtlərini qurmaq üçün istifadə olunur) **CONCAT/COALESCE/selectAs** sütunları üçün `.as(alias)`
+ilə **artıq alias-lanmış** `Field` saxlayırdı (`DSL.concat(...).as(cc.alias())`). Bu obyekt sonra
+filter şərtində təkrar istifadə ediləndə jOOQ onu "eyni SELECT-list elementi" kimi tanıyıb sadəcə
+`"alias"` identifikatoru kimi render edir — amma SQL-də SELECT alias-ları WHERE/HAVING-də görünmür,
+ona görə Postgres "column does not exist" deyir. `aggRows`/`computedCols` blokları bu səhvə düşmürdü,
+çünki onlar map-ə **raw** (alias-sız) ifadə qoyub, `.as(alias)`-ı yalnız `selectList.add(...)`-də
+ayrıca tətbiq edirdi.
+
+**Düzəliş (`JooqQuery.java`, `executeGenerated()`):** CONCAT, COALESCE və `selectAs` blokları
+`aggRows`/`computedCols` ilə eyni qaydaya salındı — `aggExprByAlias.put(alias, rawExpr)` (alias-sız),
+`selectList.add(rawExpr.as(alias))` (alias yalnız SELECT-də). Nəticədə HAVING/`.filter()`/
+`.havingFilter()` indi real ifadəni təkrarlayır (`HAVING lower(replace(replace(CONCAT(...), ...)))`),
+alias-a istinad etmir.
+
+**Təsirlənən sütun növləri:** `concat`/`concatColumn`/`addConcatColumn`, `coalesceColumn`/
+`addCoalesceColumn`, `selectAs` — generated/derived-table mode-da bu üç növ sütuna filter
+(`filter()`, `havingFilter()`, `globalFilter()`) qoyulan bütün hallar düzəldi.
+
+**Əlavə tapıntı (eyni kod bloku daxilində):** `computedFields` (`addComputedColumn(field).add()
+...as(alias)` zənciri) də eyni iki səhvə düşürdü — (1) `cf.toFieldGenerated(...)` artıq
+`.as(alias)` tətbiq edilmiş halda map-ə yazılırdı, (2) zəncirin daxili `.filter(op,val)`-i
+birbaşa `DSL.field(DSL.name(alias))` ilə HAVING-ə alias istinadı qurudu. Hər ikisi
+`cf.buildExprGenerated(...)` (raw, alias-sız) istifadəsinə keçirildi.
+
+---
+
+### 2026-06-22 — v1.1.30: Yeni feature — `concatColumn(...).sep(...).as(...)` (fluent, join-style concat)
+
+**Motivasiya:** İstifadəçi mövcud sadə `addConcatColumn(alias, sep, fields...)` yazı tərzini
+saxlamaq istəyirdi (heç bir builder-paket importu lazım olmadan), amma JOIN-lərdəki kimi
+fluent/sıralı yazı da istəyirdi: əvvəl sahələr, sonra ayırıcı, sonra `.as(alias)` ilə tamamlanan
+zəncir. İlk versiya (`ConcatBuilder.of(fields...).sep(...).as(...)`, ayrıca obyekt yaradıb
+`addConcatColumn(cb)`-ə ötürmək) bunu tam vermirdi — istifadəçi birbaşa `addConcatColumn(fields...)`
+ilə başlayıb `.as(alias)` ilə bitirmək istədi. **`ConcatBuilder.java` silindi**, əvəzinə
+JOIN builder-lərdəki (`JoinBuilder`/`JoinSetup`, `done()`) modelinə bənzər həll quruldu.
+
+**Həll — niyə ad `addConcatColumn` ola bilmədi:** `addConcatColumn(String... fields)` adı ilə
+yeni overload əlavə etsəydik, mövcud `addConcatColumn(String alias, String separator, String... fields)`
+ilə **Java compile-time ambiguity** yaranırdı (2+ arqumentli çağırışlarda hər iki metod
+variable-arity uyğun gəlir, derleyici "ambiguous method call" xətası verir). Ona görə yeni
+giriş nöqtəsi fərqli adla: **`concatColumn(String... fields)`** — JOIN-lərdə `addLeftJoin(...)`-in
+ayrıca `JoinBuilder` qaytarması kimi, bu da `ConcatSetup` qaytarır.
+
+```java
+jooq.concatColumn("u.firstName", "u.lastName")
+    .sep(" ")
+    .as("fullName")     // ← builder tamamlanır, JooqManager-ə/JooqQuery-yə qayıdır
+```
+
+**Yeni siniflər/metodlar:**
+- `JooqQuery.concatColumn(String...)` → `JooqQuery.ConcatSetup` (daxili sinif, `JoinBuilder` kimi)
+- `JooqManager.concatColumn(String...)` → `JooqManager.ConcatSetup`
+- Hər ikisinin `.sep(separator)` və `.as(alias)` metodları var; `.as(alias)` tamamlayıcıdır —
+  daxilən mövcud `concat(alias, sep, fields...)` / `addConcatColumn(alias, sep, fields...)`-ə
+  delegate edir, sonra parent-ə (`JooqQuery<T>`/`JooqManager`) qayıdır.
+
+Tamamilə əlavədir (additive) — mövcud `String...`/`List<String>`/`ConcatItem...` overload-larına
+heç bir təsiri yoxdur, sadəcə üçüncü yazı tərzi əlavə olundu.
+
+---
+
+### 2026-06-22 — v1.1.28: COALESCE tip xətası, WHERE filter generated-mode düzəlişi, @Deprecated
+
+**1. Bug fix — `COALESCE types ... cannot be matched` (Postgres):**
+
+`concat()`/`coalesce()` daxilində mətn olmayan sahə (Long, Date, ...) mətn literalı (`''`,
+String default) ilə `COALESCE`-də qarışanda Postgres xəta verirdi. Postgres `||`-də literalı
+avtomatik cast edir, `COALESCE`-də YOX. Düzəliş: sahə `field.cast(String.class)` ilə cast edilir
+(concat-da həmişə, coalesce-də yalnız default `String` olduqda). 7 yerdə tətbiq edildi:
+`SelectQueryBuilder.buildConcatField/buildCoalesceField`, `JooqQuery`-nin generated-mode
+CONCAT/COALESCE blokları, `CoalesceExpr.toField/toFieldGenerated`, `SubSelectBuilder.buildSelectExpr`
+(CONCAT + COALESCE case-ləri).
+
+**2. Bug fix — generated mode-da `.filter()` sükutla itirdi:**
+
+`filter(field, op, value)` sahəni dərhal (eager) resolve etməyə çalışırdı, amma
+`joinTableRegistry`/`aggExprByAlias` yalnız `executeGenerated()`-də tam dolur — bütün `.filter()`
+çağırışlarından sonra. Tapılmayan sahə xətasız sükutla atılırdı. Həll: `deferredWhereFilterRows`
+siyahısına yığılır, həll `executeGenerated()`-in sonunda olur (registry-lər artıq dolu olanda).
+Yan fayda: indi WHERE-i concat/coalesce/selectAs alias-larına da tətbiq etmək mümkündür.
+
+**3. Köhnə metodlar `@Deprecated` edildi** (istəyə görə: "addFilter kimi ümumi olanlar qalsın,
+sonradan daha yaxşısını yazdığımız köhnələr deprecate olsun"):
+
+| Köhnə | Əvəzedici |
+|---|---|
+| `JooqQuery.from(Class, String)` | `from(Table, String)` / `from(SelectTable, String)` |
+| `JooqQuery.leftJoin/innerJoin(Class, alias, from, to)` | fluent `leftJoin/innerJoin(Class, alias)` |
+| `JooqQuery.leftJoin/innerJoin(SelectTable, alias, from, to)` | fluent `leftJoin/innerJoin(SelectTable, alias)` |
+| `JooqManager.setMainTable(Class, String)` | `setMainTable(Table\|SelectTable, String)` |
+| `JooqManager.addLeftJoin/addInnerJoin(Class, alias, from, to)` | `addLeftJoin/addInnerJoin(Class, alias)` (`JoinSetup`) |
+| `JooqManager.addLeftJoin/addInnerJoin(SelectTable, alias, from, to)` | `addLeftJoin/addInnerJoin(SelectTable, alias)` (`SelectJoinSetup`) |
+
+**Düzəliş (sonradan geri alındı):** `concat(alias, sep, String...)` / `addConcatColumn(alias, sep, String...|List<String>)`
+ilkin planda deprecate edilmişdi, amma geri alındı — `ConcatItem...` versiyası `builder`
+(daxili) paketindən import tələb edir, bu "daxili siniflər JooqManager arxasında qalsın"
+prinsipinə zidddir. Sadə sütun-birləşdirmə `addFilter` kimi ümumi hal sayılır, dəyişməz qalır.
+`ConcatItem...` yalnız literal/CASE/COALESCE qarışdırmaq üçün əlavə seçimdir, əvəzedici deyil.
+
+Toxunulmayanlar (ümumi məqsədli, qəsdən saxlanıldı): `addFilter`, `addCoalesceColumn`,
+`addComputedColumn`/`addComputedField`, `addAggFunction*`, `addCaseColumn`/`addCaseBuilder`,
+`equal`/`notEqual`/`greaterThan`/və s. qısa filter metodları.
+
+Ətraflı izah + nümunələr: `DOCUMENTATION.md` → "v1.1.27" bölümü.
+
+**Versiya:** 1.1.23 → 1.1.27 (build.gradle.kts iki yerdə sinxronlaşdırıldı).
+
+**Yarımçıq qalan:** `subSelectCols` generated-mode dəstəyi yoxdur — `SubSelectBuilder.toField()`
+yalnız entity-mode (`EntityTable`); `toFieldGenerated(Table<?>, Map<String,Table<?>>)` yazılmalıdır.
+
+---
 
 ### 2026-06-05 — v1.1.11: NullDefault — LEFT JOIN null idarəetməsi
 

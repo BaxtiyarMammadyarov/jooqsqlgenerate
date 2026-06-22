@@ -93,9 +93,14 @@ public final class CoalesceExpr {
     public Field<?> toField(EntityTable<?> mainTable,
                             Map<String, EntityTable<?>> tableMap) {
         List<Field<?>> parts = new ArrayList<>();
+        boolean stringDefault = defaultValue instanceof String;
 
         for (Object v : values) {
-            parts.add(IfExpr.resolveValue(v, mainTable, tableMap));
+            Field<?> f = IfExpr.resolveValue(v, mainTable, tableMap);
+            // Default mətn (String) olduqda sütunlar CAST(... AS VARCHAR) edilir —
+            // əks halda qeyri-mətn sütun (Long/Date/...) ilə mətn literalı
+            // Postgres-də COALESCE-də "types ... cannot be matched" xətası verir.
+            parts.add(stringDefault ? f.cast(String.class) : f);
         }
 
         if (defaultValue != null) {
@@ -118,9 +123,11 @@ public final class CoalesceExpr {
      */
     public Field<?> toFieldGenerated(Table<?> mainTable, java.util.Map<String, Table<?>> tableMap) {
         List<Field<?>> parts = new ArrayList<>();
+        boolean stringDefault = defaultValue instanceof String;
 
         for (Object v : values) {
-            parts.add(IfExpr.resolveValueGenerated(v, mainTable, tableMap));
+            Field<?> f = IfExpr.resolveValueGenerated(v, mainTable, tableMap);
+            parts.add(stringDefault ? f.cast(String.class) : f);
         }
 
         if (defaultValue != null) {

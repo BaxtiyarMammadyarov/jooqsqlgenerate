@@ -123,6 +123,14 @@ public final class JooqQuery<T> {
 
     private final List<FilterRow> havingFilterRows = new ArrayList<>();
 
+    /**
+     * Generated mode-da .filter(field, op, value) həllini executeGenerated()-ə
+     * təxirə salır — çağırış vaxtı joinTableRegistry/aggExprByAlias hələ tam
+     * dolu olmaya bilər (Class-based JOIN-lər və concat/coalesce/selectAs
+     * alias-ları kimi). Bax: executeGenerated()-də həll loop-u.
+     */
+    private final List<FilterRow> deferredWhereFilterRows = new ArrayList<>();
+
     /** ROUND(field, scale) AS alias — SELECT sütunları + filter registry */
     private final List<RoundedColumnRow>        roundedColumns  = new ArrayList<>();
     private final Map<String, RoundedColumnRow> roundedAliasMap = new LinkedHashMap<>();
@@ -215,7 +223,13 @@ public final class JooqQuery<T> {
      *       .filter("status", EQUAl, "ACTIVE")
      *       .execute(dsl);
      * }</pre>
+     *
+     * @deprecated Reflection + EntityTable əsaslıdır, sahə adı səhv yazılsa yalnız
+     * runtime-da üzə çıxır. Bunun əvəzinə {@link #from(Table, String)} (jOOQ generated
+     * Table, tip-təhlükəli) və ya {@link #from(SelectTable, String)} (derived table)
+     * istifadə edin.
      */
+    @Deprecated
     public static <T> JooqQuery<T> from(Class<T> entity, String alias) {
         return new JooqQuery<>(entity, alias);
     }
@@ -409,7 +423,13 @@ public final class JooqQuery<T> {
         return this;
     }
 
-    /** CONCAT sütunu — sütun adları ilə (geriyə dönük uyğun). */
+    /**
+     * CONCAT sütunu — sadəcə sütunları birləşdirir (ən çox işlənən sadə hal).
+     *
+     * <p>Literal/CASE/COALESCE qarışdırmaq lazım olduqda {@link #concat(String, String, ConcatItem...)}
+     * istifadə edin; bu metod isə adi "sütunları birləşdir" halı üçündür və heç bir
+     * əlavə (builder paketindən) import tələb etmir.
+     */
     public JooqQuery<T> concat(String alias, String separator, String... fields) {
         if (alias != null && fields != null && fields.length > 0) {
             List<ConcatItem> items = Arrays.stream(fields)
@@ -420,7 +440,49 @@ public final class JooqQuery<T> {
         return this;
     }
 
-    /** CONCAT sütunu — List&lt;String&gt; variantı. */
+    /**
+     * CONCAT sütunu — fluent (join-style) yazı tərzi: əvvəl sahələr, sonra ayırıcı, sonra alias.
+     *
+     * <pre>{@code
+     *   .concatColumn("u.firstName", "u.lastName").sep(" ").as("fullName")
+     * }</pre>
+     *
+     * <p>{@code .as(alias)} builder-i tamamlayır və sütunu əlavə edib {@link JooqQuery}-yə
+     * qayıdır (JOIN builder-lərdəki {@code done()} kimi). Nəticə {@link #concat(String, String, String...)}
+     * ilə eynidir, sadəcə yazı sırası fərqlidir — heç bir əlavə import tələb etmir.
+     */
+    public ConcatSetup concatColumn(String... fields) {
+        return new ConcatSetup(this, fields);
+    }
+
+    /**
+     * Fluent CONCAT builder — {@link #concatColumn(String...)} tərəfindən yaradılır.
+     */
+    public final class ConcatSetup {
+        private final JooqQuery<T> parent;
+        private final String[]     fields;
+        private String             separator = "";
+
+        ConcatSetup(JooqQuery<T> parent, String[] fields) {
+            this.parent = parent;
+            this.fields = fields;
+        }
+
+        /** Sahələr arasına qoyulan ayırıcı (default: boş string). */
+        public ConcatSetup sep(String separator) {
+            this.separator = separator != null ? separator : "";
+            return this;
+        }
+
+        /** Builder-i tamamlayır: alias-ı təyin edir, sütunu əlavə edir, {@link JooqQuery}-yə qayıdır. */
+        public JooqQuery<T> as(String alias) {
+            return parent.concat(alias, separator, fields);
+        }
+    }
+
+    /**
+     * CONCAT sütunu — List&lt;String&gt; variantı. Bax: {@link #concat(String, String, String...)}.
+     */
     public JooqQuery<T> concat(String alias, String separator, List<String> fields) {
         if (alias != null && fields != null && !fields.isEmpty()) {
             List<ConcatItem> items = fields.stream()
@@ -531,14 +593,28 @@ public final class JooqQuery<T> {
     //  JOIN
     // ════════════════════════════════════════════════════════════════════
 
-    /** LEFT JOIN — entity mode üçün (string field adları, tək cüt) */
+    /**
+     * LEFT JOIN — entity mode üçün (string field adları, tək cüt).
+     *
+     * @deprecated Yalnız tək ON cütünə icazə verir. Bunun əvəzinə
+     * {@link #leftJoin(Class, String)} (fluent {@code JoinBuilder}) istifadə edin:
+     * {@code .leftJoin(Entity.class, alias).on(fromField, toField).done()} —
+     * çoxlu ON şərti və əlavə {@code andOn(...)} filterlərini də dəstəkləyir.
+     */
+    @Deprecated
     public JooqQuery<T> leftJoin(Class<?> entity, String alias,
                                  String fromField, String toField) {
         joins.add(new JoinRow("LEFT", entity, alias, fromField, toField));
         return this;
     }
 
-    /** INNER JOIN — entity mode üçün (string field adları, tək cüt) */
+    /**
+     * INNER JOIN — entity mode üçün (string field adları, tək cüt).
+     *
+     * @deprecated Bax: {@link #leftJoin(Class, String, String, String)}. Bunun
+     * əvəzinə {@link #innerJoin(Class, String)} (fluent {@code JoinBuilder}) istifadə edin.
+     */
+    @Deprecated
     public JooqQuery<T> innerJoin(Class<?> entity, String alias,
                                   String fromField, String toField) {
         joins.add(new JoinRow("INNER", entity, alias, fromField, toField));
@@ -805,7 +881,11 @@ public final class JooqQuery<T> {
      *
      * @param fromField  ana cədvəlin sahəsi: {@code "alias.field"} və ya {@code "field"}
      * @param toField    join cədvəlinin sahəsi: sadə {@code "field"} adı
+     *
+     * @deprecated Yalnız tək ON cütünə icazə verir. Bunun əvəzinə
+     * {@link #leftJoin(SelectTable, String)} (fluent {@code SelectJoinBuilder}) istifadə edin.
      */
+    @Deprecated
     public JooqQuery<T> leftJoin(SelectTable subQuery, String alias,
                                   String fromField, String toField) {
         selectJoins.add(new SelectJoinRow("LEFT", subQuery, alias,
@@ -816,7 +896,11 @@ public final class JooqQuery<T> {
 
     /**
      * INNER JOIN — başqa bir {@link SelectTable} ilə, string field adları ilə.
+     *
+     * @deprecated Bax: {@link #leftJoin(SelectTable, String, String, String)}. Bunun
+     * əvəzinə {@link #innerJoin(SelectTable, String)} (fluent) istifadə edin.
      */
+    @Deprecated
     public JooqQuery<T> innerJoin(SelectTable subQuery, String alias,
                                    String fromField, String toField) {
         selectJoins.add(new SelectJoinRow("INNER", subQuery, alias,
@@ -914,32 +998,23 @@ public final class JooqQuery<T> {
                 to.isEmpty()   || to.equalsIgnoreCase("null")) return this;
         }
 
-        // Generated mode — sahəni main və ya join cədvəlindən həll et (alias prefix nəzərə alınır)
+        // Generated mode — həll BURADA YOX, executeGenerated()-də aparılır.
+        // Səbəb: joinTableRegistry (Class-based JOIN-lər üçün) və aggExprByAlias
+        // (concat/coalesce/selectAs/computed alias-ları üçün) yalnız bütün
+        // builder zənciri tamamlandıqdan sonra — executeGenerated() içində —
+        // tam dolur. Əvvəllər bura BURADA dərhal (eager) həll edilirdi və
+        // tapılmadıqda sükutla atılırdı (return this) — nəticədə join edilmiş
+        // cədvəlin sütununa və ya concat/coalesce/selectAs alias-ına filter
+        // verildikdə heç bir xəbərdarlıq olmadan WHERE-ə düşmürdü.
         if (generatedTable != null) {
-            // Rounded column yoxlaması: alias roundedAliasMap-dədirsə ROUND(field, scale) OP value
-            String cleanField = fieldPart(field);
-            RoundedColumnRow rounded = roundedAliasMap.get(cleanField);
-            if (rounded != null) {
-                Field<?> rf = resolveFieldByAlias(rounded.fieldRef());
-                if (rf != null) {
-                    Field<?> roundedField = DSL.round((Field<? extends Number>) rf, rounded.scale());
-                    Condition c = az.mbm.jooqsqlgenerate.strategy.FilterStrategies
-                            .get(op).apply((Field<Object>) roundedField, value);
-                    return rawCondition(c);
-                }
-            }
-
-            Field<?> resolved = resolveFieldByAlias(field);
-            if (resolved == null) return this; // sahə tapılmadı — atla
             Object cleanValue = value;
             if (value instanceof Collection<?> c) {
                 List<?> clean = c.stream().filter(Objects::nonNull).collect(Collectors.toList());
                 if (clean.isEmpty()) return this;
                 cleanValue = clean;
             }
-            Condition c = az.mbm.jooqsqlgenerate.strategy.FilterStrategies
-                    .get(op).apply((Field<Object>) resolved, cleanValue);
-            return rawCondition(c);
+            deferredWhereFilterRows.add(new FilterRow(field, op, cleanValue));
+            return this;
         }
 
         // Entity mode — list gəldikdə IN istifadə edilir
@@ -1425,15 +1500,14 @@ public final class JooqQuery<T> {
                     ? Arrays.asList(e.getValue().split(","))
                     : e.getValue();
 
-            if (generatedTable != null) {
-                // Generated mode — alias referansı ilə HAVING (PostgreSQL/MySQL dəstəkləyir)
-                @SuppressWarnings("unchecked")
-                Field<Object> f = (Field<Object>) DSL.field(DSL.name(fieldPart(field)));
-                rawHavings.add(az.mbm.jooqsqlgenerate.strategy.FilterStrategies.get(op).apply(f, value));
-            } else {
-                // Entity mode — AggregateBuilder.step.having() vasitəsilə işlər (execute()-də)
-                havingFilterRows.add(new FilterRow(fieldPart(field), op, value));
-            }
+            // Hər iki rejimdə də həllini sonraya saxlayırıq: executeGenerated()/execute()
+            // FilterRow-u alias üzrə aqreqat ifadəsi (aggExprByAlias / havingMap) ilə
+            // həll edir. Generated rejimdə birbaşa bare alias referansı ("paymentX")
+            // yazmaq TƏHLÜKƏLİDİR — əgər həmin alias adı eyni zamanda JOIN edilmiş
+            // törəmə cədvəldə (derived table) real sütun kimi mövcuddursa, Postgres
+            // HAVING-i SELECT alias-ına görə deyil, FROM-dakı real sütuna görə oxuyur və
+            // "must appear in GROUP BY clause or be used in an aggregate function" xətası verir.
+            havingFilterRows.add(new FilterRow(fieldPart(field), op, value));
         }
         return this;
     }
@@ -2075,16 +2149,131 @@ public final class JooqQuery<T> {
             ComputedField cf = entry.cf();
             if (cf == null) continue;
 
-            Field<?> expr = cf.toFieldGenerated(mainTable, joinTableRegistry);
+            // DİQQƏT: raw (alias-sız) ifadə saxlanılır — bax: yuxarıdaki CONCAT bloku
+            // izahı. Əvvəllər cf.toFieldGenerated(...) (artıq .as(alias) tətbiq edilmiş)
+            // həm map-ə, həm də inline filter-də DSL.field(DSL.name(alias)) ilə birbaşa
+            // alias istinadı üçün istifadə olunurdu — Postgres-də SELECT alias-ları
+            // HAVING-də görünmür, "column does not exist" yaranırdı.
+            Field<?> expr = cf.buildExprGenerated(mainTable, joinTableRegistry);
             String computedAlias = cf.getAlias();
 
             aggExprByAlias.put(computedAlias, expr);
-            selectList.add(expr);
+            selectList.add(expr.as(computedAlias));
 
             if (entry.filterOp() != null && entry.filterValue() != null) {
-                Field<Object> aliasField = (Field<Object>) DSL.field(DSL.name(computedAlias));
                 rawHavings.add(az.mbm.jooqsqlgenerate.strategy.FilterStrategies.get(entry.filterOp())
-                        .apply(aliasField, entry.filterValue()));
+                        .apply((Field<Object>) expr, entry.filterValue()));
+            }
+        }
+
+        // ─── concatCols — CONCAT(field/literal/if/coalesce, ...) ─────────────
+        // Əvvəllər generated mode-da bu siyahı heç vaxt oxunmurdu (yalnız entity
+        // mode-un execute()-i istifadə edirdi) — nəticədə .concat(...) sütunu
+        // generated/derived-table sorğularda select listə düşmürdü.
+        for (ConcatRow cc : concatCols) {
+            List<Field<?>> parts = new ArrayList<>();
+            for (int i = 0; i < cc.items().size(); i++) {
+                if (i > 0 && cc.separator() != null && !cc.separator().isEmpty()) {
+                    parts.add(DSL.inline(cc.separator()));
+                }
+                ConcatItem item = cc.items().get(i);
+                if (item instanceof ConcatItem.Literal lit) {
+                    parts.add(DSL.inline(lit.value()));
+                } else if (item instanceof ConcatItem.ColField cf) {
+                    Field<?> f = resolveFieldByAlias(cf.aliasAndField());
+                    if (f == null) f = DSL.field(DSL.name(fieldPart(cf.aliasAndField())));
+                    // CAST(... AS VARCHAR) vacibdir: sütun Long/Integer/Date və s. tipindədirsə,
+                    // COALESCE(numericField, '') Postgres-də "COALESCE types ... cannot be
+                    // matched" xətası verir — əvvəlcə mətnə çevrilməlidir.
+                    parts.add(DSL.coalesce(f.cast(String.class), DSL.inline("")));
+                } else if (item instanceof ConcatItem.IfItem ii) {
+                    parts.add(DSL.coalesce(ii.expr().toFieldGenerated(mainTable, joinTableRegistry).cast(String.class), DSL.inline("")));
+                } else if (item instanceof ConcatItem.CoalesceItem ci) {
+                    parts.add(ci.expr().toFieldGenerated(mainTable, joinTableRegistry));
+                }
+            }
+            // DİQQƏT: map-ə alias-sız (raw) ifadə qoyulur — alias-lanmış Field-i
+            // saxlasaydıq, bu obyekt sonra HAVING/.filter() şərtində istifadə
+            // ediləndə jOOQ onu sadəcə "alias" adı kimi render edir və Postgres
+            // "column ... does not exist" xətası verir (SELECT alias-ları
+            // WHERE/HAVING-də görünmür). aggRows/computedCols bloklarındaki
+            // eyni qaydaya uyğunlaşdırıldı.
+            Field<?> expr = DSL.concat(parts.toArray(new Field[0]));
+            aggExprByAlias.put(cc.alias(), expr);
+            selectList.add(expr.as(cc.alias()));
+        }
+
+        // ─── coalesceCols — COALESCE(field1, field2, ..., default) ───────────
+        // Eyni səbəbdən generated mode-da yox idi.
+        for (CoalesceRow cc : coalesceCols) {
+            List<Field<?>> coalesceList = new ArrayList<>();
+            boolean stringDefault = cc.def() instanceof String;
+            for (String f : cc.fields()) {
+                Field<?> rf = resolveFieldByAlias(f);
+                if (rf == null) rf = DSL.field(DSL.name(fieldPart(f)));
+                // Default mətn (String) olduqda CAST(... AS VARCHAR) — bax: yuxarıdaki
+                // CONCAT blokundaki eyni izahat (Postgres COALESCE tip uyğunlaşdırması).
+                coalesceList.add(stringDefault ? rf.cast(String.class) : rf);
+            }
+            coalesceList.add(DSL.inline(cc.def()));
+            Field<?> first = coalesceList.get(0);
+            Field<?>[] rest = coalesceList.subList(1, coalesceList.size()).toArray(new Field[0]);
+            // Bax: yuxarıdaki CONCAT bloku — eyni səbəbdən raw (alias-sız) ifadə saxlanılır.
+            Field<?> expr = DSL.coalesce(first, rest);
+            aggExprByAlias.put(cc.alias(), expr);
+            selectList.add(expr.as(cc.alias()));
+        }
+
+        // ─── selectAsRows — "alias.field" AS outputAlias ─────────────────────
+        // Eyni səbəbdən generated mode-da yox idi.
+        for (SelectAsRow sa : selectAsRows) {
+            Field<?> f = resolveFieldByAlias(sa.aliasAndField());
+            if (f == null) f = DSL.field(DSL.name(fieldPart(sa.aliasAndField())));
+            // Bax: yuxarıdaki CONCAT bloku — eyni səbəbdən raw (alias-sız) ifadə saxlanılır.
+            aggExprByAlias.put(sa.outputAlias(), f);
+            selectList.add(f.as(sa.outputAlias()));
+        }
+
+        // ─── deferredWhereFilterRows — .filter(field,op,value) həlli ────────
+        // İndi joinTableRegistry (bütün JOIN növləri) və aggExprByAlias
+        // (aqreqatlar + concat/coalesce/selectAs/computed alias-ları) tam
+        // doludur — həll buraya təxirə salınmışdı, indi aparılır.
+        if (!deferredWhereFilterRows.isEmpty()) {
+            Set<String> aggregateAliasSet = new HashSet<>();
+            for (AggRow ar : aggRows) aggregateAliasSet.add(ar.alias());
+
+            for (FilterRow fr : deferredWhereFilterRows) {
+                String key = fieldPart(fr.field());
+
+                // ROUND(field, scale) AS alias yoxlaması (rounded SELECT sütunu)
+                RoundedColumnRow rounded = roundedAliasMap.get(key);
+                if (rounded != null) {
+                    Field<?> rf = resolveFieldByAlias(rounded.fieldRef());
+                    if (rf != null) {
+                        Field<?> roundedField = DSL.round((Field<? extends Number>) rf, rounded.scale());
+                        rawConditions.add(az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                                .get(fr.op()).apply((Field<Object>) roundedField, fr.value()));
+                        continue;
+                    }
+                }
+
+                // Aqreqat / concat / coalesce / selectAs / computed alias-ı?
+                Field<?> expr = aggExprByAlias.get(key);
+                if (expr != null) {
+                    Condition c = az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                            .get(fr.op()).apply((Field<Object>) expr, fr.value());
+                    // Əsl aqreqat (SUM/COUNT/AVG/...) WHERE-də işlənə bilməz — HAVING-ə yönəlir.
+                    // Qalanlar (concat/coalesce/selectAs/computed) sətir-əsaslıdır — WHERE-də qalır.
+                    if (aggregateAliasSet.contains(key)) rawHavings.add(c);
+                    else rawConditions.add(c);
+                    continue;
+                }
+
+                // Adi cədvəl sütunu (main və ya JOIN edilmiş) — registry artıq doludur
+                Field<?> resolved = resolveFieldByAlias(fr.field());
+                if (resolved == null) resolved = DSL.field(DSL.name(key));
+                rawConditions.add(az.mbm.jooqsqlgenerate.strategy.FilterStrategies
+                        .get(fr.op()).apply((Field<Object>) resolved, fr.value()));
             }
         }
 
@@ -2181,6 +2370,24 @@ public final class JooqQuery<T> {
                     : query.join(jt).on(on);
         }
 
+        // ─── GLOBAL FILTER — generated mode ─────────────────────────────────
+        // globalFilter(...) çağırışları ilə əlavə olunan filterlər — alias.field
+        // joinTableRegistry-dən (yuxarıda doldurulub) və ya əsas cədvəldən resolve edilir.
+        // Aqreqat alias-ına uyğun gəlirsə HAVING-ə yönləndirilir, əks halda WHERE-ə.
+        for (FiltersEntry gf : globalFilters) {
+            String fieldKey = fieldPart(gf.aliasAndField());
+            Field<?> aggExpr = aggExprByAlias.get(fieldKey);
+            if (aggExpr != null) {
+                Condition c = FilterStrategies.get(gf.op()).apply((Field<Object>) aggExpr, gf.value());
+                rawHavings.add(c);
+                continue;
+            }
+            Field<?> resolved = resolveFieldByAlias(gf.aliasAndField());
+            if (resolved == null) resolved = DSL.field(DSL.name(fieldKey));
+            Condition c = FilterStrategies.get(gf.op()).apply((Field<Object>) resolved, gf.value());
+            rawConditions.add(c);
+        }
+
         // ─── WHERE ───────────────────────────────────────────────────────────
         Condition where = null;
         for (Condition c : rawConditions) where = (where == null) ? c : where.and(c);
@@ -2224,11 +2431,15 @@ public final class JooqQuery<T> {
         SelectSeekStepN<Record> ordered = grouped.orderBy(rawOrderFields);
 
         // ─── COUNT (pagination üçün) ─────────────────────────────────────────
+        // GROUP BY (+ HAVING) varsa COUNT mütləq "qruplaşdırılmış" nəticəni saymalıdır —
+        // əks halda qruplaşdırmadan əvvəlki sətir sayı qaytarılır (səhv nəticə: list 1
+        // sətir, count isə qruplaşmamış sətirlərin sayını — məs. 4 — göstərir).
+        // "conditioned"/"grouped" artıq bütün JOIN-ləri özündə saxlayır.
         int rowCount = 0;
         if (paginate) {
+            Select<Record> countSource = rawGroupByFields.isEmpty() ? conditioned : grouped;
             Record1<Integer> r = dsl.selectCount()
-                    .from(mainTable)
-                    .where(where != null ? where : DSL.trueCondition())
+                    .from(countSource.asTable("_count"))
                     .fetchOne();
             rowCount = (r == null) ? 0 : r.value1();
         }

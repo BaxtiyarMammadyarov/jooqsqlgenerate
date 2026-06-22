@@ -16,6 +16,7 @@ import az.mbm.jooqsqlgenerate.core.SelectTable;
 import az.mbm.jooqsqlgenerate.enums.Op;
 import az.mbm.jooqsqlgenerate.enums.Agg;
 import az.mbm.jooqsqlgenerate.enums.MathOp;
+import az.mbm.jooqsqlgenerate.enums.NullDefault;
 import az.mbm.jooqsqlgenerate.spec.ExistsSpec;
 import az.mbm.jooqsqlgenerate.spec.Filter;
 import az.mbm.jooqsqlgenerate.spec.Filters;
@@ -70,7 +71,13 @@ public class JooqManager {
      *
      * @param entity JPA entity class
      * @param alias  SQL alias ("u", "o", ...)
+     *
+     * @deprecated Reflection + EntityTable əsaslıdır, sahə adı səhv yazılsa yalnız
+     * runtime-da üzə çıxır. Bunun əvəzinə {@link #setMainTable(Table, String)}
+     * (jOOQ generated Table, tövsiyə olunan) və ya
+     * {@link #setMainTable(SelectTable, String)} (derived table) istifadə edin.
      */
+    @Deprecated
     @SuppressWarnings("unchecked")
     public JooqManager setMainTable(Class<?> entity, String alias) {
         current = JooqQuery.from(
@@ -343,16 +350,65 @@ public class JooqManager {
         return this;
     }
 
-    /** CONCAT SELECT sütunu — sütun adları ilə. */
+    /**
+     * CONCAT SELECT sütunu — sütun adları ilə (ən sadə hal, heç bir əlavə import lazım deyil).
+     *
+     * <p>Literal/CASE/COALESCE qarışdırmaq lazım olduqda {@link #addConcatColumn(String, String, ConcatItem...)}
+     * istifadə edin.
+     */
     public JooqManager addConcatColumn(String alias, String separator, String... fields) {
         q().concat(alias, separator, fields);
         return this;
     }
 
-    /** CONCAT SELECT sütunu — List&lt;String&gt; variantı. */
+    /**
+     * CONCAT SELECT sütunu — List&lt;String&gt; variantı. Bax: {@link #addConcatColumn(String, String, String...)}.
+     */
     public JooqManager addConcatColumn(String alias, String separator, List<String> fields) {
         q().concat(alias, separator, fields);
         return this;
+    }
+
+    /**
+     * CONCAT SELECT sütunu — fluent (join-style) yazı tərzi: əvvəl sahələr, sonra ayırıcı, sonra alias.
+     *
+     * <pre>{@code
+     *   jooq.concatColumn("u.firstName", "u.lastName")
+     *       .sep(" ")
+     *       .as("fullName")
+     * }</pre>
+     *
+     * <p>{@code .as(alias)} builder-i tamamlayır, sütunu əlavə edir və {@link JooqManager}-ə
+     * qayıdır. Nəticə {@link #addConcatColumn(String, String, String...)} ilə eynidir,
+     * sadəcə yazı sırası fərqlidir — heç bir əlavə import tələb etmir.
+     */
+    public ConcatSetup concatColumn(String... fields) {
+        return new ConcatSetup(this, fields);
+    }
+
+    /**
+     * Fluent CONCAT builder — {@link #concatColumn(String...)} tərəfindən yaradılır.
+     */
+    public final class ConcatSetup {
+        private final JooqManager manager;
+        private final String[]    fields;
+        private String            separator = "";
+
+        ConcatSetup(JooqManager manager, String[] fields) {
+            this.manager = manager;
+            this.fields  = fields;
+        }
+
+        /** Sahələr arasına qoyulan ayırıcı (default: boş string). */
+        public ConcatSetup sep(String separator) {
+            this.separator = separator != null ? separator : "";
+            return this;
+        }
+
+        /** Builder-i tamamlayır: alias-ı təyin edir, sütunu əlavə edir, {@link JooqManager}-ə qayıdır. */
+        public JooqManager as(String alias) {
+            return manager.addConcatColumn(alias, separator, fields);
+        }
     }
 
     /** CONCAT SELECT sütunu — field + literal qarışıq. */
@@ -402,14 +458,29 @@ public class JooqManager {
     //  JOIN
     // ════════════════════════════════════════════════════════════════════
 
-    /** LEFT JOIN — entity mode (string field adları, tək cüt) */
+    /**
+     * LEFT JOIN — entity mode (string field adları, tək cüt).
+     *
+     * @deprecated Yalnız tək ON cütünə icazə verir. Bunun əvəzinə
+     * {@link #addLeftJoin(Class, String)} (fluent {@code JoinSetup}) istifadə edin:
+     * {@code .addLeftJoin(Entity.class, alias).on(fromField, toField).done()} —
+     * çoxlu ON şərti və əlavə {@code andOn(...)}/{@code equal(...)} kimi
+     * filterləri də dəstəkləyir.
+     */
+    @Deprecated
     public JooqManager addLeftJoin(Class<?> entity, String alias,
                                    String fromField, String toField) {
         q().leftJoin(entity, alias, fromField, toField);
         return this;
     }
 
-    /** INNER JOIN — entity mode (string field adları, tək cüt) */
+    /**
+     * INNER JOIN — entity mode (string field adları, tək cüt).
+     *
+     * @deprecated Bax: {@link #addLeftJoin(Class, String, String, String)}. Bunun
+     * əvəzinə {@link #addInnerJoin(Class, String)} (fluent {@code JoinSetup}) istifadə edin.
+     */
+    @Deprecated
     public JooqManager addInnerJoin(Class<?> entity, String alias,
                                     String fromField, String toField) {
         q().innerJoin(entity, alias, fromField, toField);
@@ -622,7 +693,11 @@ public class JooqManager {
      *   .addLeftJoin(budgetQuery, "b", "f.fkAccountId", "fkAccountId")
      *   // ON f."fkAccountId" = b."fkAccountId"
      * }</pre>
+     *
+     * @deprecated Yalnız tək ON cütünə icazə verir. Bunun əvəzinə
+     * {@link #addLeftJoin(SelectTable, String)} (fluent {@code SelectJoinSetup}) istifadə edin.
      */
+    @Deprecated
     public JooqManager addLeftJoin(SelectTable subQuery, String alias,
                                     String fromField, String toField) {
         q().leftJoin(subQuery, alias, fromField, toField);
@@ -631,7 +706,11 @@ public class JooqManager {
 
     /**
      * INNER JOIN — başqa bir {@link SelectTable} ilə, string field adları ilə.
+     *
+     * @deprecated Bax: {@link #addLeftJoin(SelectTable, String, String, String)}. Bunun
+     * əvəzinə {@link #addInnerJoin(SelectTable, String)} (fluent) istifadə edin.
      */
+    @Deprecated
     public JooqManager addInnerJoin(SelectTable subQuery, String alias,
                                      String fromField, String toField) {
         q().innerJoin(subQuery, alias, fromField, toField);
@@ -1607,6 +1686,36 @@ public class JooqManager {
         public AggChain subtract(String field) { expr = expr.subtract(field); return this; }
         public AggChain multiply(String field) { expr = expr.multiply(field); return this; }
         public AggChain divide(String field)   { expr = expr.divide(field);   return this; }
+
+        // ─── NullDefault — LEFT JOIN null sahələri üçün ─────────────────
+
+        /**
+         * LEFT JOIN-dən gələn null sahələr üçün bütün zəncirə COALESCE strategiyası tətbiq edir.
+         *
+         * <p>Default davranış {@link NullDefault#NONE}-dir — hesablamadakı hər hansı
+         * sahə null gəlsə bütün aqreqat ifadəsi null olur (SQL standart davranışı). Bunu önləmək üçün:
+         *
+         * <pre>{@code
+         *   manager.addAggFunction(Agg.SUM, "d1.totalPriceIn")
+         *          .add("d1.totalPriceOut")
+         *          .multiply("d1.rate")
+         *          .withNullDefault(NullDefault.ZERO)   // null sahələr 0 kimi hesablanır
+         *          .as("mainTotalPrice")
+         * }</pre>
+         */
+        public AggChain withNullDefault(NullDefault nd) { expr = expr.withNullDefault(nd); return this; }
+
+        /** {@code + COALESCE(field, nullAs)} — yalnız bu addım üçün null default. */
+        public AggChain addNullAs(String field, Number nullAs)      { expr = expr.addNullAs(field, nullAs);      return this; }
+
+        /** {@code - COALESCE(field, nullAs)} — yalnız bu addım üçün null default. */
+        public AggChain subtractNullAs(String field, Number nullAs) { expr = expr.subtractNullAs(field, nullAs); return this; }
+
+        /** {@code * COALESCE(field, nullAs)} — yalnız bu addım üçün null default. */
+        public AggChain multiplyNullAs(String field, Number nullAs) { expr = expr.multiplyNullAs(field, nullAs); return this; }
+
+        /** {@code / COALESCE(field, nullAs)} — yalnız bu addım üçün null default. */
+        public AggChain divideNullAs(String field, Number nullAs)   { expr = expr.divideNullAs(field, nullAs);   return this; }
 
         /** Alias təyin edir, aqreqatı qeydiyyat edir və {@link JooqManager}-ə qayıdır. */
         public JooqManager as(String alias) {

@@ -437,6 +437,36 @@ public class SelectQueryBuilder<T> {
         /** {@code / field} */
         public MathStep<E> divide(String field)   { expr.divide(field);   return this; }
 
+        // ─── NullDefault — LEFT JOIN null sahələri üçün ─────────────────
+
+        /**
+         * LEFT JOIN-dən gələn null sahələr üçün bütün zəncirə COALESCE strategiyası tətbiq edir.
+         *
+         * <p>Default davranış {@link NullDefault#NONE}-dir — hesablamadakı hər hansı
+         * sahə null gəlsə (məs. LEFT JOIN-də uyğun sətir tapılmadıqda) bütün ifadə
+         * null olur (SQL-in standart davranışı). Bunu önləmək üçün:
+         *
+         * <pre>{@code
+         *   .compute("o.price")
+         *       .multiply("o.qty")
+         *       .withNullDefault(NullDefault.ZERO)   // qty null gəlsə 0 kimi hesablanır
+         *       .as("lineTotal")
+         * }</pre>
+         */
+        public MathStep<E> withNullDefault(NullDefault nd) { expr.withNullDefault(nd); return this; }
+
+        /** {@code + COALESCE(field, nullAs)} — yalnız bu addım üçün null default. */
+        public MathStep<E> addNullAs(String field, Number nullAs)      { expr.addNullAs(field, nullAs);      return this; }
+
+        /** {@code - COALESCE(field, nullAs)} — yalnız bu addım üçün null default. */
+        public MathStep<E> subtractNullAs(String field, Number nullAs) { expr.subtractNullAs(field, nullAs); return this; }
+
+        /** {@code * COALESCE(field, nullAs)} — yalnız bu addım üçün null default. */
+        public MathStep<E> multiplyNullAs(String field, Number nullAs) { expr.multiplyNullAs(field, nullAs); return this; }
+
+        /** {@code / COALESCE(field, nullAs)} — yalnız bu addım üçün null default. */
+        public MathStep<E> divideNullAs(String field, Number nullAs)   { expr.divideNullAs(field, nullAs);   return this; }
+
         // ─── Mötərizəli qrup açmaq — boş çağırış ────────────────────────
 
         /**
@@ -563,6 +593,23 @@ public class SelectQueryBuilder<T> {
         /** {@code / field} — qrup daxilində */
         public GroupStep<E> divide(String field)   { group.divide(field);   return this; }
 
+        // ─── NullDefault — qrup daxilində LEFT JOIN null sahələri üçün ───
+
+        /** Qrupun bütün zəncirinə COALESCE strategiyası tətbiq edir — bax {@link MathExpr#withNullDefault(NullDefault)}. */
+        public GroupStep<E> withNullDefault(NullDefault nd) { group.withNullDefault(nd); return this; }
+
+        /** {@code + COALESCE(field, nullAs)} — qrup daxilində, yalnız bu addım üçün. */
+        public GroupStep<E> addNullAs(String field, Number nullAs)      { group.addNullAs(field, nullAs);      return this; }
+
+        /** {@code - COALESCE(field, nullAs)} — qrup daxilində, yalnız bu addım üçün. */
+        public GroupStep<E> subtractNullAs(String field, Number nullAs) { group.subtractNullAs(field, nullAs); return this; }
+
+        /** {@code * COALESCE(field, nullAs)} — qrup daxilində, yalnız bu addım üçün. */
+        public GroupStep<E> multiplyNullAs(String field, Number nullAs) { group.multiplyNullAs(field, nullAs); return this; }
+
+        /** {@code / COALESCE(field, nullAs)} — qrup daxilində, yalnız bu addım üçün. */
+        public GroupStep<E> divideNullAs(String field, Number nullAs)   { group.divideNullAs(field, nullAs);   return this; }
+
         // ─── Mötərizəni bağla, valideynə qayıt ───────────────────────────
 
         /**
@@ -601,9 +648,12 @@ public class SelectQueryBuilder<T> {
     }
 
     /**
-     * CONCAT SELECT sütunu — sütun adları ilə (geriyə dönük uyğun).
+     * CONCAT SELECT sütunu — sütun adları ilə (ən sadə hal, heç bir əlavə import lazım deyil).
      *
      * <pre>{@code .concat("fullName", " ", "u.firstName", "u.lastName") }</pre>
+     *
+     * <p>Literal/CASE/COALESCE qarışdırmaq lazım olduqda {@link #concat(String, String, ConcatItem...)}
+     * istifadə edin.
      */
     public SelectQueryBuilder<T> concat(String alias, String separator, String... fields) {
         List<ConcatItem> items = Arrays.stream(fields)
@@ -1822,10 +1872,14 @@ public class SelectQueryBuilder<T> {
                 parts.add(DSL.inline(lit.value()));
             } else if (item instanceof ConcatItem.ColField cf) {
                 EntityTable<?> t = tableMap.getOrDefault(aliasPart(cf.aliasAndField()), mainTable);
-                parts.add(DSL.coalesce(t.getField(fieldPart(cf.aliasAndField())), DSL.inline("")));
+                Field<?> f = t.getField(fieldPart(cf.aliasAndField()));
+                // CAST(... AS VARCHAR) vacibdir: sütun Long/Integer/Date və s. tipindədirsə,
+                // COALESCE(numericField, '') Postgres-də "COALESCE types ... cannot be
+                // matched" xətası verir — əvvəlcə mətnə çevrilməlidir.
+                parts.add(DSL.coalesce(f.cast(String.class), DSL.inline("")));
             } else if (item instanceof ConcatItem.IfItem ii) {
-                // CASE WHEN ifadəsi — COALESCE ilə null qorunması
-                parts.add(DSL.coalesce(ii.expr().toField(mainTable, tableMap), DSL.inline("")));
+                // CASE WHEN ifadəsi — COALESCE ilə null qorunması (eyni CAST səbəbi yuxarıda)
+                parts.add(DSL.coalesce(ii.expr().toField(mainTable, tableMap).cast(String.class), DSL.inline("")));
             } else if (item instanceof ConcatItem.CoalesceItem ci) {
                 // COALESCE ifadəsi — özü artıq null-safe-dir
                 parts.add(ci.expr().toField(mainTable, tableMap));
@@ -1841,9 +1895,14 @@ public class SelectQueryBuilder<T> {
             throw new IllegalStateException("COALESCE: ən azı bir sahə lazımdır");
 
         List<Field<?>> coalesceList = new ArrayList<>();
+        boolean stringDefault = cc.defaultValue() instanceof String;
         for (String f : cc.fields()) {
             EntityTable<?> t = tableMap.getOrDefault(aliasPart(f), mainTable);
-            coalesceList.add(t.getField(fieldPart(f)));
+            Field<?> fld = t.getField(fieldPart(f));
+            // Default mətn (String) olduqda sütunlar CAST(... AS VARCHAR) edilir —
+            // əks halda qeyri-mətn sütun (Long/Date/...) ilə mətn literalı
+            // Postgres-də COALESCE-də "types ... cannot be matched" xətası verir.
+            coalesceList.add(stringDefault ? fld.cast(String.class) : fld);
         }
         // Son element — default dəyər
         coalesceList.add(DSL.inline(cc.defaultValue()));

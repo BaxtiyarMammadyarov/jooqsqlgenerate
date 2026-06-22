@@ -1,5 +1,7 @@
 package az.mbm.jooqsqlgenerate.builder;
 
+import az.mbm.jooqsqlgenerate.enums.NullDefault;
+
 /**
  * FLUENT BUILDER — riyazi SELECT sütunu üçün sadə DSL.
  *
@@ -101,6 +103,50 @@ public class MathExpr {
     /** {@code / field} */
     public MathExpr divide(String tableAliasAndField) {
         cf.divide(tableAliasAndField);
+        return this;
+    }
+
+    // ─── NullDefault — LEFT JOIN null sahələri üçün ──────────────────────
+
+    /**
+     * LEFT JOIN-dən gələn null sahələr üçün bütün zəncirə COALESCE strategiyası tətbiq edir.
+     *
+     * <p>Default davranış {@link NullDefault#NONE}-dir — heç bir sahə null gəlsə
+     * bütün ifadə (SQL standart davranışı ilə) null olur. Bunu önləmək üçün:
+     *
+     * <pre>{@code
+     *   .compute("o.price")
+     *       .multiply("o.qty")
+     *       .withNullDefault(NullDefault.ZERO)   // qty null gəlsə 0 kimi hesablanır
+     *       .as("lineTotal")
+     * }</pre>
+     */
+    public MathExpr withNullDefault(NullDefault nd) {
+        cf.withNullDefault(nd);
+        return this;
+    }
+
+    /** {@code + COALESCE(field, nullAs)} — yalnız bu addım üçün null default. */
+    public MathExpr addNullAs(String tableAliasAndField, Number nullAs) {
+        cf.addNullAs(tableAliasAndField, nullAs);
+        return this;
+    }
+
+    /** {@code - COALESCE(field, nullAs)} — yalnız bu addım üçün null default. */
+    public MathExpr subtractNullAs(String tableAliasAndField, Number nullAs) {
+        cf.subtractNullAs(tableAliasAndField, nullAs);
+        return this;
+    }
+
+    /** {@code * COALESCE(field, nullAs)} — yalnız bu addım üçün null default. */
+    public MathExpr multiplyNullAs(String tableAliasAndField, Number nullAs) {
+        cf.multiplyNullAs(tableAliasAndField, nullAs);
+        return this;
+    }
+
+    /** {@code / COALESCE(field, nullAs)} — yalnız bu addım üçün null default. */
+    public MathExpr divideNullAs(String tableAliasAndField, Number nullAs) {
+        cf.divideNullAs(tableAliasAndField, nullAs);
         return this;
     }
 
