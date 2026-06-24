@@ -100,6 +100,7 @@ public class ComputedField {
     private       String             alias         = null;
     private       DataType<?>        castType      = null;
     private       String             datePattern   = null;
+    private       Integer            roundScale    = null;
     /** Bütün zəncirə tətbiq olunan NULL default strategiyası */
     private       NullDefault        nullDefault   = NullDefault.NONE;
 
@@ -278,6 +279,7 @@ public class ComputedField {
 
         /** Default olmadan birbaşa zəncirə keçir (məs. {@code .add(...)}) */
         public ComputedField as(String alias)              { return cf.as(alias); }
+        public ComputedField as(String alias, int scale)   { return cf.as(alias, scale); }
         public ComputedField add(String f)                 { return cf.add(f); }
         public ComputedField subtract(String f)            { return cf.subtract(f); }
         public ComputedField multiply(String f)            { return cf.multiply(f); }
@@ -287,6 +289,7 @@ public class ComputedField {
         public ComputedField castToInteger()                                                         { return cf.castToInteger(); }
         public ComputedField castToBigDecimal()                                                      { return cf.castToBigDecimal(); }
         public ComputedField castToDateTime(String p)                                                { return cf.castToDateTime(p); }
+        public ComputedField round(int scale)                                                        { return cf.round(scale); }
         public ComputedField addIf(String c, Object eq, Object t, Object e)                         { return cf.addIf(c, eq, t, e); }
         public ComputedField subtractIf(String c, Object eq, Object t, Object e)                    { return cf.subtractIf(c, eq, t, e); }
         public ComputedField multiplyIf(String c, Object eq, Object t, Object e)                    { return cf.multiplyIf(c, eq, t, e); }
@@ -602,6 +605,35 @@ public class ComputedField {
         return this;
     }
 
+    // ─── Round ───────────────────────────────────────────────────────────
+
+    /**
+     * İfadənin son nəticəsini {@code ROUND(expr, scale)} ilə bükür.
+     *
+     * <p>Zəncirdəki riyazi əməliyyatlardan SONRA, {@code .castTo(...)}-dan
+     * ƏVVƏL tətbiq olunur. {@code .where(...)} filtri varsa, CASE WHEN
+     * artıq rounded nəticəni THEN qismində istifadə edir.
+     *
+     * <p>Bu metoddan istifadə edildikdə, {@link az.mbm.jooqsqlgenerate.JooqManager}/
+     * {@code computedColumn(cf, op, value)} vasitəsilə qoyulan filter də
+     * EYNİ (artıq rounded) ifadə üzərində işləyir — çünki filter eyni
+     * {@code ComputedField} obyektindən qurulan ifadəyə tətbiq olunur.
+     *
+     * <pre>{@code
+     *   ComputedField.of("d2.vatTotalPrice")
+     *       .subtract("d6.refundVatTotalPrice")
+     *       .round(4)
+     *       .as("vatTotalPrice")
+     *   // → ROUND(d2.vatTotalPrice - d6.refundVatTotalPrice, 4) AS vatTotalPrice
+     * }</pre>
+     *
+     * @param scale onluq kəsr dəqiqliyi (məs. {@code 4} → 4 onluq rəqəm)
+     */
+    public ComputedField round(int scale) {
+        this.roundScale = scale;
+        return this;
+    }
+
     // ─── Alias ───────────────────────────────────────────────────────────
 
     /**
@@ -614,6 +646,30 @@ public class ComputedField {
         int dot = alias.indexOf('.');
         this.alias = dot >= 0 ? alias.substring(dot + 1) : alias;
         return this;
+    }
+
+    /**
+     * SELECT alias + ROUND qısayolu — {@code .round(scale).as(alias)} ilə eynidir.
+     *
+     * <p>Qeyd: {@code globalFilter}/{@code addFilter} bu alias üzərindən filter
+     * gələndə ({@code SelectQueryBuilder.buildWhereCondition} / {@code JooqQuery}
+     * {@code aggExprByAlias} mexanizmi) eyni {@code ComputedField} obyektindən
+     * yenidən qurulur — ona görə filter avtomatik olaraq ROUND edilmiş nəticə
+     * üzərində işləyir, əlavə qoşulma tələb olunmur.
+     *
+     * <pre>{@code
+     *   .addComputedColumn("d2.vatTotalPrice")
+     *       .subtract("d6.refundVatTotalPrice")
+     *       .as("vatTotalPrice", 4)
+     *   // → ROUND(d2.vatTotalPrice - d6.refundVatTotalPrice, 4) AS vatTotalPrice
+     * }</pre>
+     *
+     * @param alias SELECT alias
+     * @param scale onluq kəsr dəqiqliyi
+     */
+    public ComputedField as(String alias, int scale) {
+        this.roundScale = scale;
+        return as(alias);
     }
 
     // ─── jOOQ Field-ə çevirmə ────────────────────────────────────────────
@@ -701,6 +757,12 @@ public class ComputedField {
                 case DIVIDE   -> result.div(safeDenom);
                 default       -> result;
             };
+        }
+
+        // ─── ROUND varsa — riyazi zəncirdən sonra, CAST-dan əvvəl ────────
+        if (roundScale != null) {
+            result = (Field<Object>) (Field) DSL.round(
+                    (Field<? extends Number>) (Field<?>) result, roundScale);
         }
 
         // ─── CAST varsa — nəticəni hədəf tipə çevir ──────────────────────
@@ -794,6 +856,11 @@ public class ComputedField {
                 case DIVIDE   -> result.div(safeDenom);
                 default       -> result;
             };
+        }
+
+        if (roundScale != null) {
+            result = (Field<Object>) (Field) DSL.round(
+                    (Field<? extends Number>) (Field<?>) result, roundScale);
         }
 
         if (datePattern != null) {
