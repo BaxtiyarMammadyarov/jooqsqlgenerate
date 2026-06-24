@@ -40,6 +40,17 @@ import java.util.Map;
 public class AggregateBuilder<T> {
 
     /**
+     * Aqreqatdan SONRA (yəni {@code SUM(...)}/{@code ROUND(...)} artıq hesablandıqdan,
+     * {@code COALESCE(...,0)} ilə əhatə olunduqdan SONRA) tətbiq olunan əlavə əməliyyat.
+     *
+     * <p>Bununla {@code COALESCE(ROUND(SUM(expr),4),0) - COALESCE(otherField, nullAs)} kimi
+     * ifadələr — artıq join-lənmiş, tək qiymətli (aqreqasiya tələb etməyən) sahələrlə
+     * təhlükəsiz şəkildə — BİR select item olaraq qurula bilər. {@code field} "alias.field"
+     * formatında ola bilər (JOIN-lənmiş cədvələ istinad üçün).
+     */
+    public record PostAggOp(MathOp op, String field, Number nullAs) {}
+
+    /**
      * Bir aqreqat sahəsinin tam konfiqurasiyası.
      *
      * <p>{@code computedExpr} null deyilsə — o istifadə olunur,
@@ -58,7 +69,8 @@ public class AggregateBuilder<T> {
             String           orderDirection,
             ComputedField    computedExpr,     // null → sadə sahə; non-null → çox sahəli ifadə
             IfExpr           ifExpr,           // null → sadə/computed; non-null → CASE WHEN ifadəsi (tam operand)
-            IfExpr           mathIfExpr        // null → sadə math; non-null → math operandı CASE WHEN ifadəsidir
+            IfExpr           mathIfExpr,       // null → sadə math; non-null → math operandı CASE WHEN ifadəsidir
+            List<PostAggOp>  postOps           // boşdursa — köhnə davranış; doluysa — aqreqatdan SONRA tətbiq olunur
     ) {}
 
     private final List<String>        groupByFields  = new ArrayList<>();
@@ -355,6 +367,34 @@ public class AggregateBuilder<T> {
             aggField = DSL.round((Field<? extends Number>) aggField, agg.roundScale());
         }
 
+        // POST-AGGREGATE əməliyyatlar — aqreqatdan KƏNARDA tətbiq olunur.
+        // Məs: COALESCE(ROUND(SUM(expr),4),0) - COALESCE(d3.paymentTotal,0)
+        // Diqqət: yalnız postOps doluysa aktivləşir — köhnə çağırışların davranışı dəyişmir
+        // (default olaraq aqreqat boş nəticədə NULL qalır, 0-a COALESCE olunmur).
+        if (agg.postOps() != null && !agg.postOps().isEmpty()) {
+            Field<?> finalField = DSL.coalesce((Field<? extends Number>) aggField, DSL.val(0));
+            for (PostAggOp po : agg.postOps()) {
+                String[] parts = po.field().split("\\.", 2);
+                String   ta    = parts.length == 2 ? parts[0] : "";
+                String   fn2   = parts.length == 2 ? parts[1] : parts[0];
+                EntityTable<?> et = (!ta.isBlank() && tableMap.containsKey(ta)) ? tableMap.get(ta) : table;
+                Field<Object> rawF = (Field<Object>) et.getField(fn2);
+                Field<?> opnd = po.nullAs() != null
+                        ? DSL.coalesce(rawF, DSL.val(po.nullAs()))
+                        : rawF;
+                Field<? extends Number> numFinal = (Field<? extends Number>) finalField;
+                Field<? extends Number> numOpnd  = (Field<? extends Number>) opnd;
+                finalField = switch (po.op()) {
+                    case ADD      -> numFinal.add(numOpnd);
+                    case SUBTRACT -> numFinal.subtract(numOpnd);
+                    case MULTIPLY -> numFinal.mul(numOpnd);
+                    case DIVIDE   -> numFinal.div(numOpnd);
+                    default       -> finalField;
+                };
+            }
+            return finalField;
+        }
+
         return aggField;
     }
 
@@ -400,6 +440,7 @@ public class AggregateBuilder<T> {
         private       Op    havingOp  = null;
         private       Object              havingVal = null;
         private       String              orderDir  = null;
+        private final List<PostAggOp>     postOps   = new ArrayList<>();
 
         /** Sadə sahə konstruktoru */
         AggStep(AggregateBuilder<T> parent, Agg fn, String tableAliasAndField) {
@@ -537,6 +578,21 @@ public class AggregateBuilder<T> {
         public AggStep<T> orderDesc() { this.orderDir = "DESC"; return this; }
         public AggStep<T> orderAsc()  { this.orderDir = "ASC";  return this; }
 
+        // ─── POST-AGGREGATE əməliyyatlar (aqreqatdan KƏNARDA) ──────────────
+        // Məs: ROUND(SUM(expr),4) - otherField (SUM(expr - otherField) DEYİL)
+
+        /** {@code COALESCE(aggFn(...),0) + COALESCE(field, nullAs)} — aqreqatdan SONRA. */
+        public AggStep<T> postOp(MathOp op, String field, Number nullAs) {
+            this.postOps.add(new PostAggOp(op, field, nullAs));
+            return this;
+        }
+
+        /** Daxili istifadə üçün — JooqQuery.AggRow-dan hazır postOps siyahısını köçürür. */
+        public AggStep<T> withPostOps(List<PostAggOp> ops) {
+            if (ops != null) this.postOps.addAll(ops);
+            return this;
+        }
+
         // ─── Zəncir davam etdirmə ────────────────────────────────────────
 
         public AggStep<T> sum(String f)   { commit(); return parent.sum(f);   }
@@ -571,7 +627,8 @@ public class AggregateBuilder<T> {
                     function, tableAlias, fieldName,
                     mathOp, mathField, alias, round,
                     havingOp, havingVal, orderDir,
-                    computedExpr, ifExpr, mathIfExpr));
+                    computedExpr, ifExpr, mathIfExpr,
+                    List.copyOf(postOps)));
         }
     }
 
