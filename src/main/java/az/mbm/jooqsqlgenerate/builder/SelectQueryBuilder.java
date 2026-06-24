@@ -75,6 +75,7 @@ public class SelectQueryBuilder<T> {
     private final List<JoinConfig>              joins                  = new ArrayList<>();
     private final List<SubQueryJoin>            subQueryJoins          = new ArrayList<>();
     private final List<ConditionedEntityJoin>   conditionedEntityJoins = new ArrayList<>();
+    private final List<RawTableJoin>            rawTableJoins          = new ArrayList<>();
 
     // ─── WHERE ───────────────────────────────────────────────────────────
     private Specification<T> whereSpec = null;
@@ -188,6 +189,20 @@ public class SelectQueryBuilder<T> {
             Class<?> entity,
             String   alias,
             JoinType joinType,
+            Condition on) {}
+
+    /**
+     * Raw jOOQ {@link Table} (məs. {@link SelectTable#asTable(String)} ilə alınmış
+     * derived table) + tam Condition ilə JOIN. JPA entity-yə bağlı deyil —
+     * {@link EntityTable}-in raw-mode konstruktoru ilə {@code tableMap}-ə qeyd olunur,
+     * beləliklə bu alias-a aid sahələr ({@code "d2.vatTotalPrice"} kimi) entity mode-da
+     * digər bütün resolution nöqtələrində (aqreqat, GROUP BY, CASE, CONCAT, COALESCE və s.)
+     * avtomatik tanınır.
+     */
+    private record RawTableJoin(
+            Table<?>  rawTable,
+            String    alias,
+            JoinType  joinType,
             Condition on) {}
 
     // ════════════════════════════════════════════════════════════════════
@@ -895,6 +910,22 @@ public class SelectQueryBuilder<T> {
         return this;
     }
 
+    /**
+     * LEFT JOIN — raw jOOQ {@link Table} (məs. derived table / {@link SelectTable}) ilə,
+     * tam Condition ilə. Condition kənarda ({@link JooqQuery}) qurulub buraya verilir.
+     * {@code rawTable} artıq {@code alias} ilə aliaslanmış olmalıdır.
+     */
+    public SelectQueryBuilder<T> leftJoinRawWithCondition(Table<?> rawTable, String alias, Condition on) {
+        rawTableJoins.add(new RawTableJoin(rawTable, alias, JoinType.LEFT_OUTER_JOIN, on));
+        return this;
+    }
+
+    /** INNER JOIN — raw jOOQ {@link Table} ilə, tam Condition ilə. */
+    public SelectQueryBuilder<T> innerJoinRawWithCondition(Table<?> rawTable, String alias, Condition on) {
+        rawTableJoins.add(new RawTableJoin(rawTable, alias, JoinType.JOIN, on));
+        return this;
+    }
+
     // ─── JoinOnBuilder ────────────────────────────────────────────────────
 
     public static class JoinOnBuilder<F> {
@@ -1257,6 +1288,9 @@ public class SelectQueryBuilder<T> {
         for (ConditionedEntityJoin j : conditionedEntityJoins) {
             tableMap.computeIfAbsent(j.alias(), a -> new EntityTable<>(j.entity(), a));
         }
+        for (RawTableJoin j : rawTableJoins) {
+            tableMap.computeIfAbsent(j.alias(), a -> new EntityTable<>(j.rawTable(), a));
+        }
 
         // Addım 1 — SELECT sahələri
         SQLDialect dialect = dsl.dialect();
@@ -1269,6 +1303,9 @@ public class SelectQueryBuilder<T> {
 
         // Addım 3 — Entity JOINlər
         query = buildEntityJoins(query, tableMap);
+
+        // Addım 3.5 — Raw table JOINlər (derived table / SelectTable, tam Condition ilə)
+        query = buildRawTableJoins(query, tableMap);
 
         // Addım 4 — Subquery JOINlər
         query = buildSubQueryJoins(query);
@@ -1384,10 +1421,21 @@ public class SelectQueryBuilder<T> {
             for (String col : columns)       alreadyInSelect.add(col);
             for (SelectAsCol sa : selectAsCols) alreadyInSelect.add(sa.aliasAndField());
 
+            // Aqreqat sütunların output alias-ları — GROUP BY-dakı raw sahə eyni
+            // adla SELECT-ə əlavə olunmasın (əks halda iki eyni adlı sütun yaranır
+            // və xarici sorğuda "t"."alias" istinadı ambiqual olur).
+            Set<String> aggOutputAliases = new HashSet<>();
+            for (AggregateBuilder.AggField af : aggregator.getAggFields())
+                if (af.alias() != null) aggOutputAliases.add(af.alias());
+
             for (String gf : aggregator.getGroupByFields()) {
                 if (alreadyInSelect.contains(gf)) continue;
+                String fieldName = fieldPart(gf);
+                if (aggOutputAliases.contains(fieldName)) {
+                    alreadyInSelect.add(gf);
+                    continue;
+                }
                 EntityTable<?> t  = tableMap.getOrDefault(aliasPart(gf), mainTable);
-                String fieldName  = fieldPart(gf);
                 Field<?>       f  = t.getField(fieldName);
                 if (!f.getName().equals(fieldName)) fields.add(f.as(fieldName));
                 else                                fields.add(f);
@@ -1488,6 +1536,27 @@ public class SelectQueryBuilder<T> {
         return query;
     }
 
+    /**
+     * Raw table (derived table / {@link SelectTable}) JOIN-lərini emal edir.
+     * {@code tableMap}-də artıq {@code build()}-in başında qeydiyyatdan keçmiş
+     * {@link EntityTable} nüsxəsindən istifadə edilir (eyni instansiya).
+     */
+    private <R extends Record> SelectJoinStep<R> buildRawTableJoins(
+            SelectJoinStep<R> query,
+            Map<String, EntityTable<?>> tableMap) {
+
+        for (RawTableJoin j : rawTableJoins) {
+            EntityTable<?> toTable = tableMap.computeIfAbsent(
+                    j.alias(), a -> new EntityTable<>(j.rawTable(), a));
+            query = switch (j.joinType()) {
+                case LEFT_OUTER_JOIN  -> query.leftJoin(toTable.getTable()).on(j.on());
+                case RIGHT_OUTER_JOIN -> query.rightJoin(toTable.getTable()).on(j.on());
+                default               -> query.join(toTable.getTable()).on(j.on());
+            };
+        }
+        return query;
+    }
+
     private <R extends Record> SelectJoinStep<R> buildSubQueryJoins(SelectJoinStep<R> query) {
         for (SubQueryJoin sj : subQueryJoins) {
             Table<?>       sub  = sj.subQuery().asTable(sj.subAlias());
@@ -1524,6 +1593,12 @@ public class SelectQueryBuilder<T> {
                     .findFirst()
                     .orElse(null);
 
+            // CONCAT alias uyğunluğunu yoxla (computed deyilsə)
+            ConcatCol matchedCc = matchedCf != null ? null : concatCols.stream()
+                    .filter(cc -> plainName.equals(cc.alias()))
+                    .findFirst()
+                    .orElse(null);
+
             Condition c;
             if (matchedCf != null) {
                 // Computed ifadəni birbaşa WHERE-ə genişləndir:
@@ -1531,6 +1606,13 @@ public class SelectQueryBuilder<T> {
                 // → WHERE (price * qty) + tax > 1000
                 @SuppressWarnings("unchecked")
                 Field<Object> expr = (Field<Object>) matchedCf.buildExpr(mainTable, tableMap);
+                c = FilterStrategies.get(gf.op()).apply(expr, gf.value());
+            } else if (matchedCc != null) {
+                // CONCAT ifadəsini birbaşa WHERE-ə genişləndir:
+                // məs. globalWhereFilter("carrierDescription", LIKE, "%abc%")
+                // → WHERE CONCAT(...) LIKE '%abc%'
+                @SuppressWarnings("unchecked")
+                Field<Object> expr = (Field<Object>) buildConcatExpr(matchedCc, mainTable, tableMap);
                 c = FilterStrategies.get(gf.op()).apply(expr, gf.value());
             } else {
                 // Adi sahə — cədvəldən resolve et
@@ -1860,8 +1942,9 @@ public class SelectQueryBuilder<T> {
         return CaseFieldBuilder.build(cb, mainTable, tableMap);
     }
 
-    private Field<?> buildConcatField(ConcatCol cc, EntityTable<T> mainTable,
-                                       Map<String, EntityTable<?>> tableMap) {
+    /** CONCAT ifadəsini (alias-sız) qurur — həm SELECT, həm də WHERE/HAVING üçün ortaq məntiq. */
+    private Field<?> buildConcatExpr(ConcatCol cc, EntityTable<T> mainTable,
+                                      Map<String, EntityTable<?>> tableMap) {
         List<Field<?>> parts = new ArrayList<>();
         for (int i = 0; i < cc.items().size(); i++) {
             if (i > 0 && cc.separator() != null && !cc.separator().isEmpty()) {
@@ -1885,7 +1968,12 @@ public class SelectQueryBuilder<T> {
                 parts.add(ci.expr().toField(mainTable, tableMap));
             }
         }
-        return DSL.concat(parts.toArray(new Field[0])).as(cc.alias());
+        return DSL.concat(parts.toArray(new Field[0]));
+    }
+
+    private Field<?> buildConcatField(ConcatCol cc, EntityTable<T> mainTable,
+                                       Map<String, EntityTable<?>> tableMap) {
+        return buildConcatExpr(cc, mainTable, tableMap).as(cc.alias());
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
