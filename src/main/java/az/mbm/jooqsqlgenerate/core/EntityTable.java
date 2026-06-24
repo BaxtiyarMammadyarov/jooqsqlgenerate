@@ -69,6 +69,7 @@ public class EntityTable<T> {
     private final Class<T>                            entityClass;
     private final Map<String, Field>                  entityFieldMap;   // reflection Field ref
     private final Map<String, org.jooq.Field<Object>> fieldsMap;        // alias ilə jOOQ Field
+    private final boolean                              rawMode;          // true = derived table (JPA reflection yoxdur)
 
     // ─── Konstruktorlar ──────────────────────────────────────────────────
 
@@ -82,6 +83,7 @@ public class EntityTable<T> {
     /** Özəl alias ilə yaradılır */
     public EntityTable(Class<T> entityClass, String tableAlias) {
         this.entityClass = entityClass;
+        this.rawMode     = false;
 
         // 1. Annotasiya məlumatları — cache-dən və ya reflection ilə
         EntityMeta meta = getOrBuildMeta(entityClass);
@@ -103,6 +105,29 @@ public class EntityTable<T> {
             fieldsMap.put(colName,
                     (org.jooq.Field<Object>) DSL.field(DSL.name(tableAlias, colName), type));
         }
+    }
+
+    /**
+     * Derived table (məs. {@link SelectTable#asTable(String)}) üçün — JPA reflection
+     * olmadan, artıq alias bağlanmış raw jOOQ {@link org.jooq.Table} ilə yaradılır.
+     *
+     * <p>Bu konstruktor SelectTable-əsaslı JOIN-lərin (alias-ları, məs. "d2", "d3")
+     * entity mode-da {@code tableMap}-ə qeydiyyatdan keçməsi üçün istifadə olunur.
+     * {@link #getField(String)} bu halda jOOQ-un öz {@code table.field(name)}
+     * axtarışından istifadə edir (heç bir camelCase→snake_case çevrilməsi olmadan,
+     * çünki derived table-ın sütunları artıq layihələndirilmiş alias adları ilədir).
+     *
+     * @param rawTable  artıq {@code .as(alias)} ilə aliaslanmış derived table
+     * @param tableAlias bu cədvəlin alias adı (referans üçün saxlanılır)
+     */
+    @SuppressWarnings("unchecked")
+    public EntityTable(org.jooq.Table<?> rawTable, String tableAlias) {
+        this.rawMode        = true;
+        this.entityClass    = null;
+        this.schema          = null;
+        this.table           = (org.jooq.Table<Record>) rawTable;
+        this.entityFieldMap = null;
+        this.fieldsMap       = null;
     }
 
     // ─── Cache oxuma / yazma ─────────────────────────────────────────────
@@ -177,7 +202,16 @@ public class EntityTable<T> {
      * @param fieldName Java field adı (camelCase), məs: "userId"
      * @throws IllegalArgumentException sahə tapılmadıqda
      */
+    @SuppressWarnings("unchecked")
     public org.jooq.Field<Object> getField(String fieldName) {
+        if (rawMode) {
+            org.jooq.Field<?> f = table.field(fieldName);
+            if (f == null) {
+                throw new IllegalArgumentException(
+                        "Field '" + fieldName + "' not found in derived table '" + table.getName() + "'");
+            }
+            return (org.jooq.Field<Object>) f;
+        }
         Field rf = entityFieldMap.get(fieldName);
         if (rf == null) {
             throw new IllegalArgumentException(
