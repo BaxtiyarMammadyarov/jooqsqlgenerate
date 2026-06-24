@@ -3,6 +3,7 @@ package az.mbm.jooqsqlgenerate;
 import org.jooq.*;
 import org.jooq.Record;
 import org.jooq.RecordMapper;
+import az.mbm.jooqsqlgenerate.builder.AggregateBuilder;
 import az.mbm.jooqsqlgenerate.builder.CaseBuilder;
 import az.mbm.jooqsqlgenerate.builder.ConcatItem;
 import az.mbm.jooqsqlgenerate.builder.ComputedField;
@@ -67,17 +68,11 @@ public class JooqManager {
     // ════════════════════════════════════════════════════════════════════
 
     /**
-     * Ana cədvəl — entity mode (JPA annotasiyaları ilə, köhnə üsul).
+     * Ana cədvəl — entity mode (JPA annotasiyaları ilə).
      *
      * @param entity JPA entity class
      * @param alias  SQL alias ("u", "o", ...)
-     *
-     * @deprecated Reflection + EntityTable əsaslıdır, sahə adı səhv yazılsa yalnız
-     * runtime-da üzə çıxır. Bunun əvəzinə {@link #setMainTable(Table, String)}
-     * (jOOQ generated Table, tövsiyə olunan) və ya
-     * {@link #setMainTable(SelectTable, String)} (derived table) istifadə edin.
      */
-    @Deprecated
     @SuppressWarnings("unchecked")
     public JooqManager setMainTable(Class<?> entity, String alias) {
         current = JooqQuery.from(
@@ -263,6 +258,19 @@ public class JooqManager {
         public ComputedChain multiply(String field) { expr = expr.multiply(field); return this; }
         public ComputedChain divide(String field)   { expr = expr.divide(field);   return this; }
 
+        /**
+         * LEFT JOIN-dən gələn NULL sahələr üçün COALESCE default strategiyası.
+         * Zəncirdəki bütün sahələrə (birinci və sonrakı) tətbiq olunur.
+         *
+         * <pre>{@code
+         *   jooq.addComputedColumn("d2.vatTotalPrices")
+         *       .subtract("d6.refundVatTotalPrice")
+         *       .withNullDefault(NullDefault.ZERO)
+         *       .as("vatTotalPrice", 4)
+         * }</pre>
+         */
+        public ComputedChain withNullDefault(NullDefault nd) { expr = expr.withNullDefault(nd); return this; }
+
         // ─── Mötərizəli qrup açmaq — boş çağırış ────────────────────────
 
         /** {@code + ( ... )} — {@code .of("field")...done()} ilə tamamlanır. */
@@ -282,6 +290,24 @@ public class JooqManager {
         /** Alias təyin edir, sütunu qeydiyyat edir və {@link JooqManager}-ə qayıdır. */
         public JooqManager as(String alias) {
             manager.q().computedColumn(expr.as(alias));
+            return manager;
+        }
+
+        /**
+         * Alias + ROUND qısayolu — {@code ROUND(expr, scale) AS alias}.
+         *
+         * <pre>{@code
+         *   jooq.addComputedColumn("d2.vatTotalPrice")
+         *       .subtract("d6.refundVatTotalPrice")
+         *       .as("vatTotalPrice", 4)
+         * }</pre>
+         *
+         * <p>{@code addFilter("vatTotalPrice", Op.X, value)} (global filter) bu
+         * alias-a gələndə ifadə yenidən ComputedField-dən qurulur — filter də
+         * eyni ROUND edilmiş nəticə üzərində işləyir.
+         */
+        public JooqManager as(String alias, int scale) {
+            manager.q().computedColumn(expr.as(alias, scale));
             return manager;
         }
     }
@@ -1675,6 +1701,7 @@ public class JooqManager {
         private final JooqManager  manager;
         private final Agg          fn;
         private       ComputedField expr;
+        private final List<AggregateBuilder.PostAggOp> postOps = new ArrayList<>();
 
         AggChain(JooqManager manager, Agg fn, ComputedField expr) {
             this.manager = manager;
@@ -1717,15 +1744,56 @@ public class JooqManager {
         /** {@code / COALESCE(field, nullAs)} — yalnız bu addım üçün null default. */
         public AggChain divideNullAs(String field, Number nullAs)   { expr = expr.divideNullAs(field, nullAs);   return this; }
 
+        // ─── POST-AGGREGATE əməliyyatlar — aqreqatdan KƏNARDA tətbiq olunur ────
+        //
+        // add/subtract/multiply/divide YUXARIDA aqreqat funksiyasının DAXİLİNƏ
+        // yazılır: .addAggFunction(SUM,"d1.x").subtract("d3.y").as(...) → SUM(d1.x - d3.y).
+        // Əgər "d3.y" artıq JOIN-lənmiş, qrup üzrə TƏK qiymətli bir sahədirsə (məs.
+        // 1:1 LEFT JOIN edilmiş alt-sorğudan gəlir), bu, qrupda N sətir olduqda
+        // d3.y-i N dəfə çıxarmış olur — SƏHV nəticə.
+        //
+        // Bunun əvəzinə *AfterAgg metodları əməliyyatı aqreqatdan SONRA tətbiq edir:
+        //   COALESCE(ROUND(SUM(d1.x),4), 0) - COALESCE(d3.y, 0)
+        // — yəni dəqiq d5/d3 kimi tək joinlənmiş sahələrin SUM-dan bir dəfə
+        // çıxarılması/əlavə olunması üçün nəzərdə tutulub:
+        //
+        // <pre>{@code
+        //   manager.addAggFunction(Agg.SUM, "d1.totalPriceIn")
+        //          .add("d1.totalPriceOut")
+        //          .subtractAfterAgg("d5.refundTotalPrice")
+        //          .subtractAfterAgg("d3.paymentMainTotalPrice")
+        //          .as("remainderMainTotalPrice", 4)
+        //   // → COALESCE(ROUND(SUM(d1.totalPriceIn + d1.totalPriceOut),4),0)
+        //   //     - COALESCE(d5.refundTotalPrice,0) - COALESCE(d3.paymentMainTotalPrice,0)
+        // }</pre>
+
+        /** {@code COALESCE(aggFn(...),0) + field} — aqreqatdan SONRA (NULL default yoxdur). */
+        public AggChain addAfterAgg(String field)      { postOps.add(new AggregateBuilder.PostAggOp(MathOp.ADD,      field, null)); return this; }
+        /** {@code COALESCE(aggFn(...),0) - field} — aqreqatdan SONRA (NULL default yoxdur). */
+        public AggChain subtractAfterAgg(String field) { postOps.add(new AggregateBuilder.PostAggOp(MathOp.SUBTRACT, field, null)); return this; }
+        /** {@code COALESCE(aggFn(...),0) * field} — aqreqatdan SONRA (NULL default yoxdur). */
+        public AggChain multiplyAfterAgg(String field) { postOps.add(new AggregateBuilder.PostAggOp(MathOp.MULTIPLY, field, null)); return this; }
+        /** {@code COALESCE(aggFn(...),0) / field} — aqreqatdan SONRA (NULL default yoxdur). */
+        public AggChain divideAfterAgg(String field)   { postOps.add(new AggregateBuilder.PostAggOp(MathOp.DIVIDE,   field, null)); return this; }
+
+        /** {@code COALESCE(aggFn(...),0) + COALESCE(field, nullAs)} — aqreqatdan SONRA. */
+        public AggChain addAfterAggNullAs(String field, Number nullAs)      { postOps.add(new AggregateBuilder.PostAggOp(MathOp.ADD,      field, nullAs)); return this; }
+        /** {@code COALESCE(aggFn(...),0) - COALESCE(field, nullAs)} — aqreqatdan SONRA. */
+        public AggChain subtractAfterAggNullAs(String field, Number nullAs) { postOps.add(new AggregateBuilder.PostAggOp(MathOp.SUBTRACT, field, nullAs)); return this; }
+        /** {@code COALESCE(aggFn(...),0) * COALESCE(field, nullAs)} — aqreqatdan SONRA. */
+        public AggChain multiplyAfterAggNullAs(String field, Number nullAs) { postOps.add(new AggregateBuilder.PostAggOp(MathOp.MULTIPLY, field, nullAs)); return this; }
+        /** {@code COALESCE(aggFn(...),0) / COALESCE(field, nullAs)} — aqreqatdan SONRA. */
+        public AggChain divideAfterAggNullAs(String field, Number nullAs)   { postOps.add(new AggregateBuilder.PostAggOp(MathOp.DIVIDE,   field, nullAs)); return this; }
+
         /** Alias təyin edir, aqreqatı qeydiyyat edir və {@link JooqManager}-ə qayıdır. */
         public JooqManager as(String alias) {
-            manager.q().aggOnComputed(fn, expr.as(alias), alias);
+            manager.q().aggOnComputed(fn, expr.as(alias), alias, null, null, null, postOps);
             return manager;
         }
 
         /** Alias + yuvarlama ilə. */
         public JooqManager as(String alias, int scale) {
-            manager.q().aggOnComputed(fn, expr.as(alias), alias, scale);
+            manager.q().aggOnComputed(fn, expr.as(alias), alias, scale, null, null, postOps);
             return manager;
         }
 
@@ -1737,7 +1805,7 @@ public class JooqManager {
          * }</pre>
          */
         public JooqManager as(String alias, String orderDir) {
-            manager.q().aggOnComputed(fn, expr.as(alias), alias, null, orderDir);
+            manager.q().aggOnComputed(fn, expr.as(alias), alias, null, orderDir, null, postOps);
             return manager;
         }
 
@@ -1749,7 +1817,7 @@ public class JooqManager {
          * }</pre>
          */
         public JooqManager as(String alias, int scale, String orderDir) {
-            manager.q().aggOnComputed(fn, expr.as(alias), alias, scale, orderDir);
+            manager.q().aggOnComputed(fn, expr.as(alias), alias, scale, orderDir, null, postOps);
             return manager;
         }
 
@@ -1766,7 +1834,7 @@ public class JooqManager {
          * }</pre>
          */
         public JooqManager as(String alias, String orderDir, int orderSeq) {
-            manager.q().aggOnComputed(fn, expr.as(alias), alias, null, orderDir, orderSeq);
+            manager.q().aggOnComputed(fn, expr.as(alias), alias, null, orderDir, orderSeq, postOps);
             return manager;
         }
 
@@ -1779,7 +1847,7 @@ public class JooqManager {
          * }</pre>
          */
         public JooqManager as(String alias, int scale, String orderDir, int orderSeq) {
-            manager.q().aggOnComputed(fn, expr.as(alias), alias, scale, orderDir, orderSeq);
+            manager.q().aggOnComputed(fn, expr.as(alias), alias, scale, orderDir, orderSeq, postOps);
             return manager;
         }
     }
