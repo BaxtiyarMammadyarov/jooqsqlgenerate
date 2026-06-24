@@ -5,6 +5,7 @@ import az.mbm.jooqsqlgenerate.spec.ExistsSpec;
 
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Map;
 
 /**
  * Inline EXISTS / NOT EXISTS builder — {@link JooqManager} zəncirinə birbaşa qoşulur.
@@ -138,6 +139,63 @@ public final class JooqExistsBuilder<E> {
     @SuppressWarnings("unchecked")
     public JooqExistsBuilder<E> isNotNull(String field) {
         spec.filter(field, Op.IS_NOT_EMPTY, "");
+        return this;
+    }
+
+    /**
+     * EXISTS daxilinə tək field üçün {@code Map<String,String>} (əməliyyat → dəyər) filtri əlavə edir.
+     *
+     * <p>{@link JooqManager#addFilter(String, Map)} ilə eyni format — outer çağırışdan
+     * gələn açar/dəyərlər birbaşa burada da işlənir.
+     *
+     * <pre>{@code .addFilter("status", Map.of("equal", "A", "notEqual", "D")) }</pre>
+     */
+    @SuppressWarnings("unchecked")
+    public JooqExistsBuilder<E> addFilter(String field, Map<String, String> filters) {
+        if (field == null || field.isBlank() || filters == null || filters.isEmpty()) return this;
+        for (Map.Entry<String, String> e : filters.entrySet()) {
+            if (e.getKey() == null) continue;
+            Op op = JooqManager.parseOperationPublic(e.getKey());
+            if (op == null) continue;
+            // IS_EMPTY/IS_NOT_EMPTY (isNull/isNotNull) dəyər tələb etmir — bax:
+            // JooqQuery.globalFilter(String, Map) ilə eyni qayda.
+            String raw = e.getValue() == null ? "" : e.getValue();
+            if (op != Op.IS_EMPTY && op != Op.IS_NOT_EMPTY && raw.isBlank()) continue;
+            // BETWEEN: hər iki tərəf null/"null"/boş olduqda atlanır
+            if (op == Op.BETWEEN) {
+                String[] parts = raw.split(",", 2);
+                if (parts.length < 2) continue;
+                String from = parts[0].trim(), to = parts[1].trim();
+                if (from.isEmpty() || from.equalsIgnoreCase("null") ||
+                    to.isEmpty()   || to.equalsIgnoreCase("null")) continue;
+            }
+            Object value = (op == Op.IN || op == Op.NOT_IN)
+                    ? Arrays.asList(raw.split(","))
+                    : raw;
+            spec.filter(field, op, value);
+        }
+        return this;
+    }
+
+    /**
+     * EXISTS daxilinə field-first {@code Map<String, Map<String,String>>} strukturu ilə
+     * çoxlu filtri bir dəfəyə əlavə edir — {@code dto.getGlobalFilter()} kimi DTO-lardan
+     * birbaşa ötürmək üçün. {@link JooqManager#addFilter(Map)} ilə eyni format: outer key
+     * = field adı, inner key = əməliyyat, inner value = dəyər.
+     *
+     * <pre>{@code
+     *   jooq.addExists(FlowEntity.class)
+     *           .joinField("fkTaskTypeKey", "t", "taskTypeKey")
+     *           .equal("status", "A")
+     *           .addFilter(dto.getGlobalFilter())
+     *       .done()
+     * }</pre>
+     */
+    public JooqExistsBuilder<E> addFilter(Map<String, Map<String, String>> fieldMap) {
+        if (fieldMap == null || fieldMap.isEmpty()) return this;
+        for (Map.Entry<String, Map<String, String>> e : fieldMap.entrySet()) {
+            addFilter(e.getKey(), e.getValue());
+        }
         return this;
     }
 
