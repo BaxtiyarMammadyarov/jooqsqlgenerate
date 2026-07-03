@@ -747,16 +747,13 @@ public class ComputedField {
             }
 
             Field<? extends Number> numOperand = (Field<? extends Number>) (Field<?>) operand;
-            // DSL.nullif tip inference uğursuzluğuna görə raw Field cast istifadə edilir
-            Field<? extends Number> safeDenom = (Field<? extends Number>)(Field<?>) DSL.nullif((Field) numOperand, 0);
+            Field<? extends Number> numResult  = (Field<? extends Number>) (Field<?>) result;
 
-            result = (Field<Object>) switch (s.op()) {
-                case ADD      -> result.add(operand);
-                case SUBTRACT -> result.subtract(operand);
-                case MULTIPLY -> result.mul(numOperand);
-                case DIVIDE   -> result.div(safeDenom);
-                default       -> result;
-            };
+            // DIVIDE → NULLIF ilə sıfıra bölmə qorunması, qalanları ortaq MathOp.apply()
+            // (DSL.nullif tip inference uğursuzluğuna görə raw Field cast istifadə edilir)
+            result = (Field<Object>) (Field<?>) (s.op() == MathOp.DIVIDE
+                    ? numResult.div((Field<? extends Number>)(Field<?>) DSL.nullif((Field) numOperand, 0))
+                    : s.op().apply(numResult, numOperand));
         }
 
         // ─── ROUND varsa — riyazi zəncirdən sonra, CAST-dan əvvəl ────────
@@ -847,15 +844,12 @@ public class ComputedField {
             }
 
             Field<? extends Number> numOperand = (Field<? extends Number>) (Field<?>) operand;
-            Field<? extends Number> safeDenom = (Field<? extends Number>)(Field<?>) DSL.nullif((Field) numOperand, 0);
+            Field<? extends Number> numResult  = (Field<? extends Number>) (Field<?>) result;
 
-            result = (Field<Object>) switch (s.op()) {
-                case ADD      -> result.add(operand);
-                case SUBTRACT -> result.subtract(operand);
-                case MULTIPLY -> result.mul(numOperand);
-                case DIVIDE   -> result.div(safeDenom);
-                default       -> result;
-            };
+            // DIVIDE → NULLIF ilə sıfıra bölmə qorunması, qalanları ortaq MathOp.apply()
+            result = (Field<Object>) (Field<?>) (s.op() == MathOp.DIVIDE
+                    ? numResult.div((Field<? extends Number>)(Field<?>) DSL.nullif((Field) numOperand, 0))
+                    : s.op().apply(numResult, numOperand));
         }
 
         if (roundScale != null) {

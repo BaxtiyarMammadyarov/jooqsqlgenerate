@@ -582,16 +582,23 @@ Null/blank values are automatically skipped — no extra null checks needed.
 
 | Op | SQL | Op | SQL |
 |---|---|---|---|
-| `EQUAl` | `=` | `NOT_EQUAL` | `!=` |
-| `LIKE` | `LIKE '%val%'` | `NOT_LIKE` | `NOT LIKE '%val%'` |
-| `LIKE_START` | `LIKE 'val%'` | `LIKE_END` | `LIKE '%val'` |
-| `LIKE_IGNORE_CASE` | `ILIKE '%val%'` | | |
+| `EQUAL` | `=` | `NOT_EQUAL` | `!=` |
+| `LIKE` | Turkish-aware `LIKE '%val%'` | | |
+| `START_WITH` | `LIKE 'val%'` | `END_WITH` | `LIKE '%val'` |
+| `LIKE_IGNORE_CASE` | Turkish-aware `LIKE '%val%'` | | |
+| `START_WITH_IGNORE_CASE` | `LIKE 'val%'` | `END_WITH_IGNORE_CASE` | `LIKE '%val'` |
 | `GREATER_THAN` | `>` | `LESS_THAN` | `<` |
 | `GREATER_THAN_OR_EQUAL_TO` | `>=` | `LESS_THAN_OR_EQUAL_TO` | `<=` |
 | `IN` | `IN (...)` | `NOT_IN` | `NOT IN (...)` |
 | `BETWEEN` | `BETWEEN a AND b` | | |
-| `IS_NULL` | `IS NULL` | `IS_NOT_NULL` | `IS NOT NULL` |
+| `IS_EMPTY` | `IS NULL` | `IS_NOT_EMPTY` | `IS NOT NULL` |
 | `REGEXP` | `~ 'pattern'` | `NOT_REGEXP` | `!~ 'pattern'` |
+
+> **Note — `EQUAl` → `EQUAL`:** the original constant `EQUAl` contains a typo. `Op.EQUAL`
+> was added as the correctly-named equivalent; both behave identically (including the
+> automatic `IN` conversion for Collection values). Old code keeps working — prefer
+> `EQUAL` in new code. `ROUND` comparison operations (`EQUAL_ROUND_0..4` etc.) are
+> listed in section 12.
 
 ### 4.3 Direct jOOQ Condition
 
@@ -733,42 +740,131 @@ ExistsSpec.of(Order.class, "o")
 
 ```java
 JooqQuery.from(Order.class, "o")
-    .agg(AggregateBuilder.groupBy("o.status")
-        .sum("o.totalPrice", "totalRevenue")
-        .count("o.id",       "orderCount")
-    )
+    .select("o.customerId")
+    .groupBy("o.customerId")
+    .agg(Agg.SUM,   "o.totalPrice", "totalSum",   2,    "DESC")
+    .agg(Agg.COUNT, "o.id",         "orderCount", null, null)
+    .agg(Agg.AVG,   "o.totalPrice", "avgPrice",   2,    null)
     .execute(dsl);
-// → SELECT o.status, SUM(o.total_price) AS totalRevenue, COUNT(o.id) AS orderCount
-//   FROM orders o GROUP BY o.status
+// → SELECT o.customer_id,
+//          ROUND(SUM(o.total_price),2) AS totalSum,
+//          COUNT(o.id)                 AS orderCount,
+//          ROUND(AVG(o.total_price),2) AS avgPrice
+//   FROM orders o GROUP BY o.customer_id
+//   ORDER BY ROUND(SUM(o.total_price),2) DESC
 ```
 
 ### 7.2 Arithmetic aggregate — SUM(price * qty)
 
 ```java
-AggregateBuilder.groupBy("o.customerId")
-    .sumWithMath("o.price", MathOp.MULTIPLY, "o.quantity", "revenue")
+JooqQuery.from(Order.class, "o")
+    .groupBy("o.customerId")
+    .aggWithMath(Agg.SUM, "o.price", MathOp.MULTIPLY, "o.quantity", "revenue", 2)
+    .execute(dsl);
+// → ROUND(SUM(o.price * o.quantity), 2) AS revenue
 ```
 
 ### 7.3 ComputedField aggregate — SUM((price * qty) - discount)
 
 ```java
-AggregateBuilder.groupBy("o.customerId")
-    .sumOnComputed(
+JooqQuery.from(Order.class, "o")
+    .groupBy("o.customerId")
+    .aggOnComputed(
+        Agg.SUM,
         ComputedField.of("o.price").multiply("o.quantity").subtract("o.discount"),
-        "netRevenue"
+        "netRevenue", 2
     )
+    .execute(dsl);
+// → ROUND(SUM((o.price * o.quantity) - o.discount), 2) AS netRevenue
 ```
+
+### 7.3.1 Subtracting two SUM expressions — SUM(exprA) - SUM(exprB)
+
+`SUM` is a linear operation: `SUM(a) - SUM(b) = SUM(a - b)`. Instead of running two
+separate aggregates and subtracting them afterwards, build each side as a `ComputedField`
+and subtract inside a single aggregate call — one SELECT column, no extra query layer:
+
+```java
+ComputedField inSide = ComputedField.sumOf(
+        ComputedField.expr("t.totalIn"),
+        ComputedField.expr("t.expense").multiply("t.actionIn")
+);
+
+ComputedField outSide = ComputedField.sumOf(
+        ComputedField.expr("t.totalOut"),
+        ComputedField.expr("t.expense").multiply("t.actionOut")
+);
+
+JooqQuery.from(CashFlow.class, "t")
+    .groupBy("t.actionType")
+    .aggOnComputed(Agg.SUM, inSide.subtract(outSide), "netAmount")
+    .execute(dsl);
+// → SUM((t.totalIn + t.expense * t.actionIn) - (t.totalOut + t.expense * t.actionOut)) AS netAmount
+```
+
+> Extracting each side into a named `ComputedField` variable (`inSide` / `outSide`) keeps
+> the call site readable. For a shorter form see 7.3.2 below.
+
+### 7.3.2 addSumExpr / AggExpr — readable aggregate chain
+
+A cleaner equivalent of the pattern above. Since `(a + b) - (c + d) = a + b - c - d`,
+nested `sumOf(...)` groups are unnecessary — write the terms as a flat chain:
+
+```java
+// SUM( totalIn + expense*actionIn - totalOut - expense*actionOut ) AS netAmount
+manager.addSumExpr("netAmount", e -> e
+        .plus("t.totalIn")
+        .plus("t.expense", "t.actionIn")     // + (f1 * f2)
+        .minus("t.totalOut")
+        .minus("t.expense", "t.actionOut")); // - (f1 * f2)
+```
+
+`AggExpr` methods: `plus(field)`, `plus(f1, f2)` (adds the product `f1 * f2`),
+`plus(f1, MathOp, f2)` (any operation — `DIVIDE` gets automatic `NULLIF` zero-division
+protection), `plus(ComputedField)` for complex terms, and the same four overloads for
+`minus`. The chain must start with `plus(...)`.
+
+```java
+// SUM( totalPrice/qty - discount ) AS avgNet
+manager.addSumExpr("avgNet", e -> e
+        .plus("t.totalPrice", MathOp.DIVIDE, "t.qty")   // + (total_price / NULLIF(qty, 0))
+        .minus("t.discount"));
+```
+
+Other forms:
+
+```java
+manager.addAggExpr(Agg.AVG, "avgNet", e -> e.plus("t.income").minus("t.expense"));
+manager.addAggExpr(Agg.SUM, "totalPrice", 2, e -> e.plus("t.price", "t.qty")); // with ROUND
+
+// Directly on JooqQuery:
+JooqQuery.from(CashFlow.class, "t")
+    .groupBy("t.actionType")
+    .sumExpr("netAmount", e -> e.plus("t.totalIn").minus("t.totalOut"))
+    .execute(dsl);
+```
+
+> `addSumExpr` delegates to `addAggFunctionOnComputed(Agg.SUM, ...)` internally —
+> the generated SQL is identical to an equivalent flat `ComputedField` chain.
 
 ### 7.4 AggregateBuilder — fluent API
 
+`AggregateBuilder` is attached through `SelectQueryBuilder.aggregate(...)`, not through
+`JooqQuery`. Note that `SelectQueryBuilder`'s terminal method is `.build(dsl)`, not
+`.execute(dsl)`:
+
 ```java
-AggregateBuilder.groupBy("o.status", "o.customerId")
-    .sum("o.totalPrice",   "totalRevenue")
-    .count("o.id",         "orderCount")
-    .avg("o.totalPrice",   "avgOrder")
-    .min("o.createdAt",    "firstOrder")
-    .max("o.createdAt",    "lastOrder")
-    .orderByDesc("totalRevenue")
+SelectQueryBuilder.from(Order.class, "o")
+    .select("o.customerId")
+    .aggregate(
+        AggregateBuilder.<Order>groupBy("o.status", "o.customerId")
+            .sum("o.totalPrice").as("totalRevenue").done()
+            .count("o.id").as("orderCount").done()
+            .avg("o.totalPrice").as("avgOrder").done()
+            .min("o.createdAt").as("firstOrder").done()
+            .max("o.createdAt").as("lastOrder").orderDesc().done()
+    )
+    .build(dsl);
 ```
 
 ### 7.4.1 AggregateBuilder — conditional aggregate functions (sumIf / countIf)
@@ -807,9 +903,15 @@ AggregateBuilder.<CashFlow>groupBy("t.actionType")
 ### 7.5 HAVING inside AggregateBuilder
 
 ```java
-AggregateBuilder.groupBy("o.customerId")
-    .sum("o.totalPrice", "totalRevenue")
-    .havingFilter("totalRevenue", Map.of("greaterThan", 10000))
+SelectQueryBuilder.from(Order.class, "o")
+    .aggregate(
+        AggregateBuilder.<Order>groupBy("o.customerId")
+            .sum("o.totalPrice").round(2).as("totalRevenue")
+                .having(Op.GREATER_THAN, 10000)
+            .done()
+    )
+    .build(dsl);
+// → HAVING ROUND(SUM(o.total_price),2) > 10000
 ```
 
 ---
@@ -818,10 +920,15 @@ AggregateBuilder.groupBy("o.customerId")
 
 ```java
 JooqQuery.from(Order.class, "o")
-    .agg(AggregateBuilder.groupBy("o.status").sum("o.totalPrice", "total"))
-    .having("total", Op.GREATER_THAN, 5000)
+    .groupBy("o.customerId")
+    .agg(Agg.SUM,   "o.totalPrice", "totalSum", 2, null)
+    .agg(Agg.COUNT, "o.id",         "cnt",      null, null)
+    // HAVING via the agg alias
+    .havingFilter("totalSum", Map.of("greaterThan", "1000"))
+    .havingFilter("cnt",      Map.of("between",     "5,50"))
+    // HAVING via a direct field
+    .havingFilter("o.status", Op.NOT_EQUAL, "CANCELLED")
     .execute(dsl);
-// → HAVING SUM(o.total_price) > 5000
 ```
 
 ---
@@ -1126,8 +1233,13 @@ SelectTable result = JooqQuery.from(Order.class, "o")
 | `exists(ExistsSpec)` | WHERE EXISTS |
 | `notExists(ExistsSpec)` | WHERE NOT EXISTS |
 | `groupBy(fields...)` | GROUP BY |
-| `agg(AggregateBuilder)` | GROUP BY + aggregates |
-| `having(field, Op, value)` | HAVING filter |
+| `agg(Agg, field, alias, round, dir)` | Simple aggregate function |
+| `aggWithMath(Agg, field, MathOp, field, alias, round)` | `SUM(f1 op f2)` — 2-field arithmetic aggregate |
+| `aggOnComputed(Agg, ComputedField, alias, round)` | Aggregate over a multi-field/nested expression — includes `SUM(exprA - exprB)` |
+| `sumExpr(alias, e -> e.plus(...).minus(...))` | Readable SUM expression chain (AggExpr) — see 7.3.2 |
+| `aggExpr(Agg, alias, e -> ...)` | AggExpr with any aggregate function |
+| `havingFilter(field, Op, value)` | HAVING filter — direct field |
+| `havingFilter(field, Map)` | HAVING filter — multi-op map |
 | `orderBy(field, dir)` | ORDER BY |
 | `orderBy(expression)` | ORDER BY string: `"t.field desc"` |
 | `page(page, size)` | Pagination (0-based) |
@@ -1164,6 +1276,11 @@ SelectTable result = JooqQuery.from(Order.class, "o")
 | `.as(alias)` | Required — set output alias |
 
 ### AggregateBuilder / AggStep methods (IfExpr)
+
+> **Entry point:** a full `AggregateBuilder` chain (`.sum(f).as(alias).having(...).done()...`)
+> is attached via `SelectQueryBuilder.from(...).aggregate(AggregateBuilder...).build(dsl)` —
+> not through `JooqQuery`. `SelectQueryBuilder` ends with `.build(dsl)`, `JooqQuery` ends
+> with `.execute(dsl)`. See §7.4/§7.5.
 
 | Method | Generated SQL |
 |---|---|

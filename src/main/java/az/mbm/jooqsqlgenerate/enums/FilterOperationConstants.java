@@ -1,7 +1,8 @@
 package az.mbm.jooqsqlgenerate.enums;
 
 /**
- * {@link JooqManager#addFilters} metodunda istifadə üçün filter əməliyyat adları.
+ * {@link az.mbm.jooqsqlgenerate.JooqManager#addFilter(az.mbm.jooqsqlgenerate.spec.Filters)}
+ * metodunda istifadə üçün filter əməliyyat adları.
  *
  * <p>Bu konstantlar {@code Map<String, Map<String, String>>} strukturunun <em>açar</em>
  * (operation key) hissəsində istifadə olunur:
@@ -18,7 +19,7 @@ package az.mbm.jooqsqlgenerate.enums;
  *       BETWEEN,            Map.of("createdAt", "2024-01-01,2024-12-31")
  *   );
  *
- *   jooq.addFilters(globalFilter);
+ *   jooq.addFilter(globalFilter);
  * }</pre>
  *
  * <p>Hər bir constant {@code parseOperation()} tərəfindən {@link Op}-a çevrilir.

@@ -961,6 +961,30 @@ jooq.addAggFunctionOnComputed(Agg.SUM, expr, "netTotal");
 jooq.addAggFunctionOnComputed(Agg.SUM, expr, "netTotal", 2);  // ROUND ilə
 ```
 
+**`AggExpr` — oxunaqlı aqreqat zənciri (`addSumExpr` / `addAggExpr`):**
+
+Çoxterminli SUM ifadələri üçün `ComputedField` qurmadan, birbaşa lambda zənciri ilə.
+`plus(f1, f2)` / `minus(f1, f2)` iki sahənin hasilini (`f1 * f2`) əlavə edir/çıxır:
+
+```java
+// SUM( marginalCostOut + purchaseExpense*actionOut
+//      - marginalCostIn - purchaseExpense*actionIn ) AS totalPrice
+jooq.addSumExpr("totalPrice", e -> e
+        .plus("t.marginalCostOut")
+        .plus("t.totalPurchaseExpense", "t.actionOut")
+        .minus("t.marginalCostIn")
+        .minus("t.totalPurchaseExpense", "t.actionIn"));
+
+// İstənilən funksiya və yuvarlama ilə:
+jooq.addAggExpr(Agg.AVG, "avgNet", e -> e.plus("t.income").minus("t.expense"));
+jooq.addAggExpr(Agg.SUM, "totalPrice", 2, e -> e.plus("t.price", "t.qty"));
+
+// Bölmə (və istənilən MathOp) — NULLIF sıfıra bölmə qorunması avtomatik:
+jooq.addSumExpr("avgNet", e -> e
+        .plus("t.totalPrice", MathOp.DIVIDE, "t.qty")   // + (total_price / NULLIF(qty, 0))
+        .minus("t.discount"));
+```
+
 **Fluent `AggChain` builder:**
 
 ```java
@@ -1375,6 +1399,47 @@ AggregateBuilder.<Task>groupBy("t.fkRequestId")
 //                  AND fk_role_id IN (...)
 //                  AND is_active = true)
 ```
+
+**`ComputedField` üzərində aqreqat — çox sahəli/iç-içə ifadələr:**
+
+Sadə `.sum(field)` yalnız tək sütun qəbul edir. `price * qty - discount` kimi çox sahəli
+ifadələr üçün `sumOf(ComputedField)` (və qardaşları `countOf`/`avgOf`/`maxOf`/`minOf`)
+istifadə olunur — `ComputedField` özü riyazi ifadəni qurur, `AggregateBuilder` onu aqreqat
+funksiyasına bükür:
+
+```java
+AggregateBuilder.groupBy("o.customerId")
+    .sumOf(
+        ComputedField.of("o.price").multiply("o.quantity").subtract("o.discount")
+    ).round(2).as("netRevenue").done()
+// → ROUND(SUM((o.price * o.quantity) - o.discount), 2) AS netRevenue
+```
+
+**İki SUM ifadəsini bir-birindən çıxmaq — `SUM(exprA) - SUM(exprB)`:**
+
+`SUM` xətti əməliyyat olduğundan `SUM(a) - SUM(b) = SUM(a - b)` — iki ayrı aqreqat
+əvəzinə hər tərəf `ComputedField.sumOf(...)` ilə qurulur, sonra `.subtract(...)` ilə
+tək aqreqat daxilində birləşdirilir. Oxunaqlılıq üçün hər tərəf öz adlı dəyişəninə
+çıxarılır — kitabxanaya yeni metod əlavə etmədən, mövcud `ComputedField` blokları ilə:
+
+```java
+ComputedField inSide = ComputedField.sumOf(
+        ComputedField.expr("t.totalIn"),
+        ComputedField.expr("t.expense").multiply("t.actionIn")
+);
+ComputedField outSide = ComputedField.sumOf(
+        ComputedField.expr("t.totalOut"),
+        ComputedField.expr("t.expense").multiply("t.actionOut")
+);
+
+manager.addAggFunctionOnComputed(Agg.SUM, inSide.subtract(outSide), "netAmount");
+// → SUM((t.totalIn + t.expense*t.actionIn) - (t.totalOut + t.expense*t.actionOut)) AS netAmount
+```
+
+> **Qeyd:** Bu, hər iki tərəfin ayrıca `SUM(...)`-ı hesablanıb sonradan çıxılmasından
+> fərqlidir (bax: `AggregateBuilder.PostAggOp` — aqreqatdan SONRA sadə/tək-qiymətli sahə
+> çıxmaq üçündür, iki tam aqreqatı çıxmaq üçün deyil). İki tam aqreqatı çıxmaq lazım
+> olduqda düzgün yol yuxarıdakı `sumOf(...).subtract(sumOf(...))` nümunəsidir.
 
 ---
 

@@ -339,13 +339,9 @@ public class AggregateBuilder<T> {
                 if (mathF != null) {
                     @SuppressWarnings("unchecked")
                     Field<? extends Number> numMathF = (Field<? extends Number>) (Field<?>) mathF;
-                    operand = (Field<Object>) switch (agg.mathOp()) {
-                        case ADD      -> baseField.add(mathF);
-                        case SUBTRACT -> baseField.subtract(mathF);
-                        case MULTIPLY -> baseField.mul(numMathF);
-                        case DIVIDE   -> baseField.div(numMathF);
-                        default       -> baseField;
-                    };
+                    @SuppressWarnings("unchecked")
+                    Field<? extends Number> numBaseF = (Field<? extends Number>) (Field<?>) baseField;
+                    operand = (Field<Object>) (Field<?>) agg.mathOp().apply(numBaseF, numMathF);
                 }
             }
         }
@@ -384,13 +380,7 @@ public class AggregateBuilder<T> {
                         : rawF;
                 Field<? extends Number> numFinal = (Field<? extends Number>) finalField;
                 Field<? extends Number> numOpnd  = (Field<? extends Number>) opnd;
-                finalField = switch (po.op()) {
-                    case ADD      -> numFinal.add(numOpnd);
-                    case SUBTRACT -> numFinal.subtract(numOpnd);
-                    case MULTIPLY -> numFinal.mul(numOpnd);
-                    case DIVIDE   -> numFinal.div(numOpnd);
-                    default       -> finalField;
-                };
+                finalField = po.op().apply(numFinal, numOpnd);
             }
             return finalField;
         }

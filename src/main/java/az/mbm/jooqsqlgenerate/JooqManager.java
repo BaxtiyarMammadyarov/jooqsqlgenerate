@@ -1677,6 +1677,43 @@ public class JooqManager {
     }
 
     /**
+     * Oxunaqlı aqreqat ifadəsi — {@link az.mbm.jooqsqlgenerate.builder.AggExpr} zənciri ilə.
+     *
+     * <p>{@code addAggFunctionOnComputed(fn, ComputedField.sumOf(...).subtract(...), alias)}
+     * formasının səliqəli qarşılığı:
+     *
+     * <pre>{@code
+     *   // SUM( marginalCostOut + purchaseExpense*actionOut
+     *   //      - marginalCostIn - purchaseExpense*actionIn ) AS totalPrice
+     *   jooq.addSumExpr("totalPrice", e -> e
+     *       .plus("t.marginalCostOut")
+     *       .plus("t.totalPurchaseExpense", "t.actionOut")    // + (f1 * f2)
+     *       .minus("t.marginalCostIn")
+     *       .minus("t.totalPurchaseExpense", "t.actionIn"));  // - (f1 * f2)
+     * }</pre>
+     */
+    public JooqManager addSumExpr(String alias,
+                                  java.util.function.Consumer<az.mbm.jooqsqlgenerate.builder.AggExpr> chain) {
+        return addAggExpr(Agg.SUM, alias, chain);
+    }
+
+    /** {@link #addSumExpr(String, java.util.function.Consumer)} — istənilən aqreqat funksiyası ilə. */
+    public JooqManager addAggExpr(Agg fn, String alias,
+                                  java.util.function.Consumer<az.mbm.jooqsqlgenerate.builder.AggExpr> chain) {
+        az.mbm.jooqsqlgenerate.builder.AggExpr e = az.mbm.jooqsqlgenerate.builder.AggExpr.create();
+        chain.accept(e);
+        return addAggFunctionOnComputed(fn, e.build(), alias);
+    }
+
+    /** {@link #addAggExpr(Agg, String, java.util.function.Consumer)} — yuvarlama ilə. */
+    public JooqManager addAggExpr(Agg fn, String alias, Integer round,
+                                  java.util.function.Consumer<az.mbm.jooqsqlgenerate.builder.AggExpr> chain) {
+        az.mbm.jooqsqlgenerate.builder.AggExpr e = az.mbm.jooqsqlgenerate.builder.AggExpr.create();
+        chain.accept(e);
+        return addAggFunctionOnComputed(fn, e.build(), alias, round);
+    }
+
+    /**
      * Fluent aqreqat — çox field ilə riyazi əməliyyat zənciri.
      *
      * <pre>{@code
@@ -2071,7 +2108,7 @@ public class JooqManager {
 
     /**
      * Pagination olmadan yalnız COUNT sorğusunu aktiv edir.
-     * LIMIT/OFFSET tətbiq olunmur, amma {@link #getLastRowCount()} dəyər qaytarır.
+     * LIMIT/OFFSET tətbiq olunmur, amma {@link SelectTable#getRowCount()} dəyər qaytarır.
      */
     public JooqManager withCount() {
         q().withCount();
@@ -2083,7 +2120,7 @@ public class JooqManager {
         return this;
     }
 
-    /** Yalnız COUNT sorğusu icra edilir, əsas data sorğusu işləmir. {@link #getLastRowCount()} ilə sayı al. */
+    /** Yalnız COUNT sorğusu icra edilir, əsas data sorğusu işləmir. {@link SelectTable#getRowCount()} ilə sayı al. */
     public JooqManager onlyCount() {
         q().onlyCount();
         return this;

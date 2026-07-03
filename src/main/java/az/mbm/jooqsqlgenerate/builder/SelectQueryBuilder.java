@@ -897,7 +897,7 @@ public class SelectQueryBuilder<T> {
 
     /**
      * LEFT JOIN — tam Condition ilə (çoxlu field cütü + əlavə şərtlər üçün).
-     * Condition kənarda ({@link JooqQuery}) qurulub buraya verilir.
+     * Condition kənarda ({@link az.mbm.jooqsqlgenerate.JooqQuery}) qurulub buraya verilir.
      */
     public SelectQueryBuilder<T> leftJoinWithCondition(Class<?> entity, String alias, Condition on) {
         conditionedEntityJoins.add(new ConditionedEntityJoin(entity, alias, JoinType.LEFT_OUTER_JOIN, on));
@@ -912,7 +912,7 @@ public class SelectQueryBuilder<T> {
 
     /**
      * LEFT JOIN — raw jOOQ {@link Table} (məs. derived table / {@link SelectTable}) ilə,
-     * tam Condition ilə. Condition kənarda ({@link JooqQuery}) qurulub buraya verilir.
+     * tam Condition ilə. Condition kənarda ({@link az.mbm.jooqsqlgenerate.JooqQuery}) qurulub buraya verilir.
      * {@code rawTable} artıq {@code alias} ilə aliaslanmış olmalıdır.
      */
     public SelectQueryBuilder<T> leftJoinRawWithCondition(Table<?> rawTable, String alias, Condition on) {
@@ -1913,28 +1913,20 @@ public class SelectQueryBuilder<T> {
                                   NullDefault nd) {
         // NullDefault.NONE → COALESCE tətbiq edilmir
         if (nd == null || nd == NullDefault.NONE) {
+            Field<? extends Number> numF1 = (Field<? extends Number>) (Field<?>) f1;
             Field<? extends Number> numF2 = (Field<? extends Number>) (Field<?>) f2;
-            return switch (op) {
-                case ADD      -> f1.add(f2);
-                case SUBTRACT -> f1.subtract(f2);
-                case MULTIPLY -> f1.mul(numF2);
-                case DIVIDE   -> f1.div(numF2);
-                default       -> f1;
-            };
+            return op.apply(numF1, numF2);
         }
+        // NONOPERATION → orijinal sahə olduğu kimi (COALESCE bükülmədən) qaytarılır
+        if (op == MathOp.NONOPERATION) return f1;
         // NullDefault.ZERO / ONE → hər iki sahəni COALESCE ilə bük
         // Field<Object>→Field<? extends Number>: Field<?> üzərindən double-cast lazımdır
         Field<? extends Number> n1 = (Field<? extends Number>)(Field<?>) DSL.coalesce(f1, DSL.val(nd.numericValue()));
         Field<? extends Number> n2 = (Field<? extends Number>)(Field<?>) DSL.coalesce(f2, DSL.val(nd.numericValue()));
-        // DSL.nullif tip inference uğursuzluğuna görə raw Field cast istifadə edilir
-        Field<? extends Number> safeDenom = (Field<? extends Number>)(Field<?>) DSL.nullif((Field) n2, 0);
-        return switch (op) {
-            case ADD      -> n1.add(n2);
-            case SUBTRACT -> n1.subtract(n2);
-            case MULTIPLY -> n1.mul(n2);
-            case DIVIDE   -> n1.div(safeDenom);
-            default       -> f1;
-        };
+        // DIVIDE → NULLIF ilə sıfıra bölmə qorunması (raw Field cast — tip inference üçün)
+        return (op == MathOp.DIVIDE)
+                ? n1.div((Field<? extends Number>)(Field<?>) DSL.nullif((Field) n2, 0))
+                : op.apply(n1, n2);
     }
 
     private Field<?> buildCaseField(CaseBuilder<T> cb, EntityTable<T> mainTable,

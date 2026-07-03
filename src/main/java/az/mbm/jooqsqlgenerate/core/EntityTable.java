@@ -68,7 +68,9 @@ public class EntityTable<T> {
     private final org.jooq.Table<Record>              table;
     private final Class<T>                            entityClass;
     private final Map<String, Field>                  entityFieldMap;   // reflection Field ref
-    private final Map<String, org.jooq.Field<Object>> fieldsMap;        // alias ilə jOOQ Field
+    private final Map<String, org.jooq.Field<Object>> fieldsMap;        // SQL sütun adı → jOOQ Field
+    /** Java field adı (camelCase) → jOOQ Field — getField() üçün birbaşa lookup (annotation oxumadan) */
+    private final Map<String, org.jooq.Field<Object>> fieldsByJavaName;
     private final boolean                              rawMode;          // true = derived table (JPA reflection yoxdur)
 
     // ─── Konstruktorlar ──────────────────────────────────────────────────
@@ -96,14 +98,19 @@ public class EntityTable<T> {
         this.entityFieldMap = new HashMap<>();
         buildEntityFieldMap(entityClass);
 
-        // 4. fieldsMap — alias baked-in jOOQ Field-lər (alias bilinir, tez yaranır)
-        this.fieldsMap = new HashMap<>(meta.fieldToColumn().size() * 2);
+        // 4. fieldsMap + fieldsByJavaName — alias baked-in jOOQ Field-lər
+        //    (alias bilinir, tez yaranır). fieldsByJavaName sayəsində getField()
+        //    hər çağırışda annotation oxumur — birbaşa map lookup edir.
+        this.fieldsMap        = new HashMap<>(meta.fieldToColumn().size() * 2);
+        this.fieldsByJavaName = new HashMap<>(meta.fieldToColumn().size() * 2);
         for (Map.Entry<String, String> e : meta.fieldToColumn().entrySet()) {
             String javaName = e.getKey();
             String colName  = e.getValue();
             Class<?> type   = meta.fieldTypes().get(javaName);
-            fieldsMap.put(colName,
-                    (org.jooq.Field<Object>) DSL.field(DSL.name(tableAlias, colName), type));
+            org.jooq.Field<Object> jf =
+                    (org.jooq.Field<Object>) DSL.field(DSL.name(tableAlias, colName), type);
+            fieldsMap.put(colName, jf);
+            fieldsByJavaName.put(javaName, jf);
         }
     }
 
@@ -122,12 +129,13 @@ public class EntityTable<T> {
      */
     @SuppressWarnings("unchecked")
     public EntityTable(org.jooq.Table<?> rawTable, String tableAlias) {
-        this.rawMode        = true;
-        this.entityClass    = null;
-        this.schema          = null;
-        this.table           = (org.jooq.Table<Record>) rawTable;
-        this.entityFieldMap = null;
-        this.fieldsMap       = null;
+        this.rawMode          = true;
+        this.entityClass      = null;
+        this.schema           = null;
+        this.table            = (org.jooq.Table<Record>) rawTable;
+        this.entityFieldMap   = null;
+        this.fieldsMap        = null;
+        this.fieldsByJavaName = null;
     }
 
     // ─── Cache oxuma / yazma ─────────────────────────────────────────────
@@ -212,12 +220,12 @@ public class EntityTable<T> {
             }
             return (org.jooq.Field<Object>) f;
         }
-        Field rf = entityFieldMap.get(fieldName);
-        if (rf == null) {
+        org.jooq.Field<Object> jf = fieldsByJavaName.get(fieldName);
+        if (jf == null) {
             throw new IllegalArgumentException(
                     "Field '" + fieldName + "' not found in " + entityClass.getSimpleName());
         }
-        return fieldsMap.get(resolveColumnName(rf));
+        return jf;
     }
 
     /** Tip parametri ilə jOOQ Field-i qaytarır. */

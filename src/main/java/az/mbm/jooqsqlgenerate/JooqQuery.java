@@ -1076,9 +1076,9 @@ public final class JooqQuery<T> {
             List<?> clean = c.stream().filter(Objects::nonNull).collect(Collectors.toList());
             if (clean.isEmpty()) return this;
             Op resolvedOp = switch (op) {
-                case EQUAl     -> Op.IN;
-                case NOT_EQUAL -> Op.NOT_IN;
-                default        -> op;
+                case EQUAl, EQUAL -> Op.IN;
+                case NOT_EQUAL    -> Op.NOT_IN;
+                default           -> op;
             };
             filters.add(new FilterRow(field, resolvedOp, clean));
             return this;
@@ -1500,6 +1500,31 @@ public final class JooqQuery<T> {
     public JooqQuery<T> aggOnComputed(Agg fn, ComputedField expr,
                                       String alias, Integer round) {
         return aggOnComputed(fn, expr, alias, round, null, null);
+    }
+
+    /**
+     * Oxunaqlı aqreqat ifadəsi — {@link az.mbm.jooqsqlgenerate.builder.AggExpr} zənciri ilə.
+     *
+     * <pre>{@code
+     *   // SUM( a + b*c - d - b*e ) AS totalPrice
+     *   .sumExpr("totalPrice", e -> e
+     *       .plus("t.marginalCostOut")
+     *       .plus("t.totalPurchaseExpense", "t.actionOut")    // + (f1 * f2)
+     *       .minus("t.marginalCostIn")
+     *       .minus("t.totalPurchaseExpense", "t.actionIn"))   // - (f1 * f2)
+     * }</pre>
+     */
+    public JooqQuery<T> sumExpr(String alias,
+                                java.util.function.Consumer<az.mbm.jooqsqlgenerate.builder.AggExpr> chain) {
+        return aggExpr(Agg.SUM, alias, chain);
+    }
+
+    /** {@link #sumExpr(String, java.util.function.Consumer)} — istənilən aqreqat funksiyası ilə. */
+    public JooqQuery<T> aggExpr(Agg fn, String alias,
+                                java.util.function.Consumer<az.mbm.jooqsqlgenerate.builder.AggExpr> chain) {
+        az.mbm.jooqsqlgenerate.builder.AggExpr e = az.mbm.jooqsqlgenerate.builder.AggExpr.create();
+        chain.accept(e);
+        return aggOnComputed(fn, e.build(), alias);
     }
 
     /** HAVING EXISTS / NOT EXISTS (GROUP BY ilə birlikdə). */
@@ -2176,8 +2201,94 @@ public final class JooqQuery<T> {
         // FROM — alias ilə
         Table<?> mainTable = generatedTable.as(alias);
 
-        // ─── Bütün JOIN cədvəllərini joinTableRegistry-yə əvvəlcədən yaz ──────
-        // filter / groupBy / agg / orderBy metodları bu registry-dən field resolve edir
+        // 1. JOIN cədvəlləri registry-yə + təxirə salınmış select/groupBy həlli
+        registerJoinTablesForGenerated();
+        resolveDeferredSelectAndGroupBy();
+        dropShadowedRawSelectFields();
+
+        // 2. SELECT — agg sütunlar + alias→expr xəritəsi (HAVING/filter üçün lazım)
+        List<SelectFieldOrAsterisk> selectList = new ArrayList<>(rawSelectFields);
+        Map<String, Field<?>> aggExprByAlias   = new LinkedHashMap<>();
+        buildAggregateSelectColumns(mainTable, selectList, aggExprByAlias);
+
+        // 3. ORDER BY tokenləri (çağırış sırası + orderSeq)
+        applyOrderTokens();
+
+        // 4. Hesablanan / ifadə sütunları — computed, concat, coalesce, selectAs
+        buildComputedColumns(selectList, aggExprByAlias);
+        buildComputedFieldColumns(mainTable, selectList, aggExprByAlias);
+        buildConcatColumns(mainTable, selectList, aggExprByAlias);
+        buildCoalesceColumns(selectList, aggExprByAlias);
+        buildSelectAsColumns(selectList, aggExprByAlias);
+
+        // 5. Təxirə salınmış WHERE filterləri — indi bütün alias-lar məlumdur
+        resolveDeferredWhereFilters(aggExprByAlias);
+
+        if (selectList.isEmpty()) selectList.add(DSL.asterisk());
+
+        // 6. FROM + bütün JOIN növləri
+        SelectJoinStep<Record> query = distinct
+                ? dsl.selectDistinct(selectList).from(mainTable)
+                : dsl.select(selectList).from(mainTable);
+        query = applyGeneratedJoins(query, mainTable);
+
+        // 7. Global filterlər (agg alias → HAVING, qalanı → WHERE)
+        applyGlobalFilters(aggExprByAlias);
+
+        // 8. WHERE
+        Condition where = null;
+        for (Condition c : rawConditions) where = (where == null) ? c : where.and(c);
+        SelectConditionStep<Record> conditioned = (where != null)
+                ? query.where(where)
+                : query.where(DSL.trueCondition());
+
+        // 9. GROUP BY
+        SelectHavingStep<Record> grouped = rawGroupByFields.isEmpty()
+                ? conditioned
+                : conditioned.groupBy(rawGroupByFields);
+
+        // 10. HAVING — raw + havingFilterRows (agg alias → ifadə ilə)
+        Condition having = buildHavingCondition(aggExprByAlias);
+        if (having != null) grouped = (SelectHavingStep<Record>) grouped.having(having);
+
+        // 11. ORDER BY — sortRows
+        for (SortRow sr : sortRows) {
+            Field<?> f = resolveFieldByAlias(sr.field());
+            if (f == null) f = DSL.field(DSL.name(fieldPart(sr.field())));
+            rawOrderFields.add("DESC".equalsIgnoreCase(sr.dir()) ? f.desc() : f.asc());
+        }
+
+        SelectSeekStepN<Record> ordered = grouped.orderBy(rawOrderFields);
+
+        // 12. COUNT (pagination üçün)
+        // GROUP BY (+ HAVING) varsa COUNT mütləq "qruplaşdırılmış" nəticəni saymalıdır —
+        // əks halda qruplaşdırmadan əvvəlki sətir sayı qaytarılır (səhv nəticə: list 1
+        // sətir, count isə qruplaşmamış sətirlərin sayını — məs. 4 — göstərir).
+        // "conditioned"/"grouped" artıq bütün JOIN-ləri özündə saxlayır.
+        int rowCount = 0;
+        if (paginate) {
+            Select<Record> countSource = rawGroupByFields.isEmpty() ? conditioned : grouped;
+            Record1<Integer> r = dsl.selectCount()
+                    .from(countSource.asTable("_count"))
+                    .fetchOne();
+            rowCount = (r == null) ? 0 : r.value1();
+        }
+
+        // 13. LIMIT / OFFSET
+        Select<Record> finalQuery = paginate
+                ? ordered.limit(pageSize).offset((long) pageNumber * pageSize)
+                : ordered;
+
+        return new SelectTable(finalQuery, rowCount);
+    }
+
+    // ─── executeGenerated() addım metodları ──────────────────────────────
+
+    /**
+     * Bütün JOIN cədvəllərini {@code joinTableRegistry}-yə əvvəlcədən yazır —
+     * filter / groupBy / agg / orderBy metodları bu registry-dən field resolve edir.
+     */
+    private void registerJoinTablesForGenerated() {
         for (JoinRow jr : joins) {
             EntityTable<?> et = new EntityTable<>(jr.entity(), jr.alias());
             joinTableRegistry.put(jr.alias(), et.getTable());
@@ -2189,27 +2300,31 @@ public final class JooqQuery<T> {
         for (SelectJoinRow jr : selectJoins) {
             joinTableRegistry.put(jr.alias(), jr.subQuery().asTable(jr.alias()));
         }
+    }
 
-        // ─── deferredSelectCols — registry artıq doludur, indi həll et ────────
+    /** deferredSelectCols / deferredGroupByCols — registry artıq doludur, indi həll edilir. */
+    private void resolveDeferredSelectAndGroupBy() {
         for (String col : deferredSelectCols) {
             Field<?> f = resolveFieldByAlias(col);
             if (f != null) rawSelectFields.add(f);
         }
-
-        // ─── deferredGroupByCols — registry artıq doludur, indi həll et ───────
         for (String col : deferredGroupByCols) {
             Field<?> f = resolveFieldByAlias(col);
             if (f != null) rawGroupByFields.add(f);
         }
+    }
 
-        // ─── DUPLICATE ALIAS DEDUP ──────────────────────────────────────────
-        // Raw select sütunu (məs: .select("d2.vatTotalPrice")) öz native adını
-        // ("vatTotalPrice") select list-də saxlayır. Əgər həmin ad sonradan
-        // computed/agg/concat/coalesce/selectAs alias-ı kimi DƏ istifadə
-        // olunubsa (məs: .addComputedColumn(...).as("vatTotalPrice", 4)),
-        // derived table-da EYNİ adlı İKİ sütun yaranır → Postgres "column
-        // reference ... is ambiguous" xətası verir. Explicit alias üstünlük
-        // təşkil etməlidir — raw passthrough həmin halda select-dən çıxarılır.
+    /**
+     * DUPLICATE ALIAS DEDUP.
+     * Raw select sütunu (məs: {@code .select("d2.vatTotalPrice")}) öz native adını
+     * ("vatTotalPrice") select list-də saxlayır. Əgər həmin ad sonradan
+     * computed/agg/concat/coalesce/selectAs alias-ı kimi DƏ istifadə
+     * olunubsa (məs: {@code .addComputedColumn(...).as("vatTotalPrice", 4)}),
+     * derived table-da EYNİ adlı İKİ sütun yaranır → Postgres "column
+     * reference ... is ambiguous" xətası verir. Explicit alias üstünlük
+     * təşkil etməlidir — raw passthrough həmin halda select-dən çıxarılır.
+     */
+    private void dropShadowedRawSelectFields() {
         Set<String> reservedAliases = new HashSet<>();
         for (AggRow ar : aggRows) if (ar.alias() != null) reservedAliases.add(ar.alias());
         for (ComputedRow cr : computedCols) if (cr.alias() != null) reservedAliases.add(cr.alias());
@@ -2222,11 +2337,15 @@ public final class JooqQuery<T> {
         if (!reservedAliases.isEmpty()) {
             rawSelectFields.removeIf(f -> reservedAliases.contains(f.getName()));
         }
+    }
 
-        // ─── SELECT — agg sütunlar + alias→expr xəritəsi (HAVING üçün lazım) ──
-        List<SelectFieldOrAsterisk> selectList = new ArrayList<>(rawSelectFields);
-        Map<String, Field<?>> aggExprByAlias   = new LinkedHashMap<>();
-
+    /**
+     * Aqreqat sütunları (aggRows) select list-ə əlavə edir və alias→ifadə
+     * xəritəsini doldurur (HAVING / filter yönləndirməsi üçün lazımdır).
+     */
+    private void buildAggregateSelectColumns(Table<?> mainTable,
+                                             List<SelectFieldOrAsterisk> selectList,
+                                             Map<String, Field<?>> aggExprByAlias) {
         for (AggRow ar : aggRows) {
             if (ar.fn() == null) continue;
             if (ar.field() == null && ar.expr() == null) continue;
@@ -2247,13 +2366,7 @@ public final class JooqQuery<T> {
                     if (mathF == null) mathF = DSL.field(DSL.name(fieldPart(ar.mathField())));
                     Field<? extends Number> numBase = (Field<? extends Number>) baseField;
                     Field<? extends Number> numMath = (Field<? extends Number>) mathF;
-                    operand = switch (ar.mathOp()) {
-                        case ADD      -> numBase.add(numMath);
-                        case SUBTRACT -> numBase.subtract(numMath);
-                        case MULTIPLY -> numBase.mul(numMath);
-                        case DIVIDE   -> numBase.div(numMath);
-                        default       -> baseField;
-                    };
+                    operand = ar.mathOp().apply(numBase, numMath);
                 }
             }
 
@@ -2283,25 +2396,23 @@ public final class JooqQuery<T> {
                         : rawField;
                 Field<? extends Number> numFinal = (Field<? extends Number>) finalField;
                 Field<? extends Number> numOpnd  = (Field<? extends Number>) opnd;
-                finalField = switch (po.op()) {
-                    case ADD      -> numFinal.add(numOpnd);
-                    case SUBTRACT -> numFinal.subtract(numOpnd);
-                    case MULTIPLY -> numFinal.mul(numOpnd);
-                    case DIVIDE   -> numFinal.div(numOpnd);
-                    default       -> finalField;
-                };
+                finalField = po.op().apply(numFinal, numOpnd);
             }
 
             aggExprByAlias.put(ar.alias(), finalField);
             selectList.add(finalField.as(ar.alias()));
         }
+    }
 
-        // ─── orderTokens — ORDER BY qur ────────────────────────────────────────
-        // (orderBy("field","dir") və addAggFunction(...).as(alias,...,orderDir)
-        //  bir-birinə nəzərən hansı sırada çağırılıbsa, elə sırada tətbiq olunur —
-        //  YALNIZ açıq orderSeq verilməyibsə. orderSeq verilmiş meyarlar ASC
-        //  sıralanıb əvvələ keçir, stable sort sayəsində bərabər/boş seq-lər öz
-        //  çağırış sırasını saxlayır.)
+    /**
+     * orderTokens → rawOrderFields.
+     * {@code orderBy("field","dir")} və {@code addAggFunction(...).as(alias,...,orderDir)}
+     * bir-birinə nəzərən hansı sırada çağırılıbsa, elə sırada tətbiq olunur —
+     * YALNIZ açıq orderSeq verilməyibsə. orderSeq verilmiş meyarlar ASC
+     * sıralanıb əvvələ keçir, stable sort sayəsində bərabər/boş seq-lər öz
+     * çağırış sırasını saxlayır.
+     */
+    private void applyOrderTokens() {
         List<OrderToken> orderedTokens = new ArrayList<>(orderTokens);
         orderedTokens.sort((a, b) -> {
             if (a.seq() != null && b.seq() != null) return Integer.compare(a.seq(), b.seq());
@@ -2316,8 +2427,11 @@ public final class JooqQuery<T> {
             if (f == null) continue;
             rawOrderFields.add("DESC".equalsIgnoreCase(ot.dir()) ? f.desc() : f.asc());
         }
+    }
 
-        // ─── computedCols — sadə 2-sahəli MathOp forma (addComputedColumn(alias,...)) ──
+    /** computedCols — sadə 2-sahəli MathOp forma ({@code addComputedColumn(alias,...)}). */
+    private void buildComputedColumns(List<SelectFieldOrAsterisk> selectList,
+                                      Map<String, Field<?>> aggExprByAlias) {
         for (ComputedRow cr : computedCols) {
             Field<?> f1 = resolveFieldByAlias(cr.ta1() + "." + cr.f1());
             if (f1 == null) f1 = DSL.field(DSL.name(cr.ta1(), cr.f1()));
@@ -2331,31 +2445,32 @@ public final class JooqQuery<T> {
 
             Field<? extends Number> n1 = (Field<? extends Number>) f1;
             Field<? extends Number> n2 = (Field<? extends Number>) f2;
-            Field<?> safeDenom = (cr.op() == MathOp.DIVIDE)
-                    ? (Field<? extends Number>) (Field<?>) DSL.nullif((Field) n2, 0)
-                    : n2;
-            Field<?> expr = switch (cr.op()) {
-                case ADD      -> n1.add(n2);
-                case SUBTRACT -> n1.subtract(n2);
-                case MULTIPLY -> n1.mul(n2);
-                case DIVIDE   -> n1.div((Field<? extends Number>) safeDenom);
-                default       -> n1;
-            };
+            // DIVIDE → NULLIF ilə sıfıra bölmə qorunması, qalanları ortaq MathOp.apply()
+            Field<?> expr = (cr.op() == MathOp.DIVIDE)
+                    ? n1.div((Field<? extends Number>) (Field<?>) DSL.nullif((Field) n2, 0))
+                    : cr.op().apply(n1, n2);
 
             aggExprByAlias.put(cr.alias(), expr);
             selectList.add(expr.as(cr.alias()));
         }
+    }
 
-        // ─── computedFields — ComputedField zənciri (addComputedColumn(field).add()...as(alias)) ──
+    /**
+     * computedFields — ComputedField zənciri ({@code addComputedColumn(field).add()...as(alias)}).
+     *
+     * <p>DİQQƏT: map-ə raw (alias-sız) ifadə saxlanılır — bax: {@link #buildConcatColumns}
+     * izahı. Əvvəllər cf.toFieldGenerated(...) (artıq .as(alias) tətbiq edilmiş)
+     * həm map-ə, həm də inline filter-də DSL.field(DSL.name(alias)) ilə birbaşa
+     * alias istinadı üçün istifadə olunurdu — Postgres-də SELECT alias-ları
+     * HAVING-də görünmür, "column does not exist" yaranırdı.
+     */
+    private void buildComputedFieldColumns(Table<?> mainTable,
+                                           List<SelectFieldOrAsterisk> selectList,
+                                           Map<String, Field<?>> aggExprByAlias) {
         for (ComputedFieldEntry entry : computedFields) {
             ComputedField cf = entry.cf();
             if (cf == null) continue;
 
-            // DİQQƏT: raw (alias-sız) ifadə saxlanılır — bax: yuxarıdaki CONCAT bloku
-            // izahı. Əvvəllər cf.toFieldGenerated(...) (artıq .as(alias) tətbiq edilmiş)
-            // həm map-ə, həm də inline filter-də DSL.field(DSL.name(alias)) ilə birbaşa
-            // alias istinadı üçün istifadə olunurdu — Postgres-də SELECT alias-ları
-            // HAVING-də görünmür, "column does not exist" yaranırdı.
             Field<?> expr = cf.buildExprGenerated(mainTable, joinTableRegistry);
             String computedAlias = cf.getAlias();
 
@@ -2367,11 +2482,20 @@ public final class JooqQuery<T> {
                         .apply((Field<Object>) expr, entry.filterValue()));
             }
         }
+    }
 
-        // ─── concatCols — CONCAT(field/literal/if/coalesce, ...) ─────────────
-        // Əvvəllər generated mode-da bu siyahı heç vaxt oxunmurdu (yalnız entity
-        // mode-un execute()-i istifadə edirdi) — nəticədə .concat(...) sütunu
-        // generated/derived-table sorğularda select listə düşmürdü.
+    /**
+     * concatCols — CONCAT(field/literal/if/coalesce, ...).
+     *
+     * <p>DİQQƏT: map-ə alias-sız (raw) ifadə qoyulur — alias-lanmış Field-i
+     * saxlasaydıq, bu obyekt sonra HAVING/.filter() şərtində istifadə
+     * ediləndə jOOQ onu sadəcə "alias" adı kimi render edir və Postgres
+     * "column ... does not exist" xətası verir (SELECT alias-ları
+     * WHERE/HAVING-də görünmür).
+     */
+    private void buildConcatColumns(Table<?> mainTable,
+                                    List<SelectFieldOrAsterisk> selectList,
+                                    Map<String, Field<?>> aggExprByAlias) {
         for (ConcatRow cc : concatCols) {
             List<Field<?>> parts = new ArrayList<>();
             for (int i = 0; i < cc.items().size(); i++) {
@@ -2394,98 +2518,93 @@ public final class JooqQuery<T> {
                     parts.add(ci.expr().toFieldGenerated(mainTable, joinTableRegistry));
                 }
             }
-            // DİQQƏT: map-ə alias-sız (raw) ifadə qoyulur — alias-lanmış Field-i
-            // saxlasaydıq, bu obyekt sonra HAVING/.filter() şərtində istifadə
-            // ediləndə jOOQ onu sadəcə "alias" adı kimi render edir və Postgres
-            // "column ... does not exist" xətası verir (SELECT alias-ları
-            // WHERE/HAVING-də görünmür). aggRows/computedCols bloklarındaki
-            // eyni qaydaya uyğunlaşdırıldı.
             Field<?> expr = DSL.concat(parts.toArray(new Field[0]));
             aggExprByAlias.put(cc.alias(), expr);
             selectList.add(expr.as(cc.alias()));
         }
+    }
 
-        // ─── coalesceCols — COALESCE(field1, field2, ..., default) ───────────
-        // Eyni səbəbdən generated mode-da yox idi.
+    /** coalesceCols — COALESCE(field1, field2, ..., default). Raw ifadə saxlanılır (bax: buildConcatColumns). */
+    private void buildCoalesceColumns(List<SelectFieldOrAsterisk> selectList,
+                                      Map<String, Field<?>> aggExprByAlias) {
         for (CoalesceRow cc : coalesceCols) {
             List<Field<?>> coalesceList = new ArrayList<>();
             boolean stringDefault = cc.def() instanceof String;
             for (String f : cc.fields()) {
                 Field<?> rf = resolveFieldByAlias(f);
                 if (rf == null) rf = DSL.field(DSL.name(fieldPart(f)));
-                // Default mətn (String) olduqda CAST(... AS VARCHAR) — bax: yuxarıdaki
-                // CONCAT blokundaki eyni izahat (Postgres COALESCE tip uyğunlaşdırması).
+                // Default mətn (String) olduqda CAST(... AS VARCHAR) — Postgres COALESCE tip uyğunlaşdırması.
                 coalesceList.add(stringDefault ? rf.cast(String.class) : rf);
             }
             coalesceList.add(DSL.inline(cc.def()));
             Field<?> first = coalesceList.get(0);
             Field<?>[] rest = coalesceList.subList(1, coalesceList.size()).toArray(new Field[0]);
-            // Bax: yuxarıdaki CONCAT bloku — eyni səbəbdən raw (alias-sız) ifadə saxlanılır.
             Field<?> expr = DSL.coalesce(first, rest);
             aggExprByAlias.put(cc.alias(), expr);
             selectList.add(expr.as(cc.alias()));
         }
+    }
 
-        // ─── selectAsRows — "alias.field" AS outputAlias ─────────────────────
-        // Eyni səbəbdən generated mode-da yox idi.
+    /** selectAsRows — {@code "alias.field" AS outputAlias}. Raw ifadə saxlanılır (bax: buildConcatColumns). */
+    private void buildSelectAsColumns(List<SelectFieldOrAsterisk> selectList,
+                                      Map<String, Field<?>> aggExprByAlias) {
         for (SelectAsRow sa : selectAsRows) {
             Field<?> f = resolveFieldByAlias(sa.aliasAndField());
             if (f == null) f = DSL.field(DSL.name(fieldPart(sa.aliasAndField())));
-            // Bax: yuxarıdaki CONCAT bloku — eyni səbəbdən raw (alias-sız) ifadə saxlanılır.
             aggExprByAlias.put(sa.outputAlias(), f);
             selectList.add(f.as(sa.outputAlias()));
         }
+    }
 
-        // ─── deferredWhereFilterRows — .filter(field,op,value) həlli ────────
-        // İndi joinTableRegistry (bütün JOIN növləri) və aggExprByAlias
-        // (aqreqatlar + concat/coalesce/selectAs/computed alias-ları) tam
-        // doludur — həll buraya təxirə salınmışdı, indi aparılır.
-        if (!deferredWhereFilterRows.isEmpty()) {
-            Set<String> aggregateAliasSet = new HashSet<>();
-            for (AggRow ar : aggRows) aggregateAliasSet.add(ar.alias());
+    /**
+     * deferredWhereFilterRows — {@code .filter(field,op,value)} həlli.
+     * Bu mərhələdə joinTableRegistry (bütün JOIN növləri) və aggExprByAlias
+     * (aqreqatlar + concat/coalesce/selectAs/computed alias-ları) tam doludur.
+     */
+    private void resolveDeferredWhereFilters(Map<String, Field<?>> aggExprByAlias) {
+        if (deferredWhereFilterRows.isEmpty()) return;
 
-            for (FilterRow fr : deferredWhereFilterRows) {
-                String key = fieldPart(fr.field());
+        Set<String> aggregateAliasSet = new HashSet<>();
+        for (AggRow ar : aggRows) aggregateAliasSet.add(ar.alias());
 
-                // ROUND(field, scale) AS alias yoxlaması (rounded SELECT sütunu)
-                RoundedColumnRow rounded = roundedAliasMap.get(key);
-                if (rounded != null) {
-                    Field<?> rf = resolveFieldByAlias(rounded.fieldRef());
-                    if (rf != null) {
-                        Field<?> roundedField = DSL.round((Field<? extends Number>) rf, rounded.scale());
-                        rawConditions.add(az.mbm.jooqsqlgenerate.strategy.FilterStrategies
-                                .get(fr.op()).apply((Field<Object>) roundedField, fr.value()));
-                        continue;
-                    }
-                }
+        for (FilterRow fr : deferredWhereFilterRows) {
+            String key = fieldPart(fr.field());
 
-                // Aqreqat / concat / coalesce / selectAs / computed alias-ı?
-                Field<?> expr = aggExprByAlias.get(key);
-                if (expr != null) {
-                    Condition c = az.mbm.jooqsqlgenerate.strategy.FilterStrategies
-                            .get(fr.op()).apply((Field<Object>) expr, fr.value());
-                    // Əsl aqreqat (SUM/COUNT/AVG/...) WHERE-də işlənə bilməz — HAVING-ə yönəlir.
-                    // Qalanlar (concat/coalesce/selectAs/computed) sətir-əsaslıdır — WHERE-də qalır.
-                    if (aggregateAliasSet.contains(key)) rawHavings.add(c);
-                    else rawConditions.add(c);
+            // ROUND(field, scale) AS alias yoxlaması (rounded SELECT sütunu)
+            RoundedColumnRow rounded = roundedAliasMap.get(key);
+            if (rounded != null) {
+                Field<?> rf = resolveFieldByAlias(rounded.fieldRef());
+                if (rf != null) {
+                    Field<?> roundedField = DSL.round((Field<? extends Number>) rf, rounded.scale());
+                    rawConditions.add(FilterStrategies
+                            .get(fr.op()).apply((Field<Object>) roundedField, fr.value()));
                     continue;
                 }
-
-                // Adi cədvəl sütunu (main və ya JOIN edilmiş) — registry artıq doludur
-                Field<?> resolved = resolveFieldByAlias(fr.field());
-                if (resolved == null) resolved = DSL.field(DSL.name(key));
-                rawConditions.add(az.mbm.jooqsqlgenerate.strategy.FilterStrategies
-                        .get(fr.op()).apply((Field<Object>) resolved, fr.value()));
             }
+
+            // Aqreqat / concat / coalesce / selectAs / computed alias-ı?
+            Field<?> expr = aggExprByAlias.get(key);
+            if (expr != null) {
+                Condition c = FilterStrategies
+                        .get(fr.op()).apply((Field<Object>) expr, fr.value());
+                // Əsl aqreqat (SUM/COUNT/AVG/...) WHERE-də işlənə bilməz — HAVING-ə yönəlir.
+                // Qalanlar (concat/coalesce/selectAs/computed) sətir-əsaslıdır — WHERE-də qalır.
+                if (aggregateAliasSet.contains(key)) rawHavings.add(c);
+                else rawConditions.add(c);
+                continue;
+            }
+
+            // Adi cədvəl sütunu (main və ya JOIN edilmiş) — registry artıq doludur
+            Field<?> resolved = resolveFieldByAlias(fr.field());
+            if (resolved == null) resolved = DSL.field(DSL.name(key));
+            rawConditions.add(FilterStrategies
+                    .get(fr.op()).apply((Field<Object>) resolved, fr.value()));
         }
+    }
 
-        if (selectList.isEmpty()) selectList.add(DSL.asterisk());
-
-        // ─── FROM ────────────────────────────────────────────────────────────
-        SelectJoinStep<Record> query = distinct
-                ? dsl.selectDistinct(selectList).from(mainTable)
-                : dsl.select(selectList).from(mainTable);
-
+    /** Bütün JOIN növlərini (raw, entity, derived-table, extended) sorğuya tətbiq edir. */
+    private SelectJoinStep<Record> applyGeneratedJoins(SelectJoinStep<Record> query,
+                                                       Table<?> mainTable) {
         // ─── JOIN — raw (generated table ilə) ───────────────────────────────
         for (RawJoinRow jr : rawJoins) {
             query = switch (jr.type()) {
@@ -2572,16 +2691,22 @@ public final class JooqQuery<T> {
                     : query.join(jt).on(on);
         }
 
-        // ─── GLOBAL FILTER — generated mode ─────────────────────────────────
-        // globalFilter(...) çağırışları ilə əlavə olunan filterlər — alias.field
-        // joinTableRegistry-dən (yuxarıda doldurulub) və ya əsas cədvəldən resolve edilir.
-        // Aqreqat alias-ına uyğun gəlirsə HAVING-ə yönləndirilir, əks halda WHERE-ə.
+        return query;
+    }
+
+    /**
+     * GLOBAL FILTER — generated mode.
+     * globalFilter(...) çağırışları ilə əlavə olunan filterlər — alias.field
+     * joinTableRegistry-dən və ya əsas cədvəldən resolve edilir.
+     * Aqreqat alias-ına uyğun gəlirsə HAVING-ə yönləndirilir, əks halda WHERE-ə.
+     */
+    private void applyGlobalFilters(Map<String, Field<?>> aggExprByAlias) {
         for (FiltersEntry gf : globalFilters) {
             String fieldKey = fieldPart(gf.aliasAndField());
 
             // ROUND(field, scale) AS alias yoxlaması — direkt .filter() yolu ilə
-            // eyni qaydada (bax: deferredWhereFilterRows bloku yuxarıda) ROUND(...)
-            // ifadəsi WHERE-ə yazılır, alias literal sütun kimi yanlış həll edilmir.
+            // eyni qaydada ROUND(...) ifadəsi WHERE-ə yazılır,
+            // alias literal sütun kimi yanlış həll edilmir.
             RoundedColumnRow rounded = roundedAliasMap.get(fieldKey);
             if (rounded != null) {
                 Field<?> rf = resolveFieldByAlias(rounded.fieldRef());
@@ -2605,23 +2730,10 @@ public final class JooqQuery<T> {
             Condition c = FilterStrategies.get(gf.op()).apply((Field<Object>) resolved, gf.value());
             rawConditions.add(c);
         }
+    }
 
-        // ─── WHERE ───────────────────────────────────────────────────────────
-        Condition where = null;
-        for (Condition c : rawConditions) where = (where == null) ? c : where.and(c);
-        SelectConditionStep<Record> conditioned = (where != null)
-                ? query.where(where)
-                : query.where(DSL.trueCondition());
-
-        // ─── GROUP BY ────────────────────────────────────────────────────────
-        SelectHavingStep<Record> grouped;
-        if (!rawGroupByFields.isEmpty()) {
-            grouped = conditioned.groupBy(rawGroupByFields);
-        } else {
-            grouped = conditioned;
-        }
-
-        // ─── HAVING — raw + havingFilterRows (agg alias → ifadə ilə) ────────
+    /** HAVING şərtini qurur — rawHavings + havingFilterRows (agg alias → ifadə ilə). */
+    private Condition buildHavingCondition(Map<String, Field<?>> aggExprByAlias) {
         Condition having = null;
         for (Condition c : rawHavings) having = (having == null) ? c : having.and(c);
 
@@ -2636,38 +2748,7 @@ public final class JooqQuery<T> {
             Condition c = FilterStrategies.get(fr.op()).apply(f, fr.value());
             having = (having == null) ? c : having.and(c);
         }
-
-        if (having != null) grouped = (SelectHavingStep<Record>) grouped.having(having);
-
-        // ─── ORDER BY — sortRows ─────────────────────────────────────────────
-        for (SortRow sr : sortRows) {
-            Field<?> f = resolveFieldByAlias(sr.field());
-            if (f == null) f = DSL.field(DSL.name(fieldPart(sr.field())));
-            rawOrderFields.add("DESC".equalsIgnoreCase(sr.dir()) ? f.desc() : f.asc());
-        }
-
-        SelectSeekStepN<Record> ordered = grouped.orderBy(rawOrderFields);
-
-        // ─── COUNT (pagination üçün) ─────────────────────────────────────────
-        // GROUP BY (+ HAVING) varsa COUNT mütləq "qruplaşdırılmış" nəticəni saymalıdır —
-        // əks halda qruplaşdırmadan əvvəlki sətir sayı qaytarılır (səhv nəticə: list 1
-        // sətir, count isə qruplaşmamış sətirlərin sayını — məs. 4 — göstərir).
-        // "conditioned"/"grouped" artıq bütün JOIN-ləri özündə saxlayır.
-        int rowCount = 0;
-        if (paginate) {
-            Select<Record> countSource = rawGroupByFields.isEmpty() ? conditioned : grouped;
-            Record1<Integer> r = dsl.selectCount()
-                    .from(countSource.asTable("_count"))
-                    .fetchOne();
-            rowCount = (r == null) ? 0 : r.value1();
-        }
-
-        // ─── LIMIT / OFFSET ───────────────────────────────────────────────────
-        Select<Record> finalQuery = paginate
-                ? ordered.limit(pageSize).offset((long) pageNumber * pageSize)
-                : ordered;
-
-        return new SelectTable(finalQuery, rowCount);
+        return having;
     }
 
     // ════════════════════════════════════════════════════════════════════

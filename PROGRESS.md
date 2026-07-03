@@ -10,8 +10,8 @@
 ## Proyekt haqqında
 
 **Ad:** `jooq-sql-generate`
-**Versiya:** 1.1.31
-**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.31`
+**Versiya:** 1.1.47 (local test — refactoring + Op.EQUAL + AggExpr)
+**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.47`
 **Repo:** https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate
 **Java:** 17
 **Asılılıqlar:** jOOQ 3.18.6, Spring Boot 3.2.5 (compileOnly), Jakarta Persistence 3.1.0
@@ -60,6 +60,25 @@ az.mbm.jooqsqlgenerate
 ---
 
 ## İş Jurnalı
+
+### 2026-07-03 — Refactoring + Op.EQUAL + AggExpr + smoke testlər
+
+**Optimizasiya / oxunaqlılıq (geri uyğunluq tam saxlanılıb):**
+- `FilterStrategies` — 30 ROUND qeydiyyatı `registerRoundOps(scale, ...)` helper-inə yığıldı; `coercedList` sadələşdi.
+- `Filter.java` 688→434 sətir — 30 ROUND metodu və LIKE ailəsi `roundFilter()`/`strategy()` private helper-lərinə yönləndirildi (bütün public imzalar dəyişməz).
+- `MathOp.apply(left, right)` — yeni ortaq helper; `JooqQuery`/`AggregateBuilder`/`ComputedField`/`SelectQueryBuilder`-dəki 9 təkrar `switch(MathOp)` bloku əvəzləndi. DIVIDE-dakı NULLIF qorunması olduğu kimi saxlanıldı.
+- `EntityTable` — yeni `fieldsByJavaName` map-i: `getField()` artıq hər çağırışda annotation oxumur (hot path).
+- `JooqQuery.executeGenerated()` ~500 sətirdən 13 addımlıq ~90 sətirlik orkestratora bölündü; kod 14 adlı private metoda köçdü (`buildAggregateSelectColumns`, `applyGeneratedJoins`, `resolveDeferredWhereFilters` və s.) — sətir-sətir köçürmə, davranış dəyişməyib.
+
+**Yeni API:**
+- `Op.EQUAL` — `EQUAl` typo-sunun düzgün adlanmış qarşılığı; `EQUAl` `@Deprecated` amma tam işlək (Collection→IN çevrilməsi daxil hər ikisi eyni davranır).
+- `AggExpr` (builder paketi) + `JooqManager.addSumExpr/addAggExpr` + `JooqQuery.sumExpr/aggExpr` — oxunaqlı aqreqat zənciri: `plus(f)`, `plus(f1,f2)` (= `+ f1*f2`), `plus(ComputedField)`, eyni üçlük `minus`. `(a+b)-(c+d)=a+b-c-d` ekvivalentliyinə əsaslanır, daxildə `addAggFunctionOnComputed`-ə çevrilir.
+
+**Testlər:** `SqlRenderSmokeTest` (8 test) — jOOQ MockConnection ilə DB-siz SQL render yoxlanışı: EQUAL≡EQUAl, Collection→IN, türk LIKE, ROUND strategiyaları, MathOp.apply, JOIN+GROUP+SUM smoke, addSumExpr≡köhnə API, generated-mode. `build.gradle.kts`-ə `testImplementation` jooq+jakarta əlavə edildi.
+
+**Sənədlər:** USAGE.md (Op cədvəli, yeni 7.3.3 addSumExpr, arayış cədvəlləri), DOCUMENTATION.md (AggExpr bölməsi), USAGE_EN.md (Op cədvəlindəki köhnə/yanlış adlar — NOT_LIKE, LIKE_START, IS_NULL — real enum adlarına düzəldildi; yeni 7.3.2).
+
+**Yoxlama:** sandbox-da Maven Central bloklu olduğundan kompilyasiya edilməyib — lokal `./gradlew test` işlədilməlidir.
 
 ### 2026-06-22 — v1.1.31: Bug fix — CONCAT/COALESCE/selectAs sütununa filter/HAVING qoyanda `column "alias" does not exist`
 

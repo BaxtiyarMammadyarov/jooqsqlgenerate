@@ -727,7 +727,8 @@ JooqQuery.from(User.class, "u")
 
 | Op | SQL | Nümunə |
 |---|---|---|
-| `EQUAl` | `= value` | `Op.EQUAl, "ACTIVE"` |
+| `EQUAL` | `= value` | `Op.EQUAL, "ACTIVE"` |
+| `EQUAl` *(deprecated)* | `= value` — `EQUAL` ilə eyni | köhnə kod üçün saxlanılır |
 | `NOT_EQUAL` | `!= value` | `Op.NOT_EQUAL, "BANNED"` |
 | `LIKE` | String: `LOWER(REPLACE(...)) LIKE '%val%'` / Numeric: `CAST AS varchar LIKE '%val%'` | `Op.LIKE, "ali"` |
 | `START_WITH` | String: Türk-aware `LIKE 'val%'` / Numeric: `CAST AS varchar LIKE 'val%'` | `Op.START_WITH, "A"` |
@@ -746,6 +747,10 @@ JooqQuery.from(User.class, "u")
 | `IS_NOT_EMPTY` | `IS NOT NULL` | `Op.IS_NOT_EMPTY, ""` |
 | `REGEXP` | `REGEXP pattern` | `Op.REGEXP, "^A.*"` |
 | `NOT_REGEXP` | `NOT REGEXP pattern` | `Op.NOT_REGEXP, "^B"` |
+
+> **Qeyd — `EQUAl` → `EQUAL`:** `EQUAl` adında yazı səhvi var idi. `Op.EQUAL` düzgün adlanmış
+> qarşılıq kimi əlavə edilib; hər ikisi eyni SQL verir (Collection dəyərində avtomatik `IN`
+> çevrilməsi daxil). Köhnə kod dəyişməz işləyir, yeni kodda `EQUAL` istifadə edin.
 
 ### 4.3 Türk əlifbası case-insensitive LIKE — tip yoxlaması ilə
 
@@ -1286,10 +1291,133 @@ manager.addAggFunction(Agg.SUM, "t.purchaseExpense")
 // → SUM(purchaseExpense * CASE WHEN actionType='medaxil' THEN 1 ELSE 0 END)
 ```
 
-### 7.4 AggregateBuilder — fluent API
+### 7.3.2 İki SUM ifadəsini bir-birindən çıxmaq — SUM(exprA) - SUM(exprB)
+
+`SUM` xətti (lineer) əməliyyat olduğu üçün `SUM(a) - SUM(b) = SUM(a - b)` — yəni iki ayrı
+aqreqatı çıxmaq əvəzinə, hər tərəfi `ComputedField` ilə qurub tək bir aqreqat daxilində
+çıxmaq kifayətdir. Bu, əlavə sorğu qatı yaratmadan, tək SELECT sütununda hesablanır.
+
+**Sadə hal — 2 sahə:**
 
 ```java
-JooqQuery.from(Order.class, "o")
+manager.addAggFunctionOnComputed(
+    Agg.SUM,
+    ComputedField.of("t.totalIn").subtract("t.totalOut"),
+    "netAmount"
+)
+// → SUM(t.totalIn - t.totalOut) AS netAmount
+```
+
+**Mürəkkəb hal — hər tərəfdə bir neçə sahə (toplama + vurma qarışıq):**
+
+Oxunaqlılıq üçün hər tərəfi əvvəlcə ayrı `ComputedField` dəyişəninə çıxarın,
+sonra onları `.subtract(...)` ilə birləşdirin:
+
+```java
+ComputedField inSide = ComputedField.sumOf(
+        ComputedField.expr("t.totalIn"),
+        ComputedField.expr("t.expense").multiply("t.actionIn")
+);
+
+ComputedField outSide = ComputedField.sumOf(
+        ComputedField.expr("t.totalOut"),
+        ComputedField.expr("t.expense").multiply("t.actionOut")
+);
+
+manager.addAggFunctionOnComputed(
+    Agg.SUM,
+    inSide.subtract(outSide),
+    "netAmount"
+)
+// → SUM((t.totalIn + t.expense * t.actionIn) - (t.totalOut + t.expense * t.actionOut)) AS netAmount
+```
+
+Eyni struktur `JooqQuery` üzərində birbaşa `aggOnComputed(...)` ilə də işləyir:
+
+```java
+JooqQuery.from(CashFlow.class, "t")
+    .groupBy("t.actionType")
+    .aggOnComputed(Agg.SUM, inSide.subtract(outSide), "netAmount")
+    .execute(dsl);
+```
+
+> **Qeyd:** Bu, iki tam ayrı `SUM(...)` ifadəsini SQL səviyyəsində hərfi mənada çıxmaqdan
+> fərqlidir — riyazi olaraq eyni nəticəni verir, amma tək aqreqat funksiyası kimi daha
+> səmərəlidir. Bu formanın daha qısa yazılışı üçün bax: **7.3.3 addSumExpr**.
+
+### 7.3.3 addSumExpr / AggExpr — oxunaqlı aqreqat zənciri
+
+7.3.2-dəki "hər tərəfi ayrı `ComputedField`-ə çıxar" yanaşmasının daha səliqəli qarşılığı.
+Riyazi ekvivalentlikdən istifadə edir: `(a + b) - (c + d) = a + b - c - d` — yəni iç-içə
+`sumOf(...)` qruplarına ehtiyac yoxdur, terminlər düz zəncirlə yazılır:
+
+```java
+// SUM( marginalCostOut + purchaseExpense*actionOut
+//      - marginalCostIn - purchaseExpense*actionIn ) AS totalPrice
+manager.addSumExpr("totalPrice", e -> e
+        .plus("t.marginalCostOut")
+        .plus("t.totalPurchaseExpense", "t.actionOut")    // + (f1 * f2)
+        .minus("t.marginalCostIn")
+        .minus("t.totalPurchaseExpense", "t.actionIn"));  // - (f1 * f2)
+```
+
+`AggExpr` metodları:
+
+| Metod | Mənası |
+|---|---|
+| `plus(field)` | `+ field` — zəncir mütləq `plus(...)` ilə başlamalıdır |
+| `plus(f1, f2)` | `+ (f1 * f2)` — iki sahənin hasilini əlavə edir |
+| `plus(f1, MathOp, f2)` | `+ (f1 OP f2)` — istənilən əməliyyat; `DIVIDE` → `NULLIF` sıfıra bölmə qorunması avtomatik |
+| `plus(ComputedField)` | `+ (ifadə)` — mürəkkəb termin (round, cast, iç-içə zəncir) |
+| `minus(field)` | `- field` |
+| `minus(f1, f2)` | `- (f1 * f2)` |
+| `minus(f1, MathOp, f2)` | `- (f1 OP f2)` — istənilən əməliyyat, bölmə daxil |
+| `minus(ComputedField)` | `- (ifadə)` |
+
+Bölmə nümunəsi:
+
+```java
+// SUM( totalPrice/qty - discount ) AS avgNet
+manager.addSumExpr("avgNet", e -> e
+        .plus("t.totalPrice", MathOp.DIVIDE, "t.qty")   // + (total_price / NULLIF(qty, 0))
+        .minus("t.discount"));
+```
+
+Digər formalar:
+
+```java
+// İstənilən aqreqat funksiyası ilə:
+manager.addAggExpr(Agg.AVG, "avgNet", e -> e.plus("t.income").minus("t.expense"));
+
+// Yuvarlama ilə:
+manager.addAggExpr(Agg.SUM, "totalPrice", 2, e -> e.plus("t.price", "t.qty"));
+
+// JooqQuery üzərində birbaşa:
+JooqQuery.from(CashFlow.class, "t")
+    .groupBy("t.actionType")
+    .sumExpr("netAmount", e -> e.plus("t.totalIn").minus("t.totalOut"))
+    .execute(dsl);
+```
+
+Mürəkkəb termin lazım olduqda `plus(ComputedField)` / `minus(ComputedField)` istifadə edin:
+
+```java
+manager.addSumExpr("net", e -> e
+        .plus(ComputedField.expr("t.price").multiply("t.qty").round(2))
+        .minus("t.discount"));
+```
+
+> **Qeyd:** `addSumExpr` daxildə `addAggFunctionOnComputed(Agg.SUM, ...)`-a çevrilir —
+> SQL nəticəsi flat `ComputedField` zənciri ilə eynidir. Aqreqat `COALESCE(SUM(...), 0)`
+> ilə bükülür (mövcud davranış).
+
+### 7.4 AggregateBuilder — fluent API
+
+`AggregateBuilder` obyektləri `JooqQuery` üzərində DEYİL, `SelectQueryBuilder.aggregate(...)`
+üzərindən bağlanır. `SelectQueryBuilder`-in terminal metodu `.execute(dsl)` yox, `.build(dsl)`-dır:
+
+```java
+SelectQueryBuilder.from(Order.class, "o")
     .select("o.customerId")
     .aggregate(
         AggregateBuilder.<Order>groupBy("o.customerId")
@@ -1298,7 +1426,7 @@ JooqQuery.from(Order.class, "o")
             .done()
             .count("o.id").as("cnt").done()
     )
-    .execute(dsl);
+    .build(dsl);
 // → HAVING ROUND(SUM(total_price),2) > 1000
 ```
 
@@ -1404,7 +1532,7 @@ Zəncir `done()` ilə `AggregateBuilder`-ə qayıdır.
 #### Sadə EXISTS
 
 ```java
-JooqQuery.from(CashFlow.class, "t")
+SelectQueryBuilder.from(CashFlow.class, "t")
     .select("t.status")
     .aggregate(
         AggregateBuilder.<CashFlow>groupBy("t.status")
@@ -1414,7 +1542,7 @@ JooqQuery.from(CashFlow.class, "t")
                 .equal("isActive", true)
             .done()
     )
-    .execute(dsl);
+    .build(dsl);
 // → SELECT t.status, COUNT(t.id) AS cnt
 //   FROM cash_flow t
 //   GROUP BY t.status
@@ -2030,6 +2158,8 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `agg(Agg, field, alias, round, dir)` | Aqreqat funksiya |
 | `aggWithMath(...)` | Riyazi aqreqat SUM(f1*f2) |
 | `aggOnComputed(...)` | ComputedField aqreqat |
+| `sumExpr(alias, e -> e.plus(...).minus(...))` | Oxunaqlı SUM ifadə zənciri (AggExpr) — bax 7.3.3 |
+| `aggExpr(Agg, alias, e -> ...)` | AggExpr — istənilən aqreqat funksiyası ilə |
 | `aggregate(AggregateBuilder.groupBy(...).sumIf(...).done())` | Şərtli aqreqat |
 | `havingFilter(field, Map)` | HAVING filter |
 | `havingFilter(field, Op, value)` | HAVING birbaşa filter |
@@ -2082,6 +2212,11 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `addComputedColumn(field).subtract().of(field)...done().as(alias)` | Mötərizəli qrup ifadəsi |
 | `addComputedColumn(field).multiplyIf(cond,eq,t,e).as(alias)` | `field * CASE WHEN ...` |
 | `addComputedColumn(field).addIf(cond,eq,t,e).as(alias)` | `field + CASE WHEN ...` |
+| `addAggFunction(Agg, field).add/subtract/multiply/divide(field).as(alias)` | Fluent aqreqat riyazi zənciri — `SUM(f1 op f2 ...)` |
+| `addAggFunctionWithMath(Agg, field, MathOp, field, alias)` | `SUM(f1 op f2)` — birbaşa 2 sahə |
+| `addAggFunctionOnComputed(Agg, ComputedField, alias)` | Çox sahəli/iç-içə ifadə üzərində aqreqat — `SUM(exprA - exprB)` daxil |
+| `addSumExpr(alias, e -> e.plus(...).minus(...))` | Oxunaqlı SUM ifadə zənciri (AggExpr) — bax 7.3.3 |
+| `addAggExpr(Agg, alias, [round,] e -> ...)` | AggExpr — istənilən aqreqat funksiyası, istəyə bağlı yuvarlama |
 | `addLeftJoin(Class, alias).on(...).done()` | Builder LEFT JOIN |
 | `addInnerJoin(Class, alias).onFrom(...).done()` | Builder INNER JOIN |
 | `.onFrom(fromAlias, fromField, Op, toField)` | JOIN ON ilə Op operatoru |

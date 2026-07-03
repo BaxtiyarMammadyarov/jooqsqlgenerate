@@ -31,7 +31,11 @@ public final class FilterStrategies {
 
     static {
         // ─── Bərabərlik ──────────────────────────────────────────────────
+        // EQUAl (köhnə, typo) və EQUAL (yeni) — eyni davranış
         register(Op.EQUAl,
+                (field, val) -> field.eq(coerced(field, val)));
+
+        register(Op.EQUAL,
                 (field, val) -> field.eq(coerced(field, val)));
 
         register(Op.NOT_EQUAL,
@@ -133,81 +137,42 @@ public final class FilterStrategies {
                         .like("%" + likeReadyVal(field, val)));
 
         // ─── ROUND müqayisə əməliyyatları ─────────────────────────────────
-        // ROUND(field, scale) OP value — hesablanmayan sütunlar üçün
+        // ROUND(field, scale) OP value — hesablanmayan sütunlar üçün.
+        // Hər scale (0..4) üçün 6 op eyni şablonla qeydiyyatdan keçir —
+        // bax: registerRoundOps().
         //
         // Nümunə:
         //   FilterStrategies.get(Op.GREATER_THAN_ROUND_2).apply(priceField, "9.50")
         //   → WHERE ROUND(price, 2) > 9.50
+        registerRoundOps(0, Op.EQUAL_ROUND_0, Op.NOT_EQUAL_ROUND_0,
+                Op.GREATER_THAN_ROUND_0, Op.GREATER_THAN_OR_EQUAL_TO_ROUND_0,
+                Op.LESS_THAN_ROUND_0, Op.LESS_THAN_OR_EQUAL_TO_ROUND_0);
+        registerRoundOps(1, Op.EQUAL_ROUND_1, Op.NOT_EQUAL_ROUND_1,
+                Op.GREATER_THAN_ROUND_1, Op.GREATER_THAN_OR_EQUAL_TO_ROUND_1,
+                Op.LESS_THAN_ROUND_1, Op.LESS_THAN_OR_EQUAL_TO_ROUND_1);
+        registerRoundOps(2, Op.EQUAL_ROUND_2, Op.NOT_EQUAL_ROUND_2,
+                Op.GREATER_THAN_ROUND_2, Op.GREATER_THAN_OR_EQUAL_TO_ROUND_2,
+                Op.LESS_THAN_ROUND_2, Op.LESS_THAN_OR_EQUAL_TO_ROUND_2);
+        registerRoundOps(3, Op.EQUAL_ROUND_3, Op.NOT_EQUAL_ROUND_3,
+                Op.GREATER_THAN_ROUND_3, Op.GREATER_THAN_OR_EQUAL_TO_ROUND_3,
+                Op.LESS_THAN_ROUND_3, Op.LESS_THAN_OR_EQUAL_TO_ROUND_3);
+        registerRoundOps(4, Op.EQUAL_ROUND_4, Op.NOT_EQUAL_ROUND_4,
+                Op.GREATER_THAN_ROUND_4, Op.GREATER_THAN_OR_EQUAL_TO_ROUND_4,
+                Op.LESS_THAN_ROUND_4, Op.LESS_THAN_OR_EQUAL_TO_ROUND_4);
+    }
 
-        // Scale 0 — tam ədədə yuvarlama
-        register(Op.EQUAL_ROUND_0,
-                (field, val) -> rounded(field, 0).eq(coerced(field, val)));
-        register(Op.NOT_EQUAL_ROUND_0,
-                (field, val) -> rounded(field, 0).ne(coerced(field, val)));
-        register(Op.GREATER_THAN_ROUND_0,
-                (field, val) -> rounded(field, 0).greaterThan(coerced(field, val)));
-        register(Op.GREATER_THAN_OR_EQUAL_TO_ROUND_0,
-                (field, val) -> rounded(field, 0).greaterOrEqual(coerced(field, val)));
-        register(Op.LESS_THAN_ROUND_0,
-                (field, val) -> rounded(field, 0).lessThan(coerced(field, val)));
-        register(Op.LESS_THAN_OR_EQUAL_TO_ROUND_0,
-                (field, val) -> rounded(field, 0).lessOrEqual(coerced(field, val)));
-
-        // Scale 1
-        register(Op.EQUAL_ROUND_1,
-                (field, val) -> rounded(field, 1).eq(coerced(field, val)));
-        register(Op.NOT_EQUAL_ROUND_1,
-                (field, val) -> rounded(field, 1).ne(coerced(field, val)));
-        register(Op.GREATER_THAN_ROUND_1,
-                (field, val) -> rounded(field, 1).greaterThan(coerced(field, val)));
-        register(Op.GREATER_THAN_OR_EQUAL_TO_ROUND_1,
-                (field, val) -> rounded(field, 1).greaterOrEqual(coerced(field, val)));
-        register(Op.LESS_THAN_ROUND_1,
-                (field, val) -> rounded(field, 1).lessThan(coerced(field, val)));
-        register(Op.LESS_THAN_OR_EQUAL_TO_ROUND_1,
-                (field, val) -> rounded(field, 1).lessOrEqual(coerced(field, val)));
-
-        // Scale 2
-        register(Op.EQUAL_ROUND_2,
-                (field, val) -> rounded(field, 2).eq(coerced(field, val)));
-        register(Op.NOT_EQUAL_ROUND_2,
-                (field, val) -> rounded(field, 2).ne(coerced(field, val)));
-        register(Op.GREATER_THAN_ROUND_2,
-                (field, val) -> rounded(field, 2).greaterThan(coerced(field, val)));
-        register(Op.GREATER_THAN_OR_EQUAL_TO_ROUND_2,
-                (field, val) -> rounded(field, 2).greaterOrEqual(coerced(field, val)));
-        register(Op.LESS_THAN_ROUND_2,
-                (field, val) -> rounded(field, 2).lessThan(coerced(field, val)));
-        register(Op.LESS_THAN_OR_EQUAL_TO_ROUND_2,
-                (field, val) -> rounded(field, 2).lessOrEqual(coerced(field, val)));
-
-        // Scale 3
-        register(Op.EQUAL_ROUND_3,
-                (field, val) -> rounded(field, 3).eq(coerced(field, val)));
-        register(Op.NOT_EQUAL_ROUND_3,
-                (field, val) -> rounded(field, 3).ne(coerced(field, val)));
-        register(Op.GREATER_THAN_ROUND_3,
-                (field, val) -> rounded(field, 3).greaterThan(coerced(field, val)));
-        register(Op.GREATER_THAN_OR_EQUAL_TO_ROUND_3,
-                (field, val) -> rounded(field, 3).greaterOrEqual(coerced(field, val)));
-        register(Op.LESS_THAN_ROUND_3,
-                (field, val) -> rounded(field, 3).lessThan(coerced(field, val)));
-        register(Op.LESS_THAN_OR_EQUAL_TO_ROUND_3,
-                (field, val) -> rounded(field, 3).lessOrEqual(coerced(field, val)));
-
-        // Scale 4
-        register(Op.EQUAL_ROUND_4,
-                (field, val) -> rounded(field, 4).eq(coerced(field, val)));
-        register(Op.NOT_EQUAL_ROUND_4,
-                (field, val) -> rounded(field, 4).ne(coerced(field, val)));
-        register(Op.GREATER_THAN_ROUND_4,
-                (field, val) -> rounded(field, 4).greaterThan(coerced(field, val)));
-        register(Op.GREATER_THAN_OR_EQUAL_TO_ROUND_4,
-                (field, val) -> rounded(field, 4).greaterOrEqual(coerced(field, val)));
-        register(Op.LESS_THAN_ROUND_4,
-                (field, val) -> rounded(field, 4).lessThan(coerced(field, val)));
-        register(Op.LESS_THAN_OR_EQUAL_TO_ROUND_4,
-                (field, val) -> rounded(field, 4).lessOrEqual(coerced(field, val)));
+    /**
+     * Bir scale üçün 6 ROUND müqayisə strategiyasını qeydiyyatdan keçirir:
+     * {@code ROUND(field, scale) OP coerced(value)}.
+     */
+    private static void registerRoundOps(int scale, Op eq, Op ne,
+                                         Op gt, Op gte, Op lt, Op lte) {
+        register(eq,  (field, val) -> rounded(field, scale).eq(coerced(field, val)));
+        register(ne,  (field, val) -> rounded(field, scale).ne(coerced(field, val)));
+        register(gt,  (field, val) -> rounded(field, scale).greaterThan(coerced(field, val)));
+        register(gte, (field, val) -> rounded(field, scale).greaterOrEqual(coerced(field, val)));
+        register(lt,  (field, val) -> rounded(field, scale).lessThan(coerced(field, val)));
+        register(lte, (field, val) -> rounded(field, scale).lessOrEqual(coerced(field, val)));
     }
 
     private FilterStrategies() {}
@@ -250,7 +215,7 @@ public final class FilterStrategies {
      *   // Field VARCHAR, val = [1, 2, 3]         →  ["1", "2", "3"]
      * }</pre>
      */
-    @SuppressWarnings({"unchecked", "rawtypes"})
+    @SuppressWarnings("unchecked")
     static java.util.List<Field<?>> coercedList(Field<Object> field, Collection<?> col) {
         DataType<Object> dt;
         try {
@@ -258,15 +223,21 @@ public final class FilterStrategies {
         } catch (Exception e) {
             dt = null;
         }
-        final DataType<Object> finalDt = dt;
-        return col.stream().map(item -> {
-            if (finalDt == null) return DSL.val(item);
-            try {
-                return (Field<?>) DSL.val(finalDt.convert(item), finalDt);
-            } catch (Exception ex) {
-                return (Field<?>) DSL.val(item);
-            }
-        }).collect(Collectors.toList());
+        java.util.List<Field<?>> result = new java.util.ArrayList<>(col.size());
+        for (Object item : col) {
+            result.add(coercedVal(dt, item));
+        }
+        return result;
+    }
+
+    /** Tək dəyəri verilmiş DataType-a uyğunlaşdırır; mümkün olmadıqda olduğu kimi bind edir. */
+    private static Field<?> coercedVal(DataType<Object> dt, Object item) {
+        if (dt == null) return DSL.val(item);
+        try {
+            return DSL.val(dt.convert(item), dt);
+        } catch (Exception ex) {
+            return DSL.val(item);
+        }
     }
 
     /**

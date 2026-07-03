@@ -26,7 +26,7 @@ import java.util.*;
  * <pre>{@code
  *   jooq.setMainTable(User.class, "u")
  *       .addColumns("u.id", "u.name")
- *       .addFilters(
+ *       .addFilter(
  *           Filters.of()
  *               .equal("status", "ACTIVE")
  *               .like("name",   "Ali")
@@ -788,7 +788,7 @@ public final class Filters {
      * <pre>{@code
      *   Filters base = Filters.of().equal("tenantId", tenantId);
      *   Filters req  = Filters.of().like("name", name).equal("status", "ACTIVE");
-     *   jooq.addFilters(base.merge(req));
+     *   jooq.addFilter(base.merge(req));
      * }</pre>
      */
     public Filters merge(Filters other) {
@@ -803,10 +803,10 @@ public final class Filters {
     // ─── Build ───────────────────────────────────────────────────────────
 
     /**
-     * Daxili map-i qaytarır — {@link az.mbm.jooqsqlgenerate.JooqManager#addFilters}
+     * Daxili map-i qaytarır — {@link az.mbm.jooqsqlgenerate.JooqManager#addFilter(Filters)}
      * tərəfindən istifadə olunur.
      *
-     * <p>Boş filter üçün boş map qaytarılır — {@code addFilters} bunu nəzərə alır.
+     * <p>Boş filter üçün boş map qaytarılır — {@code addFilter} bunu nəzərə alır.
      */
     public Map<String, Map<String, String>> build() {
         return Collections.unmodifiableMap(map);

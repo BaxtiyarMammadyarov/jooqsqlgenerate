@@ -7,7 +7,7 @@ plugins {
 
 // ─── Layihə məlumatları ───────────────────────────────────────────────────────
 group   = "az.mbm"
-version = "1.1.46"
+version = "1.1.47"
 
 // ─── Java versiyası ───────────────────────────────────────────────────────────
 java {
@@ -39,6 +39,10 @@ dependencies {
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
+    // Smoke testlər üçün — compileOnly asılılıqlar test classpath-a avtomatik düşmür
+    testImplementation("org.jooq:jooq:$jooqVersion")
+    testImplementation("jakarta.persistence:jakarta.persistence-api:$jakartaVersion")
 }
 
 // ─── Credentials ─────────────────────────────────────────────────────────────
@@ -66,7 +70,7 @@ publishing {
 
             groupId    = "az.mbm"
             artifactId = "jooq-sql-generate"
-            version    = "1.1.46"
+            version    = "1.1.47"
 
             pom {
                 name        = "jooq-sql-generate"
