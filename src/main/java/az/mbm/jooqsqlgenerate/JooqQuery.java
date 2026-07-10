@@ -461,6 +461,28 @@ public final class JooqQuery<T> {
         return this;
     }
 
+    /** COALESCE sütunu — List&lt;String&gt; variantı. Bax: {@link #coalesce(String, Object, String...)}. */
+    public JooqQuery<T> coalesce(String alias, Object defaultValue, List<String> fields) {
+        if (fields != null && !fields.isEmpty())
+            coalesce(alias, defaultValue, fields.toArray(new String[0]));
+        return this;
+    }
+
+    /**
+     * COALESCE sütunu — {@link ConcatItem} kolleksiyası ilə (dinamik siyahı).
+     * Yalnız {@link ConcatItem#field(String)} elementləri dəstəklənir —
+     * sabit dəyər üçün {@code defaultValue} istifadə edin.
+     */
+    public JooqQuery<T> coalesce(String alias, Object defaultValue, Collection<ConcatItem> items) {
+        if (items != null && !items.isEmpty())
+            coalesce(alias, defaultValue, items.stream().map(it -> {
+                if (it instanceof ConcatItem.ColField cf) return cf.aliasAndField();
+                throw new IllegalStateException(
+                        "coalesce yalnız ConcatItem.field(...) qəbul edir — sabit dəyər üçün defaultValue istifadə edin");
+            }).toArray(String[]::new));
+        return this;
+    }
+
     /**
      * CONCAT sütunu — sadəcə sütunları birləşdirir (ən çox işlənən sadə hal).
      *
@@ -529,6 +551,25 @@ public final class JooqQuery<T> {
                     .map(ConcatItem::field)
                     .collect(java.util.stream.Collectors.toList());
             concatCols.add(new ConcatRow(alias, separator, items));
+        }
+        return this;
+    }
+
+    /**
+     * CONCAT sütunu — {@link ConcatItem} kolleksiyası ilə (dinamik siyahı).
+     *
+     * <pre>{@code
+     *   List<ConcatItem> ad = new ArrayList<>();
+     *   ad.add(ConcatItem.field("t.firstName"));
+     *   ad.add(ConcatItem.literal("-"));
+     *   ad.add(ConcatItem.field("t.lastName"));
+     *   .concat("fkDataId", "", ad)
+     * }</pre>
+     */
+    public JooqQuery<T> concat(String alias, String separator, Collection<ConcatItem> items) {
+        if (alias != null && items != null && !items.isEmpty()) {
+            registerAlias(alias);
+            concatCols.add(new ConcatRow(alias, separator, new ArrayList<>(items)));
         }
         return this;
     }

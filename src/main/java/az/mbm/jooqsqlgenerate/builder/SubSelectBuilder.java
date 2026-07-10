@@ -82,6 +82,9 @@ public class SubSelectBuilder {
     // ─── Nəticə alias ────────────────────────────────────────────────────
     private String alias = null;
 
+    // ─── LIMIT ───────────────────────────────────────────────────────────
+    private Integer limitRows = null;
+
     // ─── Konstruktor ─────────────────────────────────────────────────────
 
     private SubSelectBuilder(Class<?> entityClass, String tableAlias) {
@@ -211,6 +214,22 @@ public class SubSelectBuilder {
     public String getAlias() { return alias; }
 
     // ════════════════════════════════════════════════════════════════════
+    //  LIMIT
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * Subquery-yə {@code LIMIT n} əlavə edir. Default LIMIT YOXDUR —
+     * scalar subquery birdən çox sətir qaytarsa DB xəta atır.
+     * Unique olmayan korrelyasiyalarda sığorta üçün {@code .limit(1)} istifadə et.
+     *
+     * <pre>{@code .limit(1) }</pre>
+     */
+    public SubSelectBuilder limit(int rows) {
+        if (rows > 0) this.limitRows = rows;
+        return this;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
     //  jOOQ Field-ə çevirmə
     // ════════════════════════════════════════════════════════════════════
 
@@ -232,11 +251,13 @@ public class SubSelectBuilder {
         // ─── WHERE şərdi: korrelyasiya + əlavə filterlər ─────────────
         Condition whereCondition = buildWhereCondition(innerTable, outerTableMap);
 
-        // ─── Subquery: SELECT expr FROM table WHERE ... ───────────────
-        SelectConditionStep<?> subQuery = DSL
+        // ─── Subquery: SELECT expr FROM table WHERE ... [LIMIT n] ─────
+        SelectConditionStep<?> base = DSL
                 .select(selectExpr)
                 .from(innerTable.getTable())
                 .where(whereCondition != null ? whereCondition : DSL.trueCondition());
+
+        Select<?> subQuery = (limitRows != null) ? base.limit(limitRows) : base;
 
         return DSL.field((Name) subQuery).as(alias);
     }

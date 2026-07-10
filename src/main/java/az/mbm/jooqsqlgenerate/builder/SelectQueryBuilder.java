@@ -702,6 +702,15 @@ public class SelectQueryBuilder<T> {
     }
 
     /**
+     * CONCAT SELECT sütunu — {@link ConcatItem} kolleksiyası ilə (dinamik siyahı).
+     */
+    public SelectQueryBuilder<T> concat(String alias, String separator, Collection<ConcatItem> items) {
+        if (items != null && !items.isEmpty())
+            concatCols.add(new ConcatCol(alias, separator, new ArrayList<>(items)));
+        return this;
+    }
+
+    /**
      * COALESCE SELECT sütunu — ilk null olmayan sahəni qaytarır.
      *
      * <pre>{@code
@@ -716,6 +725,28 @@ public class SelectQueryBuilder<T> {
     public SelectQueryBuilder<T> coalesce(String alias, Object defaultValue, String... fields) {
         if (alias != null && fields.length > 0)
             coalesceCols.add(new CoalesceCol(alias, Arrays.asList(fields), defaultValue));
+        return this;
+    }
+
+    /** COALESCE SELECT sütunu — List&lt;String&gt; variantı. Bax: {@link #coalesce(String, Object, String...)}. */
+    public SelectQueryBuilder<T> coalesce(String alias, Object defaultValue, List<String> fields) {
+        if (fields != null && !fields.isEmpty())
+            coalesce(alias, defaultValue, fields.toArray(new String[0]));
+        return this;
+    }
+
+    /**
+     * COALESCE SELECT sütunu — {@link ConcatItem} kolleksiyası ilə (dinamik siyahı).
+     * Yalnız {@link ConcatItem#field(String)} elementləri dəstəklənir —
+     * sabit dəyər üçün {@code defaultValue} istifadə edin.
+     */
+    public SelectQueryBuilder<T> coalesce(String alias, Object defaultValue, Collection<ConcatItem> items) {
+        if (items != null && !items.isEmpty())
+            coalesce(alias, defaultValue, items.stream().map(it -> {
+                if (it instanceof ConcatItem.ColField cf) return cf.aliasAndField();
+                throw new IllegalStateException(
+                        "coalesce yalnız ConcatItem.field(...) qəbul edir — sabit dəyər üçün defaultValue istifadə edin");
+            }).toArray(String[]::new));
         return this;
     }
 

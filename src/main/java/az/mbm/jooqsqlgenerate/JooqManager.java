@@ -376,6 +376,22 @@ public class JooqManager {
         return this;
     }
 
+    /** COALESCE SELECT sütunu — List&lt;String&gt; variantı. Bax: {@link #addCoalesceColumn(String, Object, String...)}. */
+    public JooqManager addCoalesceColumn(String alias, Object defaultValue, List<String> fields) {
+        q().coalesce(alias, defaultValue, fields);
+        return this;
+    }
+
+    /**
+     * COALESCE SELECT sütunu — {@link ConcatItem} kolleksiyası ilə (dinamik siyahı).
+     * Yalnız {@link ConcatItem#field(String)} elementləri dəstəklənir —
+     * sabit dəyər üçün {@code defaultValue} istifadə edin.
+     */
+    public JooqManager addCoalesceColumn(String alias, Object defaultValue, Collection<ConcatItem> items) {
+        q().coalesce(alias, defaultValue, items);
+        return this;
+    }
+
     /**
      * CONCAT SELECT sütunu — sütun adları ilə (ən sadə hal, heç bir əlavə import lazım deyil).
      *
@@ -437,6 +453,23 @@ public class JooqManager {
         }
     }
 
+    /**
+     * CONCAT SELECT sütunu — {@link ConcatItem} kolleksiyası ilə (dinamik siyahı).
+     *
+     * <pre>{@code
+     *   List<ConcatItem> ad = new ArrayList<>();
+     *   ad.add(ConcatItem.field("t.firstName"));
+     *   ad.add(ConcatItem.literal("-"));
+     *   ad.add(ConcatItem.field("t.lastName"));
+     *
+     *   jooq.addConcatColumn("fkDataId", "", ad);
+     * }</pre>
+     */
+    public JooqManager addConcatColumn(String alias, String separator, Collection<ConcatItem> items) {
+        q().concat(alias, separator, items);
+        return this;
+    }
+
     /** CONCAT SELECT sütunu — field + literal qarışıq. */
     public JooqManager addConcatColumn(String alias, String separator, ConcatItem... items) {
         q().concat(alias, separator, items);
@@ -447,6 +480,23 @@ public class JooqManager {
     public JooqManager addSubQueryColumn(SubSelectBuilder sub) {
         q().subSelect(sub);
         return this;
+    }
+
+    /**
+     * SELECT-də scalar subquery — inline fluent builder.
+     * {@code SubSelectBuilder} import etmək lazım deyil; {@code addExists(...)} kimi işləyir.
+     *
+     * <pre>{@code
+     *   .addSubQueryColumn(Product.class, "p")
+     *       .select("p.name")
+     *       .correlateOn("p.id", "o.productId")
+     *       .filter("active", Op.EQUAl, true)
+     *       .as("productName")
+     *   .done()
+     * }</pre>
+     */
+    public JooqSubSelectBuilder addSubQueryColumn(Class<?> entity, String alias) {
+        return new JooqSubSelectBuilder(this, entity, alias);
     }
 
     /** SELECT-ə birbaşa jOOQ {@link Field}. */
