@@ -284,6 +284,20 @@ JooqQuery.from(User.class, "u")
 // → SELECT COALESCE(u."first_name", u."last_name", 'Naməlum') AS "displayName"
 ```
 
+**v1.1.50-dən — dinamik siyahı variantları** (JooqManager, JooqQuery və SelectQueryBuilder-də):
+
+```java
+// List<String> ilə
+manager.addCoalesceColumn("displayName", "Naməlum", List.of("u.nickname", "u.firstName"));
+
+// Collection<ConcatItem> ilə — yalnız ConcatItem.field(...) elementləri;
+// sabit dəyər üçün defaultValue istifadə edin (literal dəstəklənmir)
+List<ConcatItem> cols = new ArrayList<>();
+cols.add(ConcatItem.field("u.nickname"));
+cols.add(ConcatItem.field("u.firstName"));
+manager.addCoalesceColumn("displayName", "Naməlum", cols);
+```
+
 ### 2.8 selectRound — yuvarlama sütunu
 
 `selectRound` ilə həmin alias-a `filter()` tətbiq edildikdə avtomatik `WHERE ROUND(field, scale)` yaranır:
@@ -339,6 +353,22 @@ manager.addConcatColumn("userCode", "-", literal("USR"), field("u.id"))
 manager.addConcatColumn("label", " ", literal("Ad:"), field("u.firstName"), field("u.lastName"))
 // → 'Ad:' || ' ' || COALESCE(first_name,'') || ' ' || COALESCE(last_name,'')
 ```
+
+**v1.1.50-dən — `Collection<ConcatItem>` ilə dinamik siyahı:**
+
+```java
+List<ConcatItem> ad = new ArrayList<>();
+ad.add(ConcatItem.field("t.firstName"));
+ad.add(ConcatItem.literal("-"));          // sabit dəyər
+ad.add(ConcatItem.field("t.lastName"));
+
+manager.addConcatColumn("fkDataId", "", ad);
+// → first_name || '-' || last_name AS fkDataId
+```
+
+> **Qeyd:** parametr tipi `List` yox, `Collection`-dur — mövcud
+> `addConcatColumn(alias, sep, List<String>)` ilə type-erasure toqquşmasının qarşısını alır.
+> Çağırış tərəfdə `List<ConcatItem>` olduğu kimi ötürülür.
 
 **`ConcatItem.ifExpr` — CONCAT daxilində şərtli dəyər:**
 
@@ -616,18 +646,28 @@ JooqQuery.from(WarehouseFlow.class, "t")
 .andOnNotEqual("p.status", "D")   // AND p.status != 'D'
 ```
 
-**`andOn` shortcut metodları:**
+**`andOn` shortcut metodları** (v1.1.50-dən tam `andOn*` ailəsi həm `JooqQuery` join builder-ində, həm `JooqManager.addLeftJoin/addInnerJoin` builder-ində mövcuddur; qısa adlar da işləyir):
 
-| Metod | SQL |
-|---|---|
-| `andOnEqual(field, value)` | `AND field = value` |
-| `andOnNotEqual(field, value)` | `AND field != value` |
-| `equal(field, value)` | `AND field = value` (eyni) |
-| `notEqual(field, value)` | `AND field != value` (eyni) |
-| `greaterThan(field, value)` | `AND field > value` |
-| `lessThan(field, value)` | `AND field < value` |
-| `isNull(field)` | `AND field IS NULL` |
-| `isNotNull(field)` | `AND field IS NOT NULL` |
+| Metod | Qısa ad | SQL |
+|---|---|---|
+| `andOnEqual(field, value)` | `equal` | `AND field = value` |
+| `andOnNotEqual(field, value)` | `notEqual` | `AND field != value` |
+| `andOnGreaterThan(field, value)` | `greaterThan` | `AND field > value` |
+| `andOnGreaterThanOrEqual(field, value)` | `greaterThanOrEqual` | `AND field >= value` |
+| `andOnLessThan(field, value)` | `lessThan` | `AND field < value` |
+| `andOnLessThanOrEqual(field, value)` | `lessThanOrEqual` | `AND field <= value` |
+| `andOnIsNull(field)` | `isNull` | `AND field IS NULL` |
+| `andOnIsNotNull(field)` | `isNotNull` | `AND field IS NOT NULL` |
+
+```java
+manager
+    .addInnerJoin(EmployeeFlowEntity.class, "T2")
+        .on("t.fkTaskId", "fkTaskId")
+        .on("t.fkRelatedId", "fkRelatedId")
+        .andOnEqual("status", "A")        // AND T2.status = 'A'
+        .andOnNotEqual("type", "X")       // AND T2.type != 'X'
+    .done();
+```
 
 ### 3.3 onFrom — zəncir JOIN (ikinci cədvəl üçüncüyə)
 
@@ -723,12 +763,22 @@ JooqQuery.from(User.class, "u")
     .execute(dsl);
 ```
 
+> **WHERE / HAVING yönləndirmə qaydası (v1.1.50):** `t.field` kimi **cədvəl-alias prefiksli**
+> referans həmişə real sütundur → WHERE-ə gedir. **Prefixsiz** yazılış isə output alias-a
+> (aqreqat/computed/concat/rounded) uyğun gəlirsə müvafiq ifadəyə (aqreqat üçün HAVING-ə)
+> yönləndirilir:
+> ```java
+> .agg(Agg.SUM, "t.totalPrice", "totalPrice")           // SUM(...) AS totalPrice
+> .filter("t.totalPrice", Op.NOT_EQUAL, 0)              // → WHERE  t.total_price != 0
+> .globalFilter("totalPrice", Map.of("greaterThan","100")) // → HAVING SUM(total_price) > 100
+> ```
+
 ### 4.2 Bütün filter əməliyyatları (Op enum)
 
 | Op | SQL | Nümunə |
 |---|---|---|
 | `EQUAL` | `= value` | `Op.EQUAL, "ACTIVE"` |
-| `EQUAl` *(deprecated)* | `= value` — `EQUAL` ilə eyni | köhnə kod üçün saxlanılır |
+| `EQUAl` | `= value` — `EQUAL` ilə eyni | geri uyğunluq yazılışı |
 | `NOT_EQUAL` | `!= value` | `Op.NOT_EQUAL, "BANNED"` |
 | `LIKE` | String: `LOWER(REPLACE(...)) LIKE '%val%'` / Numeric: `CAST AS varchar LIKE '%val%'` | `Op.LIKE, "ali"` |
 | `START_WITH` | String: Türk-aware `LIKE 'val%'` / Numeric: `CAST AS varchar LIKE 'val%'` | `Op.START_WITH, "A"` |
@@ -1627,6 +1677,16 @@ JooqQuery.from(Order.class, "o")
     .execute(dsl);
 ```
 
+**v1.1.50 dəyişiklikləri:**
+
+- Eyni aqreqat alias-ına **bir neçə HAVING şərti** düşə bilər (məs. `greaterThan` + `lessThan`
+  aralığı, və ya `havingFilter` + `globalFilter` birgə) — hamısı AND ilə birləşir. Əvvəl
+  sonuncu şərt əvvəlkini üstələyirdi.
+- Entity mode-da heç bir aqreqata uyğun gəlməyən `havingFilter` şərtləri əvvəllər **səssiz
+  itirdi** — indi bare alias referansı ilə HAVING-ə düşür.
+- `AggregateBuilder.AggStep.having(op, value)` bir neçə dəfə çağırıla bilər — şərtlər AND
+  ilə birləşir.
+
 ---
 
 ## 9. CASE WHEN
@@ -2186,7 +2246,11 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `addRawSelectField(Field<?>)` | Birbaşa jOOQ Field SELECT-ə |
 | `addComputedField(ComputedField)` | Hazır ComputedField obyekti ilə |
 | `addCoalesceColumn(alias, default, fields...)` | COALESCE sütunu |
+| `addCoalesceColumn(alias, default, List<String>)` | COALESCE — dinamik siyahı |
+| `addCoalesceColumn(alias, default, Collection<ConcatItem>)` | COALESCE — `ConcatItem.field(...)` siyahısı |
 | `addConcatColumn(alias, sep, fields...)` | CONCAT sütunu |
+| `addConcatColumn(alias, sep, List<String>)` | CONCAT — dinamik siyahı |
+| `addConcatColumn(alias, sep, Collection<ConcatItem>)` | CONCAT — field + literal qarışıq dinamik siyahı |
 | `addSubQueryColumn(SubSelectBuilder)` | Scalar subquery sütunu |
 | `setDistinct()` | SELECT DISTINCT |
 | `addFilter(field, Op, value)` | WHERE filter (Op ilə) |
@@ -2220,6 +2284,8 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `addLeftJoin(Class, alias).on(...).done()` | Builder LEFT JOIN |
 | `addInnerJoin(Class, alias).onFrom(...).done()` | Builder INNER JOIN |
 | `.onFrom(fromAlias, fromField, Op, toField)` | JOIN ON ilə Op operatoru |
+| `.andOn(field, Op, value)` | JOIN ON-a əlavə dəyər şərti |
+| `.andOnEqual / .andOnNotEqual / .andOnGreaterThan / ...` | `andOn` alias-ları (`equal`/`notEqual`/... ilə eyni) |
 | `addOrOperation(alias, tableAlias, field, Map).add(...).done()` | OR qrupu filterlər |
 | `orGroup(alias).or(...).andBranch(...).add(...).end().done()` | Mürəkkəb OR/AND qruplaması |
 | `addSelectAll()` | Əsas entity-nin bütün sütunları (camelCase alias, JOIN sütunları daxil deyil) |
