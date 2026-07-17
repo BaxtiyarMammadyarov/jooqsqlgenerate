@@ -1618,14 +1618,16 @@ public class SelectQueryBuilder<T> {
                     ? gf.aliasAndField().substring(dot + 1)
                     : gf.aliasAndField();
 
-            // ComputedField alias uyğunluğunu yoxla
-            ComputedField matchedCf = computedChain.stream()
+            // ComputedField alias uyğunluğunu yoxla.
+            // "t.grandTotal" kimi prefiksli referans REAL sütuna aiddir —
+            // output alias uyğunluğu yalnız prefixsiz yazılışda yoxlanılır.
+            ComputedField matchedCf = (dot > 0) ? null : computedChain.stream()
                     .filter(cf -> plainName.equals(cf.getAlias()))
                     .findFirst()
                     .orElse(null);
 
-            // CONCAT alias uyğunluğunu yoxla (computed deyilsə)
-            ConcatCol matchedCc = matchedCf != null ? null : concatCols.stream()
+            // CONCAT alias uyğunluğunu yoxla (computed deyilsə, prefixsizsə)
+            ConcatCol matchedCc = (dot > 0 || matchedCf != null) ? null : concatCols.stream()
                     .filter(cc -> plainName.equals(cc.alias()))
                     .findFirst()
                     .orElse(null);

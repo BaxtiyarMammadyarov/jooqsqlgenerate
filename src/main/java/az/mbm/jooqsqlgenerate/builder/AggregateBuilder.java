@@ -51,6 +51,12 @@ public class AggregateBuilder<T> {
     public record PostAggOp(MathOp op, String field, Number nullAs) {}
 
     /**
+     * Bir HAVING şərti. Eyni aqreqat alias-ına bir neçə şərt düşə bilər
+     * (məs. aralıq filtri: greaterThan + lessThan) — hamısı AND ilə birləşir.
+     */
+    public record HavingRow(Op op, Object value) {}
+
+    /**
      * Bir aqreqat sahəsinin tam konfiqurasiyası.
      *
      * <p>{@code computedExpr} null deyilsə — o istifadə olunur,
@@ -64,8 +70,7 @@ public class AggregateBuilder<T> {
             String           mathField,
             String           alias,
             Integer          roundScale,
-            Op havingOp,
-            Object           havingValue,
+            List<HavingRow>  havings,
             String           orderDirection,
             ComputedField    computedExpr,     // null → sadə sahə; non-null → çox sahəli ifadə
             IfExpr           ifExpr,           // null → sadə/computed; non-null → CASE WHEN ifadəsi (tam operand)
@@ -398,10 +403,12 @@ public class AggregateBuilder<T> {
                                         Map<String, EntityTable<?>> tableMap) {
         Condition having = null;
         for (AggField agg : aggFields) {
-            if (agg.havingOp() == null) continue;
+            if (agg.havings() == null || agg.havings().isEmpty()) continue;
             Field<Object> f = (Field<Object>) buildAggExpr(agg, table, tableMap);
-            Condition c = FilterStrategies.get(agg.havingOp()).apply(f, agg.havingValue());
-            having = (having == null) ? c : having.and(c);
+            for (HavingRow hr : agg.havings()) {
+                Condition c = FilterStrategies.get(hr.op()).apply(f, hr.value());
+                having = (having == null) ? c : having.and(c);
+            }
         }
         return having;
     }
@@ -427,8 +434,7 @@ public class AggregateBuilder<T> {
         // Ümumi
         private       String              alias     = null;
         private       Integer             round     = null;
-        private       Op    havingOp  = null;
-        private       Object              havingVal = null;
+        private final List<HavingRow>     havings   = new ArrayList<>();
         private       String              orderDir  = null;
         private final List<PostAggOp>     postOps   = new ArrayList<>();
 
@@ -557,9 +563,9 @@ public class AggregateBuilder<T> {
 
         // ─── HAVING ─────────────────────────────────────────────────────
 
+        /** Bir neçə dəfə çağırıla bilər — şərtlər AND ilə birləşir (məs. aralıq filtri). */
         public AggStep<T> having(Op op, Object value) {
-            this.havingOp  = op;
-            this.havingVal = value;
+            this.havings.add(new HavingRow(op, value));
             return this;
         }
 
@@ -616,7 +622,7 @@ public class AggregateBuilder<T> {
             parent.aggFields.add(new AggField(
                     function, tableAlias, fieldName,
                     mathOp, mathField, alias, round,
-                    havingOp, havingVal, orderDir,
+                    List.copyOf(havings), orderDir,
                     computedExpr, ifExpr, mathIfExpr,
                     List.copyOf(postOps)));
         }

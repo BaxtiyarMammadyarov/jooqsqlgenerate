@@ -2032,7 +2032,9 @@ public final class JooqQuery<T> {
         boolean hasGroupBy = !groupByFields.isEmpty() || !aggRows.isEmpty();
 
         List<FilterRow> whereFilters          = new ArrayList<>();
-        Map<String, FilterRow> havingMap      = new LinkedHashMap<>();
+        // Eyni aqreqat alias-ına bir neçə HAVING şərti düşə bilər (məs. filter + globalFilter,
+        // və ya greaterThan + lessThan aralığı) — üstələmə (overwrite) yox, hamısı AND ilə tətbiq olunur.
+        Map<String, List<FilterRow>> havingMap = new LinkedHashMap<>();
         List<FilterRow> computedWhereFilters  = new ArrayList<>();
         List<FilterRow> computedHavingFilters = new ArrayList<>();
         List<FilterRow> roundedWhereFilters   = new ArrayList<>();  // ROUND(field,scale) filterlər
@@ -2041,21 +2043,26 @@ public final class JooqQuery<T> {
         // → bunlar AggregateBuilder.step.having(op, val) vasitəsilə işlənir
         //   beləliklə HAVING SUM(field) > val kimi düzgün SQL yaranır
         for (FilterRow fr : havingFilterRows) {
-            havingMap.put(fr.field(), fr);
+            havingMap.computeIfAbsent(fr.field(), k -> new ArrayList<>()).add(fr);
         }
 
         for (FilterRow fr : filters) {
             // Alias prefix varsa ("t1.status") yalnız sahə adı ilə yoxla
             String fieldKey = fieldPart(fr.field());
-            if (roundedAliasMap.containsKey(fieldKey))
+            // "t.totalPrice" kimi cədvəl-alias prefiksli filter REAL sütuna aiddir —
+            // eyni adlı aqreqat alias olsa belə HAVING-ə YOX, WHERE-ə getməlidir.
+            // Aqreqat alias-ına filter yalnız prefixsiz ("totalPrice") yazılışla düşür.
+            boolean prefixed = fr.field().contains(".");
+            if (!prefixed && roundedAliasMap.containsKey(fieldKey))
                 // ROUND(field, scale) filter — ayrıca işlənir
                 roundedWhereFilters.add(new FilterRow(fieldKey, fr.op(), fr.value()));
-            else if (aggAliases.contains(fieldKey))
-                havingMap.put(fieldKey, new FilterRow(fieldKey, fr.op(), fr.value()));
-            else if (computedAliases.contains(fieldKey))
+            else if (!prefixed && aggAliases.contains(fieldKey))
+                havingMap.computeIfAbsent(fieldKey, k -> new ArrayList<>())
+                         .add(new FilterRow(fieldKey, fr.op(), fr.value()));
+            else if (!prefixed && computedAliases.contains(fieldKey))
                 (hasGroupBy ? computedHavingFilters : computedWhereFilters)
                         .add(new FilterRow(fieldKey, fr.op(), fr.value()));
-            else if (concatAliases.contains(fieldKey))
+            else if (!prefixed && concatAliases.contains(fieldKey))
                 computedWhereFilters.add(new FilterRow(fieldKey, fr.op(), fr.value()));
             else
                 whereFilters.add(fr); // alias ilə saxlanılır → aşağıda həll edilir
@@ -2085,12 +2092,15 @@ public final class JooqQuery<T> {
         //       lakin globalFilter(Map) yolu bunu keçirirdi — bu fix bunu düzəldir.
         for (FiltersEntry gf : globalFilters) {
             String fieldKey = fieldPart(gf.aliasAndField());
-            if (roundedAliasMap.containsKey(fieldKey)) {
+            // Prefiksli ("t.totalPrice") → real sütun, WHERE (yuxarıdakı filters loop-u ilə eyni qayda)
+            boolean prefixed = gf.aliasAndField().contains(".");
+            if (!prefixed && roundedAliasMap.containsKey(fieldKey)) {
                 // ROUND(field, scale) alias → aşağıdaki rounded-bloku WHERE ROUND(...) OP value kimi işləyəcək
                 roundedWhereFilters.add(new FilterRow(fieldKey, gf.op(), gf.value()));
-            } else if (aggAliases.contains(fieldKey)) {
+            } else if (!prefixed && aggAliases.contains(fieldKey)) {
                 // Aqreqat alias → HAVING-ə əlavə et (step.having() ilə bağlanacaq)
-                havingMap.put(fieldKey, new FilterRow(fieldKey, gf.op(), gf.value()));
+                havingMap.computeIfAbsent(fieldKey, k -> new ArrayList<>())
+                         .add(new FilterRow(fieldKey, gf.op(), gf.value()));
             } else {
                 builder.globalWhereFilter(gf.aliasAndField(), gf.op(), gf.value());
             }
@@ -2162,6 +2172,17 @@ public final class JooqQuery<T> {
                                           .then(cr.then()).otherwise(cr.els()).as(cr.alias()));
         for (CaseBuilder<?> cb : caseBuilders) builder.caseColumn((CaseBuilder) cb);
 
+        // Heç bir aqreqat alias-ına uyğun gəlməyən HAVING şərtləri əvvəllər səssiz
+        // itirdi — indi bare alias referansı ilə HAVING-ə düşür (generated mode-dakı
+        // buildHavingCondition fallback-ının ekvivalenti).
+        for (Map.Entry<String, List<FilterRow>> e : havingMap.entrySet()) {
+            if (aggAliases.contains(e.getKey())) continue; // aşağıda step.having() ilə işlənir
+            for (FilterRow hr : e.getValue()) {
+                Condition c = aliasCondition(hr);
+                if (c != null) builder.rawHaving(c);
+            }
+        }
+
         // GROUP BY + AGG
         if (!groupByFields.isEmpty() || !aggRows.isEmpty()) {
             AggregateBuilder aggBuilder = AggregateBuilder.groupBy(groupByFields.toArray(new String[0]));
@@ -2187,9 +2208,8 @@ public final class JooqQuery<T> {
                 step.as(ar.alias());
                 if (ar.round() != null) step.round(ar.round());
                 if (ar.postOps() != null && !ar.postOps().isEmpty()) step.withPostOps(ar.postOps());
-                // HAVING — addHavingFilter(alias, Map) ilə verilir
-                if (havingMap.containsKey(ar.alias())) {
-                    FilterRow hr = havingMap.get(ar.alias());
+                // HAVING — addHavingFilter(alias, Map) ilə verilir; bir neçə şərt AND ilə birləşir
+                for (FilterRow hr : havingMap.getOrDefault(ar.alias(), List.of())) {
                     step.having(hr.op(), hr.value());
                 }
                 if ("DESC".equalsIgnoreCase(ar.orderDir())) step.orderDesc();
@@ -2610,9 +2630,12 @@ public final class JooqQuery<T> {
 
         for (FilterRow fr : deferredWhereFilterRows) {
             String key = fieldPart(fr.field());
+            // "t.totalPrice" kimi prefiksli referans REAL sütuna aiddir —
+            // heç bir output alias (rounded/agg/computed/concat) ilə qarışdırılmır.
+            boolean prefixed = fr.field().contains(".");
 
             // ROUND(field, scale) AS alias yoxlaması (rounded SELECT sütunu)
-            RoundedColumnRow rounded = roundedAliasMap.get(key);
+            RoundedColumnRow rounded = prefixed ? null : roundedAliasMap.get(key);
             if (rounded != null) {
                 Field<?> rf = resolveFieldByAlias(rounded.fieldRef());
                 if (rf != null) {
@@ -2624,7 +2647,8 @@ public final class JooqQuery<T> {
             }
 
             // Aqreqat / concat / coalesce / selectAs / computed alias-ı?
-            Field<?> expr = aggExprByAlias.get(key);
+            // Yalnız prefixsiz referanslar alias sayılır.
+            Field<?> expr = prefixed ? null : aggExprByAlias.get(key);
             if (expr != null) {
                 Condition c = FilterStrategies
                         .get(fr.op()).apply((Field<Object>) expr, fr.value());
@@ -2744,11 +2768,14 @@ public final class JooqQuery<T> {
     private void applyGlobalFilters(Map<String, Field<?>> aggExprByAlias) {
         for (FiltersEntry gf : globalFilters) {
             String fieldKey = fieldPart(gf.aliasAndField());
+            // "t.totalPrice" kimi prefiksli filter REAL sütuna aiddir —
+            // heç bir output alias (rounded/agg/computed/concat) ilə qarışdırılmır.
+            boolean prefixed = gf.aliasAndField().contains(".");
 
             // ROUND(field, scale) AS alias yoxlaması — direkt .filter() yolu ilə
             // eyni qaydada ROUND(...) ifadəsi WHERE-ə yazılır,
             // alias literal sütun kimi yanlış həll edilmir.
-            RoundedColumnRow rounded = roundedAliasMap.get(fieldKey);
+            RoundedColumnRow rounded = prefixed ? null : roundedAliasMap.get(fieldKey);
             if (rounded != null) {
                 Field<?> rf = resolveFieldByAlias(rounded.fieldRef());
                 if (rf != null) {
@@ -2760,7 +2787,7 @@ public final class JooqQuery<T> {
                 }
             }
 
-            Field<?> aggExpr = aggExprByAlias.get(fieldKey);
+            Field<?> aggExpr = prefixed ? null : aggExprByAlias.get(fieldKey);
             if (aggExpr != null) {
                 Condition c = FilterStrategies.get(gf.op()).apply((Field<Object>) aggExpr, gf.value());
                 rawHavings.add(c);
