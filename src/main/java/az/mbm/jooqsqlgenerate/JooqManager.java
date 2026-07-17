@@ -681,11 +681,21 @@ public class JooqManager {
             return this;
         }
 
+        /** Alias: {@code equal} ilə eynidir — {@code AND join.field = value} */
+        public JoinSetup andOnEqual(String field, Object value) {
+            return equal(field, value);
+        }
+
         /** {@code AND join.field != value} */
         @SuppressWarnings("unchecked")
         public JoinSetup notEqual(String field, Object value) {
             inner.notEqual(field, value);
             return this;
+        }
+
+        /** Alias: {@code notEqual} ilə eynidir — {@code AND join.field != value} */
+        public JoinSetup andOnNotEqual(String field, Object value) {
+            return notEqual(field, value);
         }
 
         /** {@code AND join.field > value} */
@@ -728,6 +738,38 @@ public class JooqManager {
         public JoinSetup isNotNull(String field) {
             inner.isNotNull(field);
             return this;
+        }
+
+        // ─── andOn* alias-ları (eyni davranış, oxunaqlı ad) ──────────────
+
+        /** Alias: {@code greaterThan} ilə eynidir — {@code AND join.field > value} */
+        public JoinSetup andOnGreaterThan(String field, Object value) {
+            return greaterThan(field, value);
+        }
+
+        /** Alias: {@code greaterThanOrEqual} ilə eynidir — {@code AND join.field >= value} */
+        public JoinSetup andOnGreaterThanOrEqual(String field, Object value) {
+            return greaterThanOrEqual(field, value);
+        }
+
+        /** Alias: {@code lessThan} ilə eynidir — {@code AND join.field < value} */
+        public JoinSetup andOnLessThan(String field, Object value) {
+            return lessThan(field, value);
+        }
+
+        /** Alias: {@code lessThanOrEqual} ilə eynidir — {@code AND join.field <= value} */
+        public JoinSetup andOnLessThanOrEqual(String field, Object value) {
+            return lessThanOrEqual(field, value);
+        }
+
+        /** Alias: {@code isNull} ilə eynidir — {@code AND join.field IS NULL} */
+        public JoinSetup andOnIsNull(String field) {
+            return isNull(field);
+        }
+
+        /** Alias: {@code isNotNull} ilə eynidir — {@code AND join.field IS NOT NULL} */
+        public JoinSetup andOnIsNotNull(String field) {
+            return isNotNull(field);
         }
 
         /** Builder-i tamamlayır, {@link JooqManager}-ə qayıdır. */
