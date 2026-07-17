@@ -237,12 +237,33 @@ JooqQuery.from(User.class, "u")
 manager.addConcatColumn("fullName", " ", "u.firstName", "u.lastName")
 // → COALESCE(first_name,'') || ' ' || COALESCE(last_name,'') AS fullName
 
+// With List<String>
+manager.addConcatColumn("fullName", " ", List.of("u.firstName", "u.lastName"))
+
 // With ConcatItem (literal + field mix)
 import static az.mbm.jooqsqlgenerate.builder.ConcatItem.*;
 
 manager.addConcatColumn("userCode", "-", literal("USR"), field("u.id"))
 // → 'USR' || '-' || COALESCE(id,'') AS userCode
 ```
+
+**Since v1.1.50 — dynamic list via `Collection<ConcatItem>`:**
+
+```java
+List<ConcatItem> items = new ArrayList<>();
+items.add(ConcatItem.field("t.firstName"));
+items.add(ConcatItem.literal("-"));
+items.add(ConcatItem.field("t.lastName"));
+
+manager.addConcatColumn("fkDataId", "", items);
+// → first_name || '-' || last_name AS fkDataId
+```
+
+> Note: the parameter type is `Collection` (not `List`) to avoid a type-erasure clash
+> with the existing `List<String>` overload. A `List<ConcatItem>` can be passed as-is.
+> COALESCE has matching variants too: `addCoalesceColumn(alias, default, List<String>)`
+> and `addCoalesceColumn(alias, default, Collection<ConcatItem>)` (only `field(...)` items;
+> use `defaultValue` for constants).
 
 **`ConcatItem.ifExpr` — conditional value inside CONCAT:**
 
@@ -514,6 +535,19 @@ JooqQuery.from(WarehouseFlow.class, "t")
     .execute(dsl);
 ```
 
+**Since v1.1.50 — `andOn*` alias family** (same behavior as the short names, available in
+both the `JooqQuery` join builder and the `JooqManager` `addLeftJoin`/`addInnerJoin` builder):
+`andOnEqual`, `andOnNotEqual`, `andOnGreaterThan`, `andOnGreaterThanOrEqual`,
+`andOnLessThan`, `andOnLessThanOrEqual`, `andOnIsNull`, `andOnIsNotNull`.
+
+```java
+manager.addInnerJoin(EmployeeFlowEntity.class, "T2")
+    .on("t.fkTaskId", "fkTaskId")
+    .andOnEqual("status", "A")        // = andOn("status", Op.EQUAl, "A")
+    .andOnNotEqual("type", "X")
+    .done();
+```
+
 ### 3.3 onFrom — chained JOIN (second table to third)
 
 ```java
@@ -577,6 +611,19 @@ JooqQuery.from(User.class, "u")
 ```
 
 Null/blank values are automatically skipped — no extra null checks needed.
+
+> **WHERE / HAVING routing rule (v1.1.50):** a table-alias-**prefixed** reference
+> (`t.totalPrice`) always means the real column → WHERE. An **unprefixed** reference
+> (`totalPrice`) matching an output alias (aggregate/computed/concat/rounded) is routed
+> to the corresponding expression — HAVING for aggregate aliases. This disambiguates the
+> case where a column and an aggregate alias share the same name:
+> ```java
+> .agg(Agg.SUM, "t.totalPrice", "totalPrice")
+> .filter("t.totalPrice", Op.NOT_EQUAL, 0)      // WHERE t.total_price != 0
+> .globalFilter("totalPrice", Map.of(...))       // HAVING SUM(total_price) ...
+> ```
+> Multiple HAVING conditions on the same aggregate alias are combined with AND
+> (previously the last one silently overwrote the others).
 
 ### 4.2 All filter operations (Op enum)
 
