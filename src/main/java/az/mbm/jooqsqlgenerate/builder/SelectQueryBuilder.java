@@ -1599,6 +1599,40 @@ public class SelectQueryBuilder<T> {
         return query;
     }
 
+    /**
+     * OR filter sahəsini həll edir (v1.1.51).
+     * Prefixsiz referans computed/concat alias-a uyğun gəlirsə ifadənin özü istifadə olunur
+     * (əvvəllər sütun kimi axtarılıb NPE/səhv SQL yaranırdı). Aqreqat alias-ı OR qrupunda
+     * (WHERE) mümkün deyil — aydın xəta atılır. Prefiksli referans həmişə real sütundur.
+     */
+    @SuppressWarnings("unchecked")
+    private Field<Object> resolveOrFilterField(String aliasAndField,
+                                               EntityTable<T> mainTable,
+                                               Map<String, EntityTable<?>> tableMap) {
+        int dot = aliasAndField.indexOf('.');
+        if (dot < 0) {
+            ComputedField cf = computedChain.stream()
+                    .filter(c -> aliasAndField.equals(c.getAlias()))
+                    .findFirst().orElse(null);
+            if (cf != null) return (Field<Object>) cf.buildExpr(mainTable, tableMap);
+
+            ConcatCol cc = concatCols.stream()
+                    .filter(c -> aliasAndField.equals(c.alias()))
+                    .findFirst().orElse(null);
+            if (cc != null) return (Field<Object>) buildConcatExpr(cc, mainTable, tableMap);
+
+            if (aggregator != null && aggregator.getAggFields().stream()
+                    .anyMatch(af -> aliasAndField.equals(af.alias())))
+                throw new IllegalStateException(
+                        "orFilter: \"" + aliasAndField + "\" aqreqat alias-ıdır — OR qrupu WHERE-də "
+                        + "işləyir, aqreqat şərti üçün havingFilter istifadə edin");
+
+            return (Field<Object>) mainTable.getField(aliasAndField);
+        }
+        EntityTable<?> t = tableMap.getOrDefault(aliasAndField.substring(0, dot), mainTable);
+        return (Field<Object>) t.getField(aliasAndField.substring(dot + 1));
+    }
+
     private Condition buildWhereCondition(EntityTable<T> mainTable,
                                           Map<String, EntityTable<?>> tableMap) {
         Condition cond = whereSpec == null ? null : whereSpec.toCondition(mainTable);
@@ -1682,18 +1716,7 @@ public class SelectQueryBuilder<T> {
                 for (List<OrFilterRow> andRows : andGroups.values()) {
                     Condition andCond = null;
                     for (OrFilterRow row : andRows) {
-                        int dot = row.aliasAndField().indexOf('.');
-                        EntityTable<?> t;
-                        String fieldName;
-                        if (dot > 0) {
-                            t         = tableMap.getOrDefault(row.aliasAndField().substring(0, dot), mainTable);
-                            fieldName = row.aliasAndField().substring(dot + 1);
-                        } else {
-                            t         = mainTable;
-                            fieldName = row.aliasAndField();
-                        }
-                        @SuppressWarnings("unchecked")
-                        Field<Object> f = (Field<Object>) t.getField(fieldName);
+                        Field<Object> f = resolveOrFilterField(row.aliasAndField(), mainTable, tableMap);
                         Condition c = FilterStrategies.get(row.op()).apply(f, row.value());
                         andCond = (andCond == null) ? c : andCond.and(c);
                     }
@@ -1768,7 +1791,10 @@ public class SelectQueryBuilder<T> {
                 : query.where(DSL.trueCondition());
 
         if (aggregator == null || aggregator.getGroupByFields().isEmpty()) {
-            return conditioned;
+            // v1.1.51: əvvəllər burada HAVING-lər (agg having, rawHaving, extraHaving,
+            // havingExists) səssiz itirdi — GROUP BY olmasa belə tətbiq olunur
+            // (jOOQ-da SelectConditionStep SelectHavingStep-i extend edir).
+            return applyHaving(conditioned, mainTable, tableMap);
         }
 
         // ── Explicit GROUP BY sahələri ───────────────────────────────────
@@ -1842,9 +1868,19 @@ public class SelectQueryBuilder<T> {
         }
 
         SelectHavingStep<Record> grouped = conditioned.groupBy(new ArrayList<>(groupFieldMap.values()));
+        return applyHaving(grouped, mainTable, tableMap);
+    }
 
-        // HAVING = aggregate HAVING + extraHaving + rawHavings
-        Condition aggHaving = AggregateBuilder.buildHaving(aggregator.getAggFields(), mainTable, tableMap);
+    /**
+     * HAVING = aggregate HAVING + extraHaving + rawHavings + havingExists.
+     * GROUP BY olub-olmamasından asılı olmayaraq tətbiq olunur (v1.1.51).
+     */
+    private SelectHavingStep<Record> applyHaving(SelectHavingStep<Record> grouped,
+                                                 EntityTable<T> mainTable,
+                                                 Map<String, EntityTable<?>> tableMap) {
+        Condition aggHaving = (aggregator != null)
+                ? AggregateBuilder.buildHaving(aggregator.getAggFields(), mainTable, tableMap)
+                : null;
         Condition allHaving = (aggHaving != null && extraHaving != null) ? aggHaving.and(extraHaving)
                             : (aggHaving  != null) ? aggHaving
                             : extraHaving;
@@ -1854,9 +1890,11 @@ public class SelectQueryBuilder<T> {
         }
 
         // EXISTS / NOT EXISTS HAVING şərtləri
-        for (AggregateBuilder.AggExistsClause ec : aggregator.getExistsClauses()) {
-            Condition ecCond = ec.toCondition(mainTable, tableMap);
-            allHaving = (allHaving == null) ? ecCond : allHaving.and(ecCond);
+        if (aggregator != null) {
+            for (AggregateBuilder.AggExistsClause ec : aggregator.getExistsClauses()) {
+                Condition ecCond = ec.toCondition(mainTable, tableMap);
+                allHaving = (allHaving == null) ? ecCond : allHaving.and(ecCond);
+            }
         }
 
         return (allHaving != null) ? (SelectHavingStep<Record>) grouped.having(allHaving) : grouped;
