@@ -912,6 +912,38 @@ public final class JooqQuery<T> {
             return andOn(field, Op.IS_NOT_EMPTY, "__null_check__");
         }
 
+        // ─── andOn* alias-ları (eyni davranış, oxunaqlı ad) ──────────────
+
+        /** Alias: {@code greaterThan} ilə eynidir */
+        public JoinBuilder andOnGreaterThan(String field, Object value) {
+            return greaterThan(field, value);
+        }
+
+        /** Alias: {@code greaterThanOrEqual} ilə eynidir */
+        public JoinBuilder andOnGreaterThanOrEqual(String field, Object value) {
+            return greaterThanOrEqual(field, value);
+        }
+
+        /** Alias: {@code lessThan} ilə eynidir */
+        public JoinBuilder andOnLessThan(String field, Object value) {
+            return lessThan(field, value);
+        }
+
+        /** Alias: {@code lessThanOrEqual} ilə eynidir */
+        public JoinBuilder andOnLessThanOrEqual(String field, Object value) {
+            return lessThanOrEqual(field, value);
+        }
+
+        /** Alias: {@code isNull} ilə eynidir */
+        public JoinBuilder andOnIsNull(String field) {
+            return isNull(field);
+        }
+
+        /** Alias: {@code isNotNull} ilə eynidir */
+        public JoinBuilder andOnIsNotNull(String field) {
+            return isNotNull(field);
+        }
+
         /** Builder-i tamamlayır, {@link JooqQuery}-yə qayıdır. */
         public JooqQuery<T> done() {
             parent.extJoins.add(new ExtJoinRow(type, entity, joinAlias,
@@ -1142,19 +1174,18 @@ public final class JooqQuery<T> {
      */
     public JooqQuery<T> globalFilter(Filters gf) {
         if (gf == null) return this;
-        // Filters.build() → operation → {field → value} strukturu
-        // birbaşa emal edirik, field-first globalFilter(Map)-ə getmir
-        for (Map.Entry<String, Map<String, String>> opEntry : gf.build().entrySet()) {
-            Op op = JooqManager.parseOperationPublic(opEntry.getKey());
-            if (op == null || opEntry.getValue() == null) continue;
-            for (Map.Entry<String, String> fe : opEntry.getValue().entrySet()) {
-                String field = fe.getKey();
-                String raw   = fe.getValue();
-                if (field == null || field.isBlank() || raw == null) continue;
-                Object value = (op == Op.IN || op == Op.NOT_IN)
-                        ? Arrays.asList(raw.split(",")) : raw;
-                globalFilters.add(new FiltersEntry(field, op, value));
-            }
+        // v1.1.51: Filters.entries() — tam siyahı, çağırış sırası ilə.
+        // Əvvəl build() map-i istifadə olunurdu: eyni (op, field) cütünə ikinci şərt
+        // (məs. iki .like("name", ...)) map-də üstələnib itirdi.
+        for (Filters.FilterEntry fe : gf.entries()) {
+            Op op = JooqManager.parseOperationPublic(fe.op());
+            if (op == null) continue;
+            String field = fe.field();
+            String raw   = fe.value();
+            if (field == null || field.isBlank() || raw == null) continue;
+            Object value = (op == Op.IN || op == Op.NOT_IN)
+                    ? Arrays.asList(raw.split(",")) : raw;
+            globalFilters.add(new FiltersEntry(field, op, value));
         }
         return this;
     }
@@ -2220,9 +2251,22 @@ public final class JooqQuery<T> {
         }
 
         // ORDER BY
+        // v1.1.51: prefixsiz referans output alias-a (agg/computed/concat/rounded) uyğun
+        // gəlirsə ORDER BY "alias" kimi yazılır — əvvəllər eyni adlı real sütun axtarılırdı
+        // (GROUP BY-lı sorğuda xəta və ya səhv sıralama). Prefiksli → həmişə real sütun.
         for (SortRow sr : sortRows) {
-            if ("DESC".equalsIgnoreCase(sr.dir())) builder.orderByDesc(sr.field());
-            else                                   builder.orderByAsc(sr.field());
+            String sf = sr.field();
+            boolean outputAlias = !sf.contains(".")
+                    && (aggAliases.contains(sf) || computedAliases.contains(sf)
+                        || concatAliases.contains(sf) || roundedAliasMap.containsKey(sf));
+            if (outputAlias) {
+                Field<?> af = DSL.field(DSL.name(sf));
+                builder.rawOrderBy("DESC".equalsIgnoreCase(sr.dir()) ? af.desc() : af.asc());
+            } else if ("DESC".equalsIgnoreCase(sr.dir())) {
+                builder.orderByDesc(sf);
+            } else {
+                builder.orderByAsc(sf);
+            }
         }
         for (SortField<?> sf : rawOrderFields) builder.rawOrderBy(sf);
 
@@ -2878,7 +2922,9 @@ public final class JooqQuery<T> {
             case GREATER_THAN_OR_EQUAL_TO -> f.greaterOrEqual(DSL.val(fr.value()));
             case LESS_THAN                -> f.lessThan(DSL.val(fr.value()));
             case LESS_THAN_OR_EQUAL_TO    -> f.lessOrEqual(DSL.val(fr.value()));
-            default -> f.eq(DSL.val(fr.value()));
+            // v1.1.51: qalan operatorlar (IN, NOT_IN, BETWEEN, LIKE, IS_EMPTY, ...) —
+            // əvvəllər default -> eq idi (səssiz səhv SQL); indi standart strategiya işlədilir
+            default -> FilterStrategies.get(fr.op()).apply(f, fr.value());
         };
     }
 
