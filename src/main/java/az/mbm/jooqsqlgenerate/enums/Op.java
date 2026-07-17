@@ -3,10 +3,7 @@ package az.mbm.jooqsqlgenerate.enums;
 
 public enum Op {
 
-    /**
-     * @deprecated Adında yazı səhvi var (EQUAl) — yeni kodda {@link #EQUAL} istifadə edin.
-     * Geri uyğunluq üçün saxlanılır və davranışı {@link #EQUAL} ilə eynidir.
-     */
+    /** {@code field = value} — {@link #EQUAL} ilə eyni davranış (geri uyğunluq üçün saxlanılan yazılış). */
     EQUAl("equal"),
 
     /** {@code field = value} — {@link #EQUAl}-ın düzgün adlanmış qarşılığı. */
