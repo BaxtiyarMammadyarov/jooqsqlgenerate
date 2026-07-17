@@ -39,6 +39,17 @@ public final class Filters {
     /** Daxili quruluş: operatorAdı → (sahəAdı → dəyər) */
     private final Map<String, Map<String, String>> map = new LinkedHashMap<>();
 
+    /**
+     * Bir filter şərti — (operator, sahə, dəyər).
+     * v1.1.51: eyni (op, field) cütünə bir neçə şərt {@link #entries()}-də itmir
+     * ({@link #build()} map strukturu isə geriyə uyğunluq üçün dəyişməz qalır —
+     * orada sonuncu dəyər görünür).
+     */
+    public record FilterEntry(String op, String field, String value) {}
+
+    /** Çağırış sırası ilə TAM şərt siyahısı — duplicates daxil. */
+    private final List<FilterEntry> entryList = new ArrayList<>();
+
     private Filters() {}
 
     /** Yeni, boş Filters builder-i yaradır. */
@@ -812,12 +823,24 @@ public final class Filters {
         return Collections.unmodifiableMap(map);
     }
 
+    /**
+     * Bütün şərtlərin tam siyahısı — çağırış sırası ilə, duplicates daxil (v1.1.51).
+     *
+     * <p>{@link #build()} map-əsaslıdır və eyni (operator, sahə) cütü üçün yalnız sonuncu
+     * dəyəri saxlaya bilir; bu metod isə hamısını qaytarır. {@code JooqQuery.globalFilter(Filters)}
+     * daxilən bundan istifadə edir — heç bir şərt itmir.
+     */
+    public List<FilterEntry> entries() {
+        return Collections.unmodifiableList(entryList);
+    }
+
     // ─── Private ─────────────────────────────────────────────────────────
 
     private Filters put(String op, String field, String value) {
         if (field == null || field.isBlank()) return this;
         if (value == null) return this;
         map.computeIfAbsent(op, k -> new LinkedHashMap<>()).put(field, value);
+        entryList.add(new FilterEntry(op, field, value));
         return this;
     }
 }
