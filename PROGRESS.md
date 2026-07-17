@@ -10,8 +10,8 @@
 ## Proyekt haqqında
 
 **Ad:** `jooq-sql-generate`
-**Versiya:** 1.1.47 (local test — refactoring + Op.EQUAL + AggExpr)
-**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.47`
+**Versiya:** 1.1.50 (filter routing düzəlişləri + andOn* alias-ları + Collection<ConcatItem> overload-lar)
+**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.50`
 **Repo:** https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate
 **Java:** 17
 **Asılılıqlar:** jOOQ 3.18.6, Spring Boot 3.2.5 (compileOnly), Jakarta Persistence 3.1.0
@@ -27,7 +27,9 @@
 
 ## Cari vəziyyət
 
-Versiya 1.1.11 Maven Central-a release edildi. `DOCUMENTATION.md` və `USAGE.md` tam yenidir.
+Versiya 1.1.50 hazırlanır (hələ release olunmayıb) — filter routing düzəlişləri, `andOn*`
+alias-ları, `Collection<ConcatItem>` overload-ları. Sənədlər (USAGE.md, USAGE_EN.md,
+DOCUMENTATION.md) v1.1.50-yə uyğun yenilənib. Son release: 1.1.47.
 
 **Əsas sinif strukturu:**
 ```
@@ -60,6 +62,54 @@ az.mbm.jooqsqlgenerate
 ---
 
 ## İş Jurnalı
+
+### 2026-07-17 — v1.1.51: Audit düzəlişləri (arxitektor/tester baxışı)
+
+Geriyə uyğun 5 düzəliş: **(1)** GROUP BY-sız HAVING itməsi — `buildGroupBy` erkən çıxışında
+bütün HAVING-lər atılırdı, yeni `applyHaving` helper hər halda tətbiq edir; **(2)** `aliasCondition`
+IN/BETWEEN/LIKE və s. üçün `default → eq` əvəzinə `FilterStrategies`; **(3)** OR qrupunda
+computed/concat alias ifadə kimi genişlənir (`resolveOrFilterField`), agg alias → aydın xəta;
+**(4)** `Filters.entries()` — duplicate (op, field) şərtlər itmir, `build()` dəyişməz;
+**(5)** entity mode `addOrderBy` output alias-ı tanıyır (`ORDER BY "alias"`).
+
+Açıq qalan (qəsdən): routing məntiqinin 5 nöqtədən tək helper-ə çıxarılması (refactor riski),
+SQL-render testlərinin yazılması. Hər ikisi ayrıca sessiya üçün TODO.
+
+---
+
+### 2026-07-17 — v1.1.50: Filter routing düzəlişləri, andOn* alias-ları, Collection<ConcatItem>
+
+**1. Bug fix — prefiksli filter HAVING-ə düşürdü.** Sütun adı ilə aqreqat alias-ı eyni olduqda
+(`totalPrice` sütunu + `SUM(...) AS totalPrice`), `addFilter("t.totalPrice", ...)` prefiks
+silinərək HAVING-ə gedirdi. Yeni qayda: prefiksli (`t.field`) → həmişə real sütun/WHERE;
+prefixsiz → output alias (agg → HAVING, computed/concat → ifadə). 4 yerdə tətbiq olundu:
+entity-mode filter/globalFilter loop-ları, generated-mode `resolveDeferredWhereFilters` /
+`applyGlobalFilters`, `SelectQueryBuilder.buildWhereCondition`.
+
+**2. Bug fix — havingMap overwrite.** Eyni agg alias-a ikinci HAVING şərti əvvəlkini silirdi
+(filter + globalFilter birgə; greaterThan+lessThan aralığı). İndi `Map<String, List<FilterRow>>`,
+şərtlər AND ilə birləşir. `AggregateBuilder.AggField`: `havingOp`/`havingValue` →
+`List<HavingRow> havings` (breaking — yalnız record-u birbaşa quranlara təsir edir).
+
+**3. Bug fix — entity mode-da aqreqata uyğun gəlməyən `havingFilter` səssiz itirdi.**
+İndi bare alias referansı ilə `builder.rawHaving`-ə düşür (generated-mode fallback ekvivalenti).
+
+**4. JOIN `andOn*` alias ailəsi** — `JooqManager.JoinSetup` + `JooqQuery.JoinBuilder`:
+`andOnEqual/NotEqual/GreaterThan/GreaterThanOrEqual/LessThan/LessThanOrEqual/IsNull/IsNotNull`.
+Qısa adlar (`equal`, `notEqual`, ...) qalır.
+
+**5. `Collection<ConcatItem>` overload-ları** — `addConcatColumn(alias, sep, Collection<ConcatItem>)`,
+`addCoalesceColumn(alias, default, List<String> | Collection<ConcatItem>)` — üç səviyyədə
+(JooqManager, JooqQuery, SelectQueryBuilder). `Collection` tipi seçilib — `List<String>` ilə
+type-erasure toqquşmasına görə. (Əvvəl `ConcatField` builder class-ı yaradılmışdı, sonra
+mövcud `ConcatItem` ilə əvəz olunub silindi.)
+
+**6. `Op.EQUAl` üzərindən `@deprecated` javadoc qeydi silindi.**
+
+**Sənədlər:** USAGE.md, USAGE_EN.md, DOCUMENTATION.md (v1.1.50 changelog + bölmələr) yeniləndi.
+**Qeyd:** Sandbox-da JDK17/dependency yoxdur — compile IDE-də yoxlanmalıdır.
+
+---
 
 ### 2026-07-03 — Refactoring + Op.EQUAL + AggExpr + smoke testlər
 
