@@ -7,6 +7,77 @@
 
 ## Dəyişikliklər — Versiya Tarixi
 
+### v1.1.51 — Audit düzəlişləri: HAVING itməsi, operator dəstəyi, OR alias, Filters duplicate, ORDER BY alias
+
+Hamısı geriyə uyğundur — API dəyişməyib, yalnız əvvəllər səssiz itən/səhv işləyən hallar düzəlib:
+
+**1. GROUP BY-sız HAVING itməsi.** `SelectQueryBuilder.buildGroupBy` GROUP BY sahəsi olmayanda
+erkən çıxırdı və bütün HAVING-lər (agg having, `rawHaving`, `extraHaving`, `havingExists`)
+səssiz atılırdı. İndi GROUP BY olmasa belə tətbiq olunur (təmiz aqreqat sorğusu:
+`SUM(x)` + `having > 100`).
+
+**2. `aliasCondition` operator dəstəyi.** Computed alias HAVING filterlərində `IN`, `NOT_IN`,
+`BETWEEN`, `LIKE`, `IS_EMPTY` və s. `default → eq`-ə düşürdü (səssiz səhv SQL) — indi
+`FilterStrategies` üzərindən düzgün işlənir.
+
+**3. OR qrupunda output alias.** `orFilter`/`orGroup`-da prefixsiz computed/concat alias artıq
+ifadə kimi genişləndirilir (əvvəl sütun kimi axtarılıb NPE/səhv SQL verirdi). Aqreqat alias-ı
+OR-da (WHERE) mümkün olmadığından aydın mesajla xəta atılır.
+
+**4. `Filters` duplicate itməsi.** Eyni (operator, sahə) cütünə ikinci şərt
+(məs. iki `.like("name", ...)`) daxili map-də üstələnib itirdi. Yeni `entries()` metodu tam
+siyahını saxlayır, `globalFilter(Filters)` ondan istifadə edir. `build()` strukturu geriyə
+uyğunluq üçün dəyişməz qalıb.
+
+**5. Entity mode ORDER BY output alias.** `addOrderBy("aggAlias", "DESC")` alias əvəzinə eyni
+adlı real sütunu axtarırdı. İndi prefixsiz referans output alias-a (agg/computed/concat/rounded)
+uyğun gəlirsə `ORDER BY "alias"` yazılır; prefiksli (`t.field`) həmişə real sütundur —
+filter routing qaydası ilə eyni konvensiya.
+
+---
+
+### v1.1.50 — JOIN `andOn*` alias ailəsi, filter routing düzəlişləri, `Collection<ConcatItem>` overload-lar
+
+**1. JOIN builder-lərə `andOn*` alias metodları.** `andOn(field, Op, value)` olduğu kimi qalır;
+üstünə daha oxunaqlı alias-lar əlavə olundu — həm `JooqManager.JoinSetup`
+(`addLeftJoin`/`addInnerJoin` fluent builder), həm `JooqQuery.JoinBuilder`-də:
+`andOnEqual`, `andOnNotEqual`, `andOnGreaterThan`, `andOnGreaterThanOrEqual`,
+`andOnLessThan`, `andOnLessThanOrEqual`, `andOnIsNull`, `andOnIsNotNull`.
+Mövcud qısa adlar (`equal`, `notEqual`, ...) da işləməyə davam edir.
+
+```java
+manager.addInnerJoin(EmployeeFlowEntity.class, "T2")
+    .on("t.fkTaskId", "fkTaskId")
+    .andOnEqual("status", "A")        // = andOn("status", Op.EQUAl, "A")
+    .andOnNotEqual("type", "X")
+    .done();
+```
+
+**2. Bug fix — prefiksli filter səhvən HAVING-ə gedirdi.** Cədvəldə sütun adı ilə aqreqat
+alias-ı eyni olduqda (məs. `totalPrice` sütunu + `SUM(...) AS totalPrice`),
+`addFilter("t.totalPrice", NOT_EQUAL, 0)` prefiks silinərək alias-a uyğunlaşdırılır və HAVING-ə
+düşürdü. Yeni qayda: **`t.field` kimi prefiksli referans həmişə real sütundur → WHERE**;
+output alias uyğunluğu (agg/computed/concat/rounded) yalnız prefixsiz yazılışda yoxlanılır.
+Hər iki rejimdə (entity + generated) tətbiq olunub.
+
+**3. Bug fix — eyni aqreqat alias-ına ikinci HAVING şərti əvvəlkini silirdi.** `havingMap`
+overwrite edirdi (məs. filter + globalFilter birgə, və ya `greaterThan`+`lessThan` aralığı —
+biri itirdi). İndi bütün şərtlər AND ilə birləşir; `AggregateBuilder.AggStep.having()` bir neçə
+dəfə çağırıla bilər (`AggField.havings` siyahısı — köhnə `havingOp`/`havingValue` sahələrini əvəz edir).
+
+**4. Bug fix — entity mode-da aqreqata uyğun gəlməyən `havingFilter` səssiz itirdi.** İndi
+generated mode-dakı kimi bare alias referansı ilə HAVING-ə düşür.
+
+**5. `Collection<ConcatItem>` overload-ları.** Dinamik siyahı ilə CONCAT/COALESCE:
+`addConcatColumn(alias, sep, Collection<ConcatItem>)` və
+`addCoalesceColumn(alias, default, List<String> | Collection<ConcatItem>)` —
+üç səviyyədə (JooqManager, JooqQuery, SelectQueryBuilder). Qeyd: parametr tipi
+`List` yox `Collection`-dur — mövcud `List<String>` overload-u ilə type-erasure toqquşmasına görə.
+
+**6. `Op.EQUAl` üzərindən `@deprecated` qeydi silindi** — geri uyğunluq yazılışı kimi qalır.
+
+---
+
 ### v1.1.31 — Bug fix: CONCAT/COALESCE/`selectAs` sütununa filter qoyanda `column "alias" does not exist`
 
 **Simptom:** generated/derived-table mode-da CONCAT (və ya COALESCE/`selectAs`) sütununa
@@ -629,6 +700,25 @@ jooq.addConcatColumn("label", "",
     ConcatItem.literal(" - "),
     ConcatItem.field("t.name"));
 // → CONCAT(t.code, ' - ', t.name) AS label
+
+// v1.1.50: Collection<ConcatItem> — dinamik siyahı
+List<ConcatItem> ad = new ArrayList<>();
+ad.add(ConcatItem.field("t.firstName"));
+ad.add(ConcatItem.literal("-"));
+ad.add(ConcatItem.field("t.lastName"));
+jooq.addConcatColumn("fkDataId", "", ad);
+// Qeyd: parametr Collection-dur (List deyil) — List<String> overload-u ilə
+// type-erasure toqquşmasının qarşısını alır.
+```
+
+**v1.1.50 — COALESCE dinamik siyahı variantları:**
+
+```java
+jooq.addCoalesceColumn("displayName", "N/A", List.of("t.fullName", "t.username"));
+
+// Collection<ConcatItem> — yalnız ConcatItem.field(...) elementləri
+// (literal dəstəklənmir — sabit dəyər üçün defaultValue istifadə edin)
+jooq.addCoalesceColumn("displayName", "N/A", concatItemList);
 ```
 
 **`addSubQueryColumn`** — SELECT içində scalar subquery sütunu
@@ -684,6 +774,20 @@ jooq.addInnerJoin(RequestEntity.class, "r")
 `JoinSetup`-da mövcud shorthand metodlar: `equal`, `notEqual`, `greaterThan`,
 `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`, `isNull`, `isNotNull`.
 
+**v1.1.50-dən — `andOn*` alias ailəsi** (eyni davranış, daha oxunaqlı ad; həm
+`JooqManager.JoinSetup`, həm `JooqQuery.JoinBuilder`-də): `andOnEqual`, `andOnNotEqual`,
+`andOnGreaterThan`, `andOnGreaterThanOrEqual`, `andOnLessThan`, `andOnLessThanOrEqual`,
+`andOnIsNull`, `andOnIsNotNull`.
+
+```java
+manager.addInnerJoin(EmployeeFlowEntity.class, "T2")
+    .on("t.fkTaskId", "fkTaskId")
+    .on("t.fkRelatedId", "fkRelatedId")
+    .andOnEqual("status", "A")        // = andOn("status", Op.EQUAl, "A")
+    .andOnNotEqual("type", "X")
+    .done();
+```
+
 **Generated mode JOIN (tip-təhlükəli):**
 
 ```java
@@ -734,6 +838,17 @@ jooq.setMainTable(Order.class, "o")
 ```
 
 `between` null dəstəyi: yalnız `from` → `>= from`; yalnız `to` → `<= to`; ikisi null → atlanır.
+
+> **WHERE / HAVING yönləndirmə qaydası (v1.1.50):** cədvəl-alias **prefiksli** referans
+> (`t.totalPrice`) həmişə real sütundur → WHERE. **Prefixsiz** referans (`totalPrice`) output
+> alias-a uyğun gəlirsə müvafiq ifadəyə yönləndirilir — aqreqat alias-ı üçün HAVING, computed/
+> concat alias-ı üçün ifadə genişləndirilməsi. Sütun adı ilə aqreqat alias-ı eyni olduqda bu
+> qayda ikisini ayırır:
+> ```java
+> .agg(Agg.SUM, "t.totalPrice", "totalPrice")
+> .addFilter("t.totalPrice", Op.NOT_EQUAL, 0)   // WHERE t.total_price != 0
+> .globalFilter("totalPrice", Map.of(...))       // HAVING SUM(total_price) ...
+> ```
 
 **`addFilter` overload-ları:**
 
@@ -2076,7 +2191,7 @@ JooqQuery.from(Product.class, "p")
 | Sorğu üzərindən sorğu | `SelectTable.asTable()` + `JooqQuery.from(SelectTable, alias)` |
 | Tip-təhlükəsiz sorğular | Generated mode — `USERS.FIRST_NAME`, compile zamanı yoxlanılır |
 | JOIN cədvəlinə filter yazmaq | `filter("t1.field", op, value)` — alias avtomatik həll edilir |
-| HAVING-də alias prefix | `filter("t.computedAlias", op, value)` — prefix stripped, HAVING-ə düşür |
+| Sütun adı ilə output alias toqquşması | v1.1.50 qaydası: prefiksli (`t.field`) → həmişə real sütun/WHERE; prefixsiz → alias (aqreqat üçün HAVING) |
 | SELECT-də ROUND + filter uyğunluğu | `selectRound(field, scale, alias)` — filter-də ROUND avtomatik tətbiq olunur |
 | WHERE-də ROUND, SELECT-siz | `Op.GREATER_THAN_ROUND_2` kimi ROUND Op-lar — 30 variant (skala 0–4) |
 | LIKE numeric field-də (bigint xətası) | `isStringField()` → `likeReadyField()` + `likeReadyVal()` — tip yoxlaması ilə CAST/REPLACE seçimi |
