@@ -2329,7 +2329,13 @@ public final class JooqQuery<T> {
         // 5. Təxirə salınmış WHERE filterləri — indi bütün alias-lar məlumdur
         resolveDeferredWhereFilters(aggExprByAlias);
 
-        if (selectList.isEmpty()) selectList.add(DSL.asterisk());
+        if (selectList.isEmpty()) {
+            // v1.1.51: SELECT boş + GROUP BY var → "SELECT *" əvəzinə GROUP BY sahələri
+            // SELECT-ə düşür (əvvəllər Postgres "column ... must appear in the GROUP BY
+            // clause" xətası verirdi).
+            if (!rawGroupByFields.isEmpty()) selectList.addAll(rawGroupByFields);
+            else                             selectList.add(DSL.asterisk());
+        }
 
         // 6. FROM + bütün JOIN növləri
         SelectJoinStep<Record> query = distinct

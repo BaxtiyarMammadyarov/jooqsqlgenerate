@@ -10,8 +10,8 @@
 ## Proyekt haqqında
 
 **Ad:** `jooq-sql-generate`
-**Versiya:** 1.1.50 (filter routing düzəlişləri + andOn* alias-ları + Collection<ConcatItem> overload-lar)
-**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.50`
+**Versiya:** 1.1.53 (SubSelectBuilder + INSERT ON DUPLICATE cast fix-ləri, GROUP BY→SELECT auto-add)
+**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.53`
 **Repo:** https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate
 **Java:** 17
 **Asılılıqlar:** jOOQ 3.18.6, Spring Boot 3.2.5 (compileOnly), Jakarta Persistence 3.1.0
@@ -27,9 +27,9 @@
 
 ## Cari vəziyyət
 
-Versiya 1.1.50 hazırlanır (hələ release olunmayıb) — filter routing düzəlişləri, `andOn*`
-alias-ları, `Collection<ConcatItem>` overload-ları. Sənədlər (USAGE.md, USAGE_EN.md,
-DOCUMENTATION.md) v1.1.50-yə uyğun yenilənib. Son release: 1.1.47.
+Versiya 1.1.53 hazırlanır — v1.1.50 (filter routing, andOn*, Collection<ConcatItem>),
+v1.1.51 (audit düzəlişləri), v1.1.52–53 (SubSelectBuilder + INSERT ON DUPLICATE cast
+fix-ləri, GROUP BY→SELECT auto-add) dəyişikliklərini əhatə edir. Sənədlər yenilənib.
 
 **Əsas sinif strukturu:**
 ```
@@ -62,6 +62,19 @@ az.mbm.jooqsqlgenerate
 ---
 
 ## İş Jurnalı
+
+### 2026-07-20 — v1.1.52: SubSelectBuilder ClassCastException + GROUP BY→SELECT auto-add
+
+**(1)** `SubSelectBuilder.toField`: `DSL.field((Name) subQuery)` səhv cast-ı hər scalar
+subquery istifadəsində `SelectImpl cannot be cast to Name` atırdı → `DSL.field(Select)` ilə
+əvəz olundu. Eyni sinif üzrə audit: `InsertQueryBuilder`-də `(UpdateSetStep) dupStep` cast-ı
+da tapıldı və düzəldildi — `ON DUPLICATE KEY UPDATE` istifadəsində CCE atırdı. **(2)** SELECT tam boş + GROUP BY olduqda `SELECT *` əvəzinə GROUP BY sütunları
+SELECT-ə avtomatik düşür (mövcud auto-add bloku `hasCustomFields`-ə groupBy əlavə etməklə
+aktivləşdirildi; generated mode-da `rawGroupByFields` selectList-ə əlavə olunur). Real hal:
+`residualClose` (baglamaqaliq) sorğusunda SELECT dolduran metod çağırılmadığından
+`select * ... group by` yaranır və Postgres "t.id must appear in GROUP BY" verirdi.
+
+---
 
 ### 2026-07-17 — v1.1.51: Audit düzəlişləri (arxitektor/tester baxışı)
 

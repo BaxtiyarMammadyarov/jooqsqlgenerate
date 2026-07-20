@@ -7,6 +7,27 @@
 
 ## Dəyişikliklər — Versiya Tarixi
 
+### v1.1.52 — SubSelectBuilder və INSERT ON DUPLICATE ClassCastException-ları, GROUP BY→SELECT auto-add
+
+**1. Bug fix — `SubSelectBuilder.toField` ClassCastException.** `DSL.field((Name) subQuery)`
+səhv cast-ı hər `addSubQueryColumn`/`subSelect(SubSelectBuilder)` istifadəsində
+`SelectImpl cannot be cast to Name` atırdı. Düzgün overload (`DSL.field(Select)`) ilə əvəz olundu.
+
+**2. Bug fix — `ON DUPLICATE KEY UPDATE` ClassCastException.** `InsertQueryBuilder`-də
+`InsertOnDuplicateSetStep` səhvən `UpdateSetStep`-ə cast olunurdu (jOOQ-da `InsertImpl` bu
+interfeysi implement etmir) — `onDuplicateUpdate(...)` istifadə edən hər INSERT runtime-da
+ClassCastException atırdı. Overload ambiguity insert-in öz raw tipi ilə həll olundu.
+
+**3. GROUP BY sahələri boş SELECT-ə avtomatik düşür.** Əvvəllər SELECT tam boş olduqda
+kitabxana GROUP BY-a baxmadan `SELECT *` yazırdı və Postgres "column ... must appear in the
+GROUP BY clause" xətası verirdi (GROUP BY sahələrinin SELECT-ə auto-add bloku yalnız SELECT-də
+ən azı bir sahə olanda işə düşürdü). İndi SELECT boş + GROUP BY varsa, GROUP BY sütunları
+SELECT-ə avtomatik əlavə olunur — hər iki rejimdə (entity + generated). GROUP BY da yoxdursa,
+köhnə `SELECT *` davranışı dəyişməz qalır. SELECT-də ən azı bir sahə olan sorğulara
+(selectAs/agg/columns) heç bir təsir yoxdur — onlarda auto-add onsuz da işləyirdi.
+
+---
+
 ### v1.1.51 — Audit düzəlişləri: HAVING itməsi, operator dəstəyi, OR alias, Filters duplicate, ORDER BY alias
 
 Hamısı geriyə uyğundur — API dəyişməyib, yalnız əvvəllər səssiz itən/səhv işləyən hallar düzəlib:

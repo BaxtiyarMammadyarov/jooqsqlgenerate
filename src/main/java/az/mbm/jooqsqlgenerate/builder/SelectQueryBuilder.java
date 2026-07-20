@@ -1388,7 +1388,12 @@ public class SelectQueryBuilder<T> {
                 || !computed.isEmpty() || !computedChain.isEmpty() || !caseCols.isEmpty()
                 || !concatCols.isEmpty() || !coalesceCols.isEmpty() || !subSelectCols.isEmpty()
                 || !rawSelectFields.isEmpty() || !castCols.isEmpty()
-                || (aggregator != null && !aggregator.getAggFields().isEmpty());
+                || (aggregator != null && !aggregator.getAggFields().isEmpty())
+                // v1.1.51: SELECT tam boş olsa belə GROUP BY sahələri custom sayılır —
+                // aşağıdakı auto-add bloku onları SELECT-ə əlavə edir. Əvvəllər bu halda
+                // "SELECT *" yazılırdı və Postgres "column ... must appear in the GROUP BY
+                // clause" xətası verirdi.
+                || (aggregator != null && !aggregator.getGroupByFields().isEmpty());
 
         if (!hasCustomFields) return List.of(DSL.asterisk());
 

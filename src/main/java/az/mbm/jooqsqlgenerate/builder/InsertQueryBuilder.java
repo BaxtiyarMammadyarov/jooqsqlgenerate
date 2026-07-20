@@ -245,9 +245,11 @@ public class InsertQueryBuilder<T> {
             InsertOnDuplicateSetMoreStep<?> moreStep = null;
             for (Map.Entry<String, Object> dup : onDuplicateUpdate.entrySet()) {
                 Field<Object> f = table.getField(dup.getKey());
-                UpdateSetStep rawStep = moreStep != null
-                        ? (UpdateSetStep) moreStep
-                        : (UpdateSetStep) dupStep;
+                // v1.1.52 bug fix: əvvəl (UpdateSetStep) cast var idi — InsertImpl
+                // UpdateSetStep-i implement etmir, runtime-da ClassCastException atırdı
+                // (SubSelectBuilder-dəki (Name) bug-ının eyni sinfi). Overload ambiguity
+                // insert-in öz raw tipi ilə həll olunur.
+                InsertOnDuplicateSetStep rawStep = (moreStep != null) ? moreStep : dupStep;
                 moreStep = (InsertOnDuplicateSetMoreStep<?>) rawStep.set(f, coerce(f, dup.getValue()));
             }
             return moreStep;

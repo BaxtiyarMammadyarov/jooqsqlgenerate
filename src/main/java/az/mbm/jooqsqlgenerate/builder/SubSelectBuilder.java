@@ -259,7 +259,12 @@ public class SubSelectBuilder {
 
         Select<?> subQuery = (limitRows != null) ? base.limit(limitRows) : base;
 
-        return DSL.field((Name) subQuery).as(alias);
+        // v1.1.52 bug fix: əvvəl (Name) cast var idi — DSL.field(Name) overload-u seçilirdi
+        // və runtime-da "SelectImpl cannot be cast to Name" ClassCastException atırdı.
+        // Düzgün overload: DSL.field(Select) — scalar subquery ifadəsi.
+        // Raw cast qəsdəndir: Select<? extends Record1<?>> wildcard capture ilə
+        // DSL.<T>field(Select<? extends Record1<T>>)-də T çıxarıla bilmir.
+        return DSL.field((Select<? extends Record1<Object>>) (Select) subQuery).as(alias);
     }
 
     // ─── SELECT ifadəsi ──────────────────────────────────────────────────
