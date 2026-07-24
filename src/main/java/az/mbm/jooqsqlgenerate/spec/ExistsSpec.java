@@ -3,6 +3,8 @@ package az.mbm.jooqsqlgenerate.spec;
 import org.jooq.Condition;
 import org.jooq.Field;
 import org.jooq.impl.DSL;
+import az.mbm.jooqsqlgenerate.builder.ConcatItem;
+import az.mbm.jooqsqlgenerate.builder.ConcatRenderer;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
 import az.mbm.jooqsqlgenerate.enums.Op;
 import az.mbm.jooqsqlgenerate.strategy.FilterStrategies;
@@ -215,6 +217,24 @@ public class ExistsSpec<T, E> implements Specification<T> {
         return this;
     }
 
+    // ─── Main sorğunun concat alias-ları (v1.1.53) ───────────────────────
+
+    /** Main sorğudakı bir CONCAT sütununun tərifi — alias-a görə ifadə genişlənməsi üçün. */
+    public record MainConcatExpr(String separator, List<ConcatItem> items) {}
+
+    /** alias → concat tərifi. Execute zamanı JooqQuery tərəfindən doldurulur. */
+    private final Map<String, MainConcatExpr> mainConcatExprs = new LinkedHashMap<>();
+
+    /**
+     * Main sorğunun CONCAT alias-larını ötürür (daxili istifadə — JooqQuery execute zamanı).
+     * Bununla {@code joinField("fkDataId", "t", "fkDataId")} kimi çağırışda main tərəf
+     * sütun yox, CONCAT ifadəsinin özü kimi render olunur.
+     */
+    public ExistsSpec<T, E> withMainConcatExprs(Map<String, MainConcatExpr> exprs) {
+        if (exprs != null) mainConcatExprs.putAll(exprs);
+        return this;
+    }
+
     // ─── Specification → Condition ────────────────────────────────────────
 
     @Override
@@ -224,11 +244,21 @@ public class ExistsSpec<T, E> implements Specification<T> {
         Condition condition = null;
 
         // JOIN şərtləri: existsTable.field = mainTable.field
+        // v1.1.53: mainField main sorğunun CONCAT alias-ına uyğun gəlirsə, sütun yox,
+        // CONCAT ifadəsinin özü ilə müqayisə olunur (SQL-də SELECT alias-ı WHERE-də
+        // istifadə oluna bilmədiyi üçün ifadə təkrarlanır — render ConcatRenderer-də
+        // SELECT ilə eyni məntiqlə gedir).
         for (JoinField jf : joinFields) {
             EntityTable<T> aliasTable = new EntityTable<>(mainTable.getEntityClass(), jf.mainTableAlias());
             Field<Object>  eField     = existsTable.getField(jf.existsField());
-            Field<Object>  mField     = aliasTable.getField(jf.mainField());
-            Condition      c          = eField.eq(mField);
+            MainConcatExpr mce        = mainConcatExprs.get(jf.mainField());
+            Field<Object>  mField     = (mce != null)
+                    ? (Field<Object>) (Field<?>) ConcatRenderer.render(
+                            mce.separator(), mce.items(), aliasTable, Map.of())
+                    : aliasTable.getField(jf.mainField());
+            Condition c = (mce != null)
+                    ? eField.cast(String.class).eq((Field<String>) (Field<?>) mField)
+                    : eField.eq(mField);
             condition = (condition == null) ? c : condition.and(c);
         }
 

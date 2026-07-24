@@ -2010,33 +2010,13 @@ public class SelectQueryBuilder<T> {
         return CaseFieldBuilder.build(cb, mainTable, tableMap);
     }
 
-    /** CONCAT ifadəsini (alias-sız) qurur — həm SELECT, həm də WHERE/HAVING üçün ortaq məntiq. */
+    /**
+     * CONCAT ifadəsini (alias-sız) qurur — həm SELECT, həm də WHERE/HAVING üçün ortaq məntiq.
+     * v1.1.53-dən render {@link ConcatRenderer}-də mərkəzləşib (EXISTS joinField də oradan istifadə edir).
+     */
     private Field<?> buildConcatExpr(ConcatCol cc, EntityTable<T> mainTable,
                                       Map<String, EntityTable<?>> tableMap) {
-        List<Field<?>> parts = new ArrayList<>();
-        for (int i = 0; i < cc.items().size(); i++) {
-            if (i > 0 && cc.separator() != null && !cc.separator().isEmpty()) {
-                parts.add(DSL.inline(cc.separator()));
-            }
-            ConcatItem item = cc.items().get(i);
-            if (item instanceof ConcatItem.Literal lit) {
-                parts.add(DSL.inline(lit.value()));
-            } else if (item instanceof ConcatItem.ColField cf) {
-                EntityTable<?> t = tableMap.getOrDefault(aliasPart(cf.aliasAndField()), mainTable);
-                Field<?> f = t.getField(fieldPart(cf.aliasAndField()));
-                // CAST(... AS VARCHAR) vacibdir: sütun Long/Integer/Date və s. tipindədirsə,
-                // COALESCE(numericField, '') Postgres-də "COALESCE types ... cannot be
-                // matched" xətası verir — əvvəlcə mətnə çevrilməlidir.
-                parts.add(DSL.coalesce(f.cast(String.class), DSL.inline("")));
-            } else if (item instanceof ConcatItem.IfItem ii) {
-                // CASE WHEN ifadəsi — COALESCE ilə null qorunması (eyni CAST səbəbi yuxarıda)
-                parts.add(DSL.coalesce(ii.expr().toField(mainTable, tableMap).cast(String.class), DSL.inline("")));
-            } else if (item instanceof ConcatItem.CoalesceItem ci) {
-                // COALESCE ifadəsi — özü artıq null-safe-dir
-                parts.add(ci.expr().toField(mainTable, tableMap));
-            }
-        }
-        return DSL.concat(parts.toArray(new Field[0]));
+        return ConcatRenderer.render(cc.separator(), cc.items(), mainTable, tableMap);
     }
 
     private Field<?> buildConcatField(ConcatCol cc, EntityTable<T> mainTable,

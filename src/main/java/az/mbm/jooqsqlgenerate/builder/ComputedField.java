@@ -103,6 +103,8 @@ public class ComputedField {
     private       Integer            roundScale    = null;
     /** Bütün zəncirə tətbiq olunan NULL default strategiyası */
     private       NullDefault        nullDefault   = NullDefault.NONE;
+    /** İlk sahə üçün per-field NULL default (withNullDefault-dan üstündür; yalnız ilk sahəyə). */
+    private       Number             firstNullAs   = null;
 
     /** Sadə sahə konstruktoru */
     private ComputedField(String tableAlias, String fieldName) {
@@ -150,6 +152,28 @@ public class ComputedField {
     public static ComputedField of(String tableAliasAndField) {
         String[] parts = split(tableAliasAndField);
         return new ComputedField(parts[0], parts[1]);
+    }
+
+    /**
+     * İlk sahəni per-field NULL default ilə təyin edir — ilk sahə LEFT JOIN-dən
+     * gələn nullable sütun olduqda istifadə edin.
+     *
+     * <pre>{@code ComputedField.of("d1.joinField", 0).subtract("d2.other").as("total") }</pre>
+     * {@code // → COALESCE(join_field,0) - ...}
+     */
+    public static ComputedField of(String tableAliasAndField, Number firstNullAs) {
+        ComputedField cf = of(tableAliasAndField);
+        cf.firstNullAs = firstNullAs;
+        return cf;
+    }
+
+    /**
+     * İlk sahəyə per-field NULL default təyin edir (fluent forma).
+     * {@code withNullDefault}-dan üstündür və yalnız ilk sahəyə tətbiq olunur.
+     */
+    public ComputedField firstNullAs(Number nullAs) {
+        this.firstNullAs = nullAs;
+        return this;
     }
 
     /**
@@ -460,6 +484,12 @@ public class ComputedField {
         return this;
     }
 
+    /** Qısa forma: {@code withNullDefault(NullDefault.ZERO)} — bütün sahələr null → 0. */
+    public ComputedField withNullZero() { return withNullDefault(NullDefault.ZERO); }
+
+    /** Qısa forma: {@code withNullDefault(NullDefault.ONE)} — bütün sahələr null → 1. */
+    public ComputedField withNullOne()  { return withNullDefault(NullDefault.ONE);  }
+
     // ─── Per-step NullAs — IF məntiqli dəqiq nəzarət ─────────────────────
 
     /**
@@ -722,8 +752,10 @@ public class ComputedField {
         } else {
             EntityTable<?> t0 = resolve(firstTableAlias, mainTable, tableMap);
             Field<?> rawFirst = t0.getField(firstFieldName);
-            // Global nullDefault varsa ilk sahəyə də tətbiq et
-            result = (Field<Object>) applyNullDefault(rawFirst, nullDefault);
+            // Per-field firstNullAs > global nullDefault > raw (ilk sahə də LEFT JOIN null ola bilər)
+            result = (firstNullAs != null)
+                    ? (Field<Object>) DSL.coalesce(rawFirst, DSL.val(firstNullAs))
+                    : (Field<Object>) applyNullDefault(rawFirst, nullDefault);
         }
 
         // Zəncir əməliyyatlar
@@ -823,7 +855,9 @@ public class ComputedField {
             Table<?> t0 = GeneratedFieldResolver.resolveTable(firstTableAlias, mainTable, tableMap);
             Field<?> rawFirst = GeneratedFieldResolver.resolveField(t0, firstFieldName);
             if (rawFirst == null) rawFirst = DSL.field(DSL.name(firstTableAlias, firstFieldName));
-            result = (Field<Object>) applyNullDefault(rawFirst, nullDefault);
+            result = (firstNullAs != null)
+                    ? (Field<Object>) DSL.coalesce(rawFirst, DSL.val(firstNullAs))
+                    : (Field<Object>) applyNullDefault(rawFirst, nullDefault);
         }
 
         for (Step s : steps) {

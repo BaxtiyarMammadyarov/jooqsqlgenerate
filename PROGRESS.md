@@ -10,8 +10,8 @@
 ## Proyekt haqqında
 
 **Ad:** `jooq-sql-generate`
-**Versiya:** 1.1.53 (SubSelectBuilder + INSERT ON DUPLICATE cast fix-ləri, GROUP BY→SELECT auto-add)
-**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.53`
+**Versiya:** 1.1.55 (EXISTS joinField CONCAT alias, firstNullAs, withNullZero/withNullOne)
+**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.55`
 **Repo:** https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate
 **Java:** 17
 **Asılılıqlar:** jOOQ 3.18.6, Spring Boot 3.2.5 (compileOnly), Jakarta Persistence 3.1.0
@@ -27,7 +27,7 @@
 
 ## Cari vəziyyət
 
-Versiya 1.1.53 hazırlanır — v1.1.50 (filter routing, andOn*, Collection<ConcatItem>),
+Versiya 1.1.55 hazırlanır — v1.1.50 (filter routing, andOn*, Collection<ConcatItem>),
 v1.1.51 (audit düzəlişləri), v1.1.52–53 (SubSelectBuilder + INSERT ON DUPLICATE cast
 fix-ləri, GROUP BY→SELECT auto-add) dəyişikliklərini əhatə edir. Sənədlər yenilənib.
 
@@ -62,6 +62,26 @@ az.mbm.jooqsqlgenerate
 ---
 
 ## İş Jurnalı
+
+### 2026-07-22 — v1.1.55: EXISTS joinField CONCAT alias + firstNullAs + withNullZero/withNullOne
+
+**A. firstNullAs** — computed/aggregate zəncirinin İLK sahəsi üçün per-field NULL default.
+Boşluq: per-step `*NullAs` yalnız sonrakı sahələri əhatə edirdi, ilk sahə (`of(...)` /
+`addAggFunction(fn,field)`) LEFT JOIN nullable sütunu olduqda və yalnız per-step nullAs
+işlədildikdə COALESCE olunmurdu → operand NULL → bütün ifadə NULL → aqreqatda sətir səssiz
+itirdi. Əlavə olundu: `ComputedField.of(field, nullAs)` + `.firstNullAs(n)`,
+`AggChain.firstNullAs`, `ComputedChain.firstNullAs`. Prioritet: firstNullAs > withNullDefault >
+raw. buildExpr + buildExprGenerated ikisində. Qeyd: `withNullDefault(ZERO)` onsuz da ilk sahəni
+əhatə edir — firstNullAs yalnız qarışıq/fərqli default hallar üçündür.
+
+**B. EXISTS joinField CONCAT alias** — reconciliation dedup: identiklik `fkDataId` (concat) +
+`fkTaskId` + subAccountNo + relatedSubAccountNo. NOT EXISTS concat alias-ı görmürdü, indi
+`joinField("fkDataId","t","fkDataId")` main tərəfdə CONCAT ifadəsi kimi genişlənir. Render
+`ConcatRenderer`-də mərkəzləşdi (SelectQueryBuilder.buildConcatExpr ora delegate edir). Exists
+sütunu CAST(...AS VARCHAR) ilə müqayisə. Ötürülmə: JooqQuery → `withMainConcatExprs(map)`.
+Məhdudiyyət: concat elementləri main table sahələri + literal (JOIN alias yox).
+
+---
 
 ### 2026-07-20 — v1.1.52: SubSelectBuilder ClassCastException + GROUP BY→SELECT auto-add
 

@@ -7,6 +7,64 @@
 
 ## Dəyişikliklər — Versiya Tarixi
 
+### v1.1.55 — EXISTS `joinField` CONCAT alias, ilk sahə `firstNullAs`, `withNullZero`/`withNullOne`
+
+**A. Computed/aggregate ilk sahə üçün `firstNullAs`.** `withNullDefault(ZERO)` onsuz da ilk
+sahəni əhatə edirdi, amma yalnız per-step `nullAs` işlədən və ilk sahəsi LEFT JOIN-dən gələn
+nullable sütun olan hallarda ilk sahə COALESCE olunmurdu → SQL-də bir operand NULL olanda
+bütün ifadə NULL olurdu (aqreqatda həmin sətir səssiz itirdi). İndi ilk sahəyə də per-field
+default vermək olar:
+
+```java
+// ComputedField:
+ComputedField.of("d1.joinField", 0).subtract("d2.other").as("total")
+
+// JooqManager computed zənciri:
+jooq.addComputedColumn("d1.joinField").firstNullAs(0).subtract("t.other").as("net")
+
+// JooqManager aggregate zənciri:
+jooq.addAggFunction(Agg.SUM, "d1.joinField").firstNullAs(0).subtract("t.other").as("total")
+// → SUM(COALESCE(d1.join_field,0) - t.other)
+```
+
+Qısa formalar da əlavə olundu (enum yazmadan): `withNullZero()` = `withNullDefault(NullDefault.ZERO)`,
+`withNullOne()` = `withNullDefault(NullDefault.ONE)` — `ComputedField`, `ComputedChain`, `AggChain`-də.
+
+Prioritet: `firstNullAs` (ilk sahə) > `withNullDefault` (bütün zəncir) > raw (DB davranışı).
+Ümumi qayda: **ifadədə iştirak edən istənilən sahə LEFT JOIN-dən gələ bilirsə, ya bütün
+zəncirə `withNullDefault(ZERO)`, ya da ilk sahəyə `firstNullAs(...)` + qalanlara `*NullAs(...)`
+verin** — əks halda o sətir hesablamadan səssiz düşür.
+
+**B. EXISTS `joinField`-də CONCAT alias dəstəyi.**
+
+**Yeni feature:** `addExists`/`addNotExists` builder-lərində `joinField`-in main tərəfi artıq
+main sorğunun **CONCAT alias-ını** tanıyır — ifadənin özü ilə müqayisə edilir (SQL-də SELECT
+alias-ı WHERE-də istifadə oluna bilmədiyi üçün ifadə eyni render məntiqi ilə təkrarlanır):
+
+```java
+// Main sorğuda:
+jooq.addConcatColumn("fkDataId", "_", concatItems);
+
+// Dedup — insert olunmuş sətirlər ikinci işə salmada gəlməsin:
+jooq.addNotExists(ReconciliationMainReportEntity.class)
+    .equal("status", "A")
+    .equal("accountKey", "DEBIT")
+    .equal("subAccountNo", subAccountNo)
+    .equal("relatedSubAccountNo", relatedSubAccountNo)
+    .joinField("fkTaskId", "t", "fkTaskId")
+    .joinField("fkDataId", "t", "fkDataId")   // ← CONCAT alias — ifadə kimi genişlənir
+    .done();
+// → NOT EXISTS (... WHERE r.fk_data_id = '531.01' || '_' || ... || t.fk_task_id || ...)
+```
+
+**Texniki:** render məntiqi yeni `ConcatRenderer` utility-sinə çıxarıldı — SELECT sütunu,
+WHERE/HAVING filteri və EXISTS joinField eyni ifadəni yaradır (saxlanılmış dəyərlə müqayisə
+üst-üstə düşür). Exists cədvəlinin sütunu `CAST(... AS VARCHAR)` ilə müqayisə olunur.
+Məhdudiyyət: CONCAT elementləri main cədvəlin sahələri və literal-lar olmalıdır
+(JOIN alias-lı sahələr exists kontekstində resolve olunmur).
+
+---
+
 ### v1.1.52 — SubSelectBuilder və INSERT ON DUPLICATE ClassCastException-ları, GROUP BY→SELECT auto-add
 
 **1. Bug fix — `SubSelectBuilder.toField` ClassCastException.** `DSL.field((Name) subQuery)`

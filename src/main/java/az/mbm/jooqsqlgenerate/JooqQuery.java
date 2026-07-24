@@ -2140,6 +2140,17 @@ public final class JooqQuery<T> {
         for (FieldFilterEntry ff : fieldFilterEntries) builder.fieldFilter(ff.leftAliasAndField(), ff.op(), ff.rightAliasAndField());
         for (Condition rc : rawConditions) builder.rawCondition(rc);
         for (OrFilterEntry e : orFilterEntries) builder.orFilter(e.orGroup(), e.andGroup(), e.aliasAndField(), e.op(), e.value());
+        // v1.1.53: main sorğunun CONCAT alias-ları exists spec-lərə ötürülür —
+        // joinField("fkDataId", "t", "fkDataId") kimi çağırışlarda main tərəf
+        // CONCAT ifadəsi kimi genişlənir.
+        if (!concatCols.isEmpty() && (!existsSpecs.isEmpty() || !havingExistsSpecs.isEmpty())) {
+            Map<String, ExistsSpec.MainConcatExpr> concatExprMap = new LinkedHashMap<>();
+            for (ConcatRow cc : concatCols)
+                concatExprMap.put(cc.alias(),
+                        new ExistsSpec.MainConcatExpr(cc.separator(), cc.items()));
+            for (ExistsSpec<?, ?> es : existsSpecs)       es.withMainConcatExprs(concatExprMap);
+            for (ExistsSpec<?, ?> es : havingExistsSpecs) es.withMainConcatExprs(concatExprMap);
+        }
         for (ExistsSpec<?, ?> es : existsSpecs) builder.where((Specification) es);
 
         // ComputedField alias filter → globalWhereFilter vasitəsilə ifadə genişləndirilir

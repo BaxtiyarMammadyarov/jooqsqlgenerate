@@ -210,7 +210,13 @@ ComputedField.of("o.price")
     .withNullDefault(NullDefault.ZERO)
     .as("net")
 // → COALESCE(price,0) * COALESCE(qty,0) - COALESCE(discount,0)
+
+// Qısa forma (v1.1.54) — enum yazmadan:
+ComputedField.of("o.price").multiply("o.qty").withNullZero().as("net")   // = NullDefault.ZERO
+ComputedField.of("t.a").divide("t.b").withNullOne().as("ratio")          // = NullDefault.ONE
 ```
+`withNullZero()` / `withNullOne()` həm `ComputedField`-də, həm `addComputedColumn(...)` və
+`addAggFunction(...)` zəncirlərində mövcuddur.
 
 **Per-step `*NullAs` metodları — IF məntiq, dəqiq nəzarət:**
 ```java
@@ -226,14 +232,36 @@ ComputedField.of("t.revenue")
     .as("avgRevenue")
 ```
 
+**İlk sahə (açılış sahəsi) LEFT JOIN-dən gələ bilirsə — `firstNullAs` (v1.1.54):**
+
+Per-step `*NullAs` metodları **yalnız zəncirdəki sonrakı sahələri** əhatə edir. İlk sahə
+(`of(...)` / `addAggFunction(fn, field)`) də nullable join sütunudursa, ona ayrıca default verin
+(yoxsa o operand NULL olanda bütün ifadə NULL olur):
+
+```java
+ComputedField.of("d1.joinField", 0)      // ← ilk sahə COALESCE(...,0)
+    .subtractNullAs("d2.other", 0)
+    .as("total")
+
+// Aggregate zənciri:
+jooq.addAggFunction(Agg.SUM, "d1.joinField").firstNullAs(0)
+    .subtract("t.other")
+    .as("total")
+// → SUM(COALESCE(d1.join_field,0) - t.other)
+```
+
+> **Sadə qayda:** bütün sahələr eyni default alacaqsa `.withNullDefault(NullDefault.ZERO)`
+> istifadə edin — o, **ilk sahə daxil** hamısını əhatə edir. Yalnız fərqli default-lar
+> lazım olduqda per-step `*NullAs` + `firstNullAs` işlədin.
+
 | `NullDefault` | Dəyər | Nə zaman istifadə et |
 |---|---|---|
 | `ZERO` | 0 | ADD, SUBTRACT, MULTIPLY — yoxluq = 0 |
 | `ONE` | 1 | DIVIDE məxrəci — yoxluq = 1 (sıfıra bölünmə yoxdur) |
 | `NONE` | tətbiq edilmir | Default davranış, DB null qaytarır |
 
-> **Per-step `*NullAs` metodları `withNullDefault`-dan üstündür** — eyni sahəyə hər ikisi
-> tətbiq olunsa per-step qalib gəlir.
+> **Per-step `*NullAs`/`firstNullAs` metodları `withNullDefault`-dan üstündür** — eyni sahəyə
+> hər ikisi tətbiq olunsa per-step qalib gəlir.
 
 ### 2.6 compute — mötərizəli qrup ifadəsi
 
@@ -1115,6 +1143,33 @@ ExistsSpec.exists(TaskPermission.class)
     .joinField("fkCompanyId", "t", "companyId")  // tp.fk_company_id = t.company_id
     .filter("active", Op.EQUAl, true)
 ```
+
+### 6.3.1 joinField — CONCAT alias ilə (v1.1.54)
+
+`joinField`-in main tərəfi main sorğunun **CONCAT alias-ını** tanıyır — sütun yox,
+CONCAT ifadəsinin özü ilə müqayisə olunur. Tipik hal: sorğunun nəticəsi başqa cədvələ
+insert olunur və ikinci işə salmada artıq insert olunmuş sətirlər (`fkDataId` identikliyi ilə)
+istisna edilməlidir:
+
+```java
+// Main sorğuda concat sütunu:
+jooq.addConcatColumn("fkDataId", "_", concatItems);
+
+// Dedup — insert olunmuşlar gəlməsin:
+jooq.addNotExists(ReconciliationMainReportEntity.class)
+    .equal("status", "A")
+    .equal("subAccountNo", subAccountNo)
+    .equal("relatedSubAccountNo", relatedSubAccountNo)
+    .joinField("fkTaskId", "t", "fkTaskId")
+    .joinField("fkDataId", "t", "fkDataId")   // ← CONCAT alias — ifadə kimi genişlənir
+    .done();
+// → NOT EXISTS (... WHERE r.fk_data_id = '531.01' || '_' || ... || t.fk_task_id || ...)
+```
+
+> **Qeyd:** exists cədvəlinin sütunu `CAST(... AS VARCHAR)` ilə müqayisə olunur; SELECT-dəki
+> `fkDataId` ilə eyni render məntiqi işlədilir (dəyərlər üst-üstə düşür). Məhdudiyyət:
+> CONCAT elementləri main cədvəlin sahələri və literal-lar olmalıdır (JOIN alias-lı sahələr
+> EXISTS kontekstində resolve olunmur).
 
 ### 6.4 EXISTS daxilində OR/AND qruplaması — orGroup
 

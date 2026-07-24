@@ -259,6 +259,25 @@ public class JooqManager {
         public ComputedChain divide(String field)   { expr = expr.divide(field);   return this; }
 
         /**
+         * İlk sahə LEFT JOIN-dən gələn nullable sütun olduqda ona per-field NULL default
+         * təyin edir. {@code withNullDefault}-dan üstündür və yalnız ilk sahəyə tətbiq olunur.
+         *
+         * <pre>{@code
+         *   jooq.addComputedColumn("d1.joinField").firstNullAs(0)
+         *       .subtract("t.other")
+         *       .as("net")
+         *   // → COALESCE(d1.join_field,0) - t.other
+         * }</pre>
+         */
+        public ComputedChain firstNullAs(Number nullAs) { expr = expr.firstNullAs(nullAs); return this; }
+
+        /** Qısa forma: {@code withNullDefault(NullDefault.ZERO)} — bütün sahələr null → 0. */
+        public ComputedChain withNullZero() { expr = expr.withNullDefault(NullDefault.ZERO); return this; }
+
+        /** Qısa forma: {@code withNullDefault(NullDefault.ONE)} — bütün sahələr null → 1. */
+        public ComputedChain withNullOne()  { expr = expr.withNullDefault(NullDefault.ONE);  return this; }
+
+        /**
          * LEFT JOIN-dən gələn NULL sahələr üçün COALESCE default strategiyası.
          * Zəncirdəki bütün sahələrə (birinci və sonrakı) tətbiq olunur.
          *
@@ -1842,6 +1861,25 @@ public class JooqManager {
         public AggChain subtract(String field) { expr = expr.subtract(field); return this; }
         public AggChain multiply(String field) { expr = expr.multiply(field); return this; }
         public AggChain divide(String field)   { expr = expr.divide(field);   return this; }
+
+        /**
+         * İlk sahə (aqreqatın açılış sahəsi) LEFT JOIN-dən gələn nullable sütun olduqda
+         * ona per-field NULL default təyin edir. {@code withNullDefault}-dan üstündür.
+         *
+         * <pre>{@code
+         *   manager.addAggFunction(Agg.SUM, "d1.joinField").firstNullAs(0)
+         *          .subtract("t.other")
+         *          .as("total")
+         *   // → SUM(COALESCE(d1.join_field,0) - t.other)
+         * }</pre>
+         */
+        public AggChain firstNullAs(Number nullAs) { expr = expr.firstNullAs(nullAs); return this; }
+
+        /** Qısa forma: {@code withNullDefault(NullDefault.ZERO)} — bütün sahələr null → 0. */
+        public AggChain withNullZero() { expr = expr.withNullDefault(NullDefault.ZERO); return this; }
+
+        /** Qısa forma: {@code withNullDefault(NullDefault.ONE)} — bütün sahələr null → 1. */
+        public AggChain withNullOne()  { expr = expr.withNullDefault(NullDefault.ONE);  return this; }
 
         // ─── NullDefault — LEFT JOIN null sahələri üçün ─────────────────
 
