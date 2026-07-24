@@ -1,8 +1,11 @@
+import com.vanniktech.maven.publish.SonatypeHost
+import com.vanniktech.maven.publish.JavaLibrary
+import com.vanniktech.maven.publish.JavadocJar
+
 plugins {
     `java-library`
-    `maven-publish`
     signing
-    id("io.github.gradle-nexus.publish-plugin") version "2.0.0"
+    id("com.vanniktech.maven.publish") version "0.30.0"
 }
 
 // ─── Layihə məlumatları ───────────────────────────────────────────────────────
@@ -13,8 +16,6 @@ version = "1.1.55"
 java {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
-    withSourcesJar()
-    withJavadocJar()
 }
 
 tasks.withType<JavaCompile> {
@@ -45,88 +46,6 @@ dependencies {
     testImplementation("jakarta.persistence:jakarta.persistence-api:$jakartaVersion")
 }
 
-// ─── Credentials ─────────────────────────────────────────────────────────────
-val sonatypeUsername: String = project.findProperty("sonatypeUsername") as String? ?: ""
-val sonatypePassword: String = project.findProperty("sonatypePassword") as String? ?: ""
-
-// ─── İmzalama ─────────────────────────────────────────────────────────────────
-val signingPassword: String? = project.findProperty("signingPassword") as String?
-val signingKeyFile = file("${System.getProperty("user.home")}/.gradle/secret.pgp")
-
-signing {
-    // Yalnız PGP key mövcud olduqda imzalama aktivləşdirilir.
-    // Local publish (publishToMavenLocal) zamanı key olmadığına görə avtomatik atlanır.
-    if (signingKeyFile.exists()) {
-        useInMemoryPgpKeys(signingKeyFile.readText(), signingPassword)
-        sign(publishing.publications)
-    }
-}
-
-// ─── Yayımlama konfiqurasiyası ────────────────────────────────────────────────
-publishing {
-    publications {
-        create<MavenPublication>("mavenJava") {
-            from(components["java"])
-
-            groupId    = "az.mbm"
-            artifactId = "jooq-sql-generate"
-            version    = "1.1.55"
-
-            pom {
-                name        = "jooq-sql-generate"
-                description = "jOOQ əsaslı dinamik SQL sorğu generatoru kitabxanası"
-                url         = "https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate"
-
-                licenses {
-                    license {
-                        name = "MIT License"
-                        url  = "https://opensource.org/licenses/MIT"
-                    }
-                }
-
-                developers {
-                    developer {
-                        id    = "BaxtiyarMammadyarov"
-                        name  = "Baxtiyar Mammadyarov"
-                        email = "baxtiyar.mammadyarov@gmail.com"
-                    }
-                }
-
-                scm {
-                    connection          = "scm:git:git://github.com/BaxtiyarMammadyarov/jooqsqlgenerate.git"
-                    developerConnection = "scm:git:ssh://github.com/BaxtiyarMammadyarov/jooqsqlgenerate.git"
-                    url                 = "https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate"
-                }
-
-                withXml {
-                    val deps = asNode().get("dependencies") as groovy.util.NodeList
-                    if (deps.isNotEmpty()) {
-                        (deps[0] as groovy.util.Node).children().forEach { dep ->
-                            val depNode = dep as groovy.util.Node
-                            val existing = depNode.get("scope") as groovy.util.NodeList
-                            if (existing.isEmpty()) {
-                                depNode.appendNode("scope", "provided")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ─── Maven Central (yeni portal) ─────────────────────────────────────────────
-nexusPublishing {
-    repositories {
-        sonatype {
-            nexusUrl.set(uri("https://ossrh-staging-api.central.sonatype.com/service/local/"))
-            snapshotRepositoryUrl.set(uri("https://central.sonatype.com/repository/maven-snapshots/"))
-            username = sonatypeUsername
-            password = sonatypePassword
-        }
-    }
-}
-
 // ─── Test konfiqurasiyası ─────────────────────────────────────────────────────
 tasks.test {
     useJUnitPlatform()
@@ -136,4 +55,60 @@ tasks.test {
 tasks.withType<Javadoc> {
     options.encoding = "UTF-8"
     (options as StandardJavadocDocletOptions).addStringOption("Xdoclint:none", "-quiet")
+}
+
+// ─── İmzalama — köhnə setup: ~/.gradle/secret.pgp + signingPassword ──────────
+val signingKeyFile = file("${System.getProperty("user.home")}/.gradle/secret.pgp")
+val hasPgpKey = signingKeyFile.exists()
+if (hasPgpKey) {
+    signing {
+        useInMemoryPgpKeys(
+            signingKeyFile.readText(),
+            project.findProperty("signingPassword") as String?
+        )
+    }
+}
+
+// ─── Maven Central (yeni Central Portal) — Vanniktech plugin ─────────────────
+mavenPublishing {
+    // Central Portal-a yükləyir və avtomatik release edir.
+    // Yalnız staging-də saxlamaq üçün: publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, false)
+    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
+
+    // İmzalama — yalnız PGP key mövcud olduqda (local publish-də atlanır).
+    if (hasPgpKey) {
+        signAllPublications()
+    }
+
+    configure(JavaLibrary(
+        javadocJar = JavadocJar.Javadoc(),
+        sourcesJar = true
+    ))
+
+    coordinates("az.mbm", "jooq-sql-generate", version.toString())
+
+    pom {
+        name.set("jooq-sql-generate")
+        description.set("jOOQ əsaslı dinamik SQL sorğu generatoru kitabxanası")
+        url.set("https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate")
+
+        licenses {
+            license {
+                name.set("MIT License")
+                url.set("https://opensource.org/licenses/MIT")
+            }
+        }
+        developers {
+            developer {
+                id.set("BaxtiyarMammadyarov")
+                name.set("Baxtiyar Mammadyarov")
+                email.set("baxtiyar.mammadyarov@gmail.com")
+            }
+        }
+        scm {
+            connection.set("scm:git:git://github.com/BaxtiyarMammadyarov/jooqsqlgenerate.git")
+            developerConnection.set("scm:git:ssh://github.com/BaxtiyarMammadyarov/jooqsqlgenerate.git")
+            url.set("https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate")
+        }
+    }
 }
