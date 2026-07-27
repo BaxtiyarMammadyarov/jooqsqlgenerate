@@ -211,6 +211,49 @@ public class JooqManager {
     }
 
     /**
+     * İki aqreqat ifadəsinin nisbəti: {@code fn(numerator) / NULLIF(fn(denominator), 0)}.
+     *
+     * <p>Köhnə {@code setGroupFunctionOperations(alias, aggAlias, DIVIDE)} qarşılığı — iki
+     * ayrıca SUM-u SQL-də bölür. Nəticə computed alias olduğu üçün HAVING/ORDER BY-da işlənə bilər.
+     *
+     * <pre>{@code
+     *   // averageCost = SUM(marginalCostIn + purchaseExpense*quantityIn - marginalCostOut - purchaseExpense*quantityOut)
+     *   //             / SUM(quantityIn - quantityOut)
+     *   manager.addAggRatio("averageCost", Agg.SUM,
+     *       num -> num.plus("t.marginalCostIn")
+     *                 .plus("t.purchaseExpense", "t.quantityIn")   // + (f1 * f2)
+     *                 .minus("t.marginalCostOut")
+     *                 .minus("t.purchaseExpense", "t.quantityOut"),
+     *       den -> den.plus("t.quantityIn").minus("t.quantityOut"));
+     * }</pre>
+     *
+     * @param alias       SELECT alias
+     * @param fn          aqreqat funksiyası (adətən {@link Agg#SUM})
+     * @param numerator   surət ifadəsi ({@link az.mbm.jooqsqlgenerate.builder.AggExpr} zənciri)
+     * @param denominator məxrəc ifadəsi (0 olduqda NULLIF ilə qorunur → nəticə NULL)
+     */
+    public JooqManager addAggRatio(String alias, Agg fn,
+            java.util.function.Consumer<az.mbm.jooqsqlgenerate.builder.AggExpr> numerator,
+            java.util.function.Consumer<az.mbm.jooqsqlgenerate.builder.AggExpr> denominator) {
+        var n = az.mbm.jooqsqlgenerate.builder.AggExpr.create(); numerator.accept(n);
+        var d = az.mbm.jooqsqlgenerate.builder.AggExpr.create(); denominator.accept(d);
+        ComputedField ratio = ComputedField.aggRatio(fn, n.build(), d.build()).as(alias);
+        q().computedColumn(ratio);
+        return this;
+    }
+
+    /** {@link #addAggRatio(String, Agg, java.util.function.Consumer, java.util.function.Consumer)} — nəticəyə {@code ROUND(..., scale)} ilə. */
+    public JooqManager addAggRatio(String alias, int scale, Agg fn,
+            java.util.function.Consumer<az.mbm.jooqsqlgenerate.builder.AggExpr> numerator,
+            java.util.function.Consumer<az.mbm.jooqsqlgenerate.builder.AggExpr> denominator) {
+        var n = az.mbm.jooqsqlgenerate.builder.AggExpr.create(); numerator.accept(n);
+        var d = az.mbm.jooqsqlgenerate.builder.AggExpr.create(); denominator.accept(d);
+        ComputedField ratio = ComputedField.aggRatio(fn, n.build(), d.build()).as(alias, scale);
+        q().computedColumn(ratio);
+        return this;
+    }
+
+    /**
      * Fluent computed sütun — çox field ilə riyazi əməliyyat zənciri.
      *
      * <pre>{@code
