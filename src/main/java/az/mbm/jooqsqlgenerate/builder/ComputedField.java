@@ -7,6 +7,7 @@ import org.jooq.SQLDialect;
 import org.jooq.Table;
 import org.jooq.impl.DSL;
 import az.mbm.jooqsqlgenerate.core.EntityTable;
+import az.mbm.jooqsqlgenerate.enums.Agg;
 import az.mbm.jooqsqlgenerate.enums.MathOp;
 import az.mbm.jooqsqlgenerate.enums.NullDefault;
 import az.mbm.jooqsqlgenerate.enums.Op;
@@ -105,6 +106,14 @@ public class ComputedField {
     private       NullDefault        nullDefault   = NullDefault.NONE;
     /** İlk sahə üçün per-field NULL default (withNullDefault-dan üstündür; yalnız ilk sahəyə). */
     private       Number             firstNullAs   = null;
+    /**
+     * Aqreqat nisbəti — {@code fn(num) / NULLIF(fn(den), 0)}. Null deyilsə, bu ComputedField
+     * aqreqatdır (bax {@link #isAggregate()}) və GROUP BY-a əlavə edilmir.
+     */
+    private       AggRatio           firstAggRatio = null;
+
+    /** İki aqreqat ifadəsinin nisbəti — {@code SUM(num)/SUM(den)} kimi. */
+    public record AggRatio(Agg fn, ComputedField numerator, ComputedField denominator) {}
 
     /** Sadə sahə konstruktoru */
     private ComputedField(String tableAlias, String fieldName) {
@@ -152,6 +161,35 @@ public class ComputedField {
     public static ComputedField of(String tableAliasAndField) {
         String[] parts = split(tableAliasAndField);
         return new ComputedField(parts[0], parts[1]);
+    }
+
+    /**
+     * İki aqreqat ifadəsinin nisbəti: {@code fn(numerator) / NULLIF(fn(denominator), 0)}.
+     *
+     * <p>Məs. orta vahid dəyər (SUM(cost)/SUM(qty)) kimi — köhnə
+     * {@code setGroupFunctionOperations(..., DIVIDE)} qarşılığı. Nəticə {@link ComputedField}
+     * olduğu üçün SELECT, HAVING və ORDER BY-da adi computed alias kimi işlənir.
+     *
+     * <pre>{@code
+     *   ComputedField.aggRatio(Agg.SUM,
+     *       ComputedField.expr("t.marginalCostIn").subtract("t.marginalCostOut"),  // numerator
+     *       ComputedField.expr("t.quantityIn").subtract("t.quantityOut"))          // denominator
+     *       .as("averageCost")
+     *   // → SUM(marginal_cost_in - marginal_cost_out) / NULLIF(SUM(quantity_in - quantity_out), 0)
+     * }</pre>
+     */
+    public static ComputedField aggRatio(Agg fn, ComputedField numerator, ComputedField denominator) {
+        Objects.requireNonNull(fn,          "aggRatio: fn null ola bilməz");
+        Objects.requireNonNull(numerator,   "aggRatio: numerator null ola bilməz");
+        Objects.requireNonNull(denominator, "aggRatio: denominator null ola bilməz");
+        ComputedField cf = new ComputedField((String) null, (String) null);
+        cf.firstAggRatio = new AggRatio(fn, numerator, denominator);
+        return cf;
+    }
+
+    /** Bu ComputedField aqreqat ifadəsidirmi (SUM/AVG/...) — GROUP BY-a əlavə edilməməlidir. */
+    public boolean isAggregate() {
+        return firstAggRatio != null;
     }
 
     /**
@@ -741,9 +779,16 @@ public class ComputedField {
     Field<Object> buildExpr(EntityTable<?> mainTable,
                             java.util.Map<String, EntityTable<?>> tableMap,
                             SQLDialect dialect) {
-        // Birinci element: sadə sahə / nested ComputedField / IfExpr / CoalesceExpr
+        // Birinci element: aqreqat nisbəti / sadə sahə / nested / IfExpr / CoalesceExpr
         Field<Object> result;
-        if (firstIfExpr != null) {
+        if (firstAggRatio != null) {
+            Field<?> numE = firstAggRatio.numerator().buildExpr(mainTable, tableMap, dialect);
+            Field<?> denE = firstAggRatio.denominator().buildExpr(mainTable, tableMap, dialect);
+            Field<? extends Number> num = applyAgg(firstAggRatio.fn(), numE);
+            Field<? extends Number> den = applyAgg(firstAggRatio.fn(), denE);
+            result = (Field<Object>) (Field<?>) num.div(
+                    (Field<? extends Number>) (Field<?>) DSL.nullif((Field) den, 0));
+        } else if (firstIfExpr != null) {
             result = (Field<Object>) firstIfExpr.toField(mainTable, tableMap);
         } else if (firstCoalesceExpr != null) {
             result = (Field<Object>) firstCoalesceExpr.toField(mainTable, tableMap);
@@ -845,7 +890,14 @@ public class ComputedField {
     @SuppressWarnings({"unchecked", "rawtypes"})
     public Field<Object> buildExprGenerated(Table<?> mainTable, Map<String, Table<?>> tableMap) {
         Field<Object> result;
-        if (firstIfExpr != null) {
+        if (firstAggRatio != null) {
+            Field<?> numE = firstAggRatio.numerator().buildExprGenerated(mainTable, tableMap);
+            Field<?> denE = firstAggRatio.denominator().buildExprGenerated(mainTable, tableMap);
+            Field<? extends Number> num = applyAgg(firstAggRatio.fn(), numE);
+            Field<? extends Number> den = applyAgg(firstAggRatio.fn(), denE);
+            result = (Field<Object>) (Field<?>) num.div(
+                    (Field<? extends Number>) (Field<?>) DSL.nullif((Field) den, 0));
+        } else if (firstIfExpr != null) {
             result = (Field<Object>) firstIfExpr.toFieldGenerated(mainTable, tableMap);
         } else if (firstCoalesceExpr != null) {
             result = (Field<Object>) firstCoalesceExpr.toFieldGenerated(mainTable, tableMap);
@@ -938,6 +990,18 @@ public class ComputedField {
      * {@link NullDefault} strategiyasına görə sahəni COALESCE ilə bükür.
      * {@code NONE} olduqda sahəni olduğu kimi qaytarır.
      */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static Field<? extends Number> applyAgg(Agg fn, Field<?> operand) {
+        Field<? extends Number> num = (Field<? extends Number>) (Field<?>) operand;
+        return switch (fn) {
+            case SUM   -> DSL.sum(num);
+            case AVG   -> DSL.avg(num);
+            case COUNT -> (Field) DSL.count(operand);
+            case MAX   -> (Field) DSL.max(num);
+            case MIN   -> (Field) DSL.min(num);
+        };
+    }
+
     private static Field<?> applyNullDefault(Field<?> field, NullDefault nd) {
         if (nd == null || nd == NullDefault.NONE) return field;
         return DSL.coalesce(field, DSL.val(nd.numericValue()));
