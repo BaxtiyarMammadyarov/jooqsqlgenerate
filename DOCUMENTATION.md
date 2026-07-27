@@ -7,6 +7,34 @@
 
 ## Dəyişikliklər — Versiya Tarixi
 
+### v1.1.56 — `addAggRatio` (iki aqreqatın nisbəti) + computed alias HAVING (PostgreSQL uyğunluğu)
+
+**Yeni feature — `addAggRatio`.** Köhnə `setGroupFunctionOperations(alias, aggAlias, DIVIDE)`
+qarşılığı: iki ayrı aqreqatı SQL-də bölür — `fn(numerator) / NULLIF(fn(denominator), 0)`.
+Tipik hal: orta vahid dəyər `SUM(cost) / SUM(quantity)`.
+
+```java
+manager.addAggRatio("averageCost", 2, Agg.SUM,   // 2 = ROUND scale
+    num -> num.plus("t.marginalCostIn")
+              .plus("t.purchaseExpense", "t.quantityIn")   // + (f1 * f2)
+              .minus("t.marginalCostOut")
+              .minus("t.purchaseExpense", "t.quantityOut"),
+    den -> den.plus("t.quantityIn").minus("t.quantityOut"));
+// → ROUND(SUM(...) / NULLIF(SUM(quantity_in - quantity_out), 0), 2) AS averageCost
+```
+
+Nəticə `ComputedField` olduğu üçün SELECT, HAVING və ORDER BY-da adi alias kimi işlənir:
+`.filter("averageCost", Op.GREATER_THAN, 0)` → HAVING, `.addOrderBy(...averageCost...)` → ORDER BY.
+Texniki: `ComputedField.aggRatio(fn, num, den)` + `isAggregate()` (GROUP BY-a düşmür).
+
+**Bug fix — computed alias HAVING PostgreSQL-də.** Əvvəllər entity mode-da computed alias HAVING
+filtri **bare alias** ilə (`HAVING "averageCost" > 0`) yazılırdı — PostgreSQL SELECT alias-ını
+HAVING-də tanımır, xəta verirdi. İndi ifadənin özü genişləndirilir
+(`HAVING SUM(a)/NULLIF(SUM(b),0) > 0`). `globalFilter(Map)` yolu da aqreqat computed alias-ı
+düzgün HAVING-ə yönləndirir (əvvəl WHERE-ə gedirdi).
+
+---
+
 ### v1.1.55 — EXISTS `joinField` CONCAT alias, ilk sahə `firstNullAs`, `withNullZero`/`withNullOne`
 
 **A. Computed/aggregate ilk sahə üçün `firstNullAs`.** `withNullDefault(ZERO)` onsuz da ilk
