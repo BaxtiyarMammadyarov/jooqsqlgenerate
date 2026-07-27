@@ -2056,6 +2056,12 @@ public final class JooqQuery<T> {
         Set<String> computedAliases = new HashSet<>();
         for (ComputedRow cr  : computedCols)   computedAliases.add(cr.alias());
         for (ComputedFieldEntry entry : computedFields) if (entry.cf().getAlias() != null) computedAliases.add(entry.cf().getAlias());
+        // Aqreqat computed alias-ları (məs. aggRatio SUM(a)/SUM(b)) — bunlar WHERE-də deyil,
+        // HAVING-də olmalıdır (globalFilter yolu default WHERE-ə göndərir, aşağıda tutulur).
+        Set<String> aggregateComputedAliases = new HashSet<>();
+        for (ComputedFieldEntry entry : computedFields)
+            if (entry.cf().getAlias() != null && entry.cf().isAggregate())
+                aggregateComputedAliases.add(entry.cf().getAlias());
         // CONCAT alias-ları — CONCAT aqreqat olmadığı üçün GROUP BY olsa belə HAVING-ə
         // yox, həmişə WHERE-ə (computedWhereFilters) yönləndirilir.
         Set<String> concatAliases = new HashSet<>();
@@ -2132,6 +2138,9 @@ public final class JooqQuery<T> {
                 // Aqreqat alias → HAVING-ə əlavə et (step.having() ilə bağlanacaq)
                 havingMap.computeIfAbsent(fieldKey, k -> new ArrayList<>())
                          .add(new FilterRow(fieldKey, gf.op(), gf.value()));
+            } else if (!prefixed && aggregateComputedAliases.contains(fieldKey)) {
+                // Aqreqat computed (aggRatio) → HAVING-ə (ifadə ilə genişlənir)
+                computedHavingFilters.add(new FilterRow(fieldKey, gf.op(), gf.value()));
             } else {
                 builder.globalWhereFilter(gf.aliasAndField(), gf.op(), gf.value());
             }
@@ -2204,7 +2213,9 @@ public final class JooqQuery<T> {
         }
 
         // HAVING
-        for (FilterRow fr : computedHavingFilters) { Condition c = aliasCondition(fr); if (c != null) builder.having(c); }
+        // Computed alias HAVING — alias yox, ifadənin özü genişləndirilir (PostgreSQL uyğunluğu).
+        // Məs. aggRatio "averageCost" > 0 → HAVING SUM(a)/NULLIF(SUM(b),0) > 0.
+        for (FilterRow fr : computedHavingFilters) builder.havingComputed(fieldPart(fr.field()), fr.op(), fr.value());
         for (ExistsSpec<?, ?> es : havingExistsSpecs) builder.having((Specification) es);
         for (Condition rh : rawHavings) builder.rawHaving(rh);
 
