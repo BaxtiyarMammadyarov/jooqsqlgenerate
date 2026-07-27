@@ -95,6 +95,12 @@ public class SelectQueryBuilder<T> {
     // ─── HAVING əlavəsi (computed alias filterlər üçün) ───────────────────
     private Condition extraHaving = null;
 
+    // ─── Computed alias HAVING filterlər (v1.1.56) ────────────────────────
+    // Alias yox, ifadənin özü HAVING-ə yazılır — PostgreSQL SELECT alias-ını
+    // HAVING-də tanımadığı üçün (məs. aggRatio: SUM(a)/SUM(b) > 0).
+    private final List<ComputedHavingRow> computedHavingRows = new ArrayList<>();
+    private record ComputedHavingRow(String alias, Op op, Object value) {}
+
     // ─── Birbaşa jOOQ raw conditions ──────────────────────────────────────
     private final List<Condition> rawConditions = new ArrayList<>();
     private final List<Condition> rawHavings    = new ArrayList<>();
@@ -1174,6 +1180,17 @@ public class SelectQueryBuilder<T> {
     }
 
     /**
+     * Computed alias üzərində HAVING filtri (v1.1.56) — alias yox, ifadənin özü HAVING-ə
+     * yazılır (PostgreSQL SELECT alias-ını HAVING-də tanımır). Alias {@code computedColumn(...)}
+     * ilə əlavə edilmiş {@link ComputedField}-ə uyğun gəlməlidir; məs. aggRatio.
+     */
+    public SelectQueryBuilder<T> havingComputed(String alias, Op op, Object value) {
+        if (alias != null && op != null && value != null)
+            computedHavingRows.add(new ComputedHavingRow(alias, op, value));
+        return this;
+    }
+
+    /**
      * Specification-u HAVING-ə əlavə edir (EXISTS / NOT EXISTS üçün).
      */
     public SelectQueryBuilder<T> having(Specification<T> spec) {
@@ -1799,7 +1816,7 @@ public class SelectQueryBuilder<T> {
             // v1.1.51: əvvəllər burada HAVING-lər (agg having, rawHaving, extraHaving,
             // havingExists) səssiz itirdi — GROUP BY olmasa belə tətbiq olunur
             // (jOOQ-da SelectConditionStep SelectHavingStep-i extend edir).
-            return applyHaving(conditioned, mainTable, tableMap);
+            return applyHaving(conditioned, mainTable, tableMap, dialect);
         }
 
         // ── Explicit GROUP BY sahələri ───────────────────────────────────
@@ -1855,6 +1872,8 @@ public class SelectQueryBuilder<T> {
         // alias isə bir çox DB-də GROUP BY-da işləmir.
         // Ən təhlükəsiz yol: ComputedField-in toField() nəticəsini alias-sız vermək.
         for (ComputedField cf : computedChain) {
+            // Aqreqat computed (məs. aggRatio SUM(num)/SUM(den)) GROUP BY-a düşməməlidir.
+            if (cf.isAggregate()) continue;
             // GROUP BY-da alias deyil, ifadənin özü lazımdır
             Field<?> expr = cf.buildExpr(mainTable, tableMap, dialect);
             groupFieldMap.putIfAbsent("__cf_" + cf.getAlias(), expr);
@@ -1873,16 +1892,18 @@ public class SelectQueryBuilder<T> {
         }
 
         SelectHavingStep<Record> grouped = conditioned.groupBy(new ArrayList<>(groupFieldMap.values()));
-        return applyHaving(grouped, mainTable, tableMap);
+        return applyHaving(grouped, mainTable, tableMap, dialect);
     }
 
     /**
-     * HAVING = aggregate HAVING + extraHaving + rawHavings + havingExists.
+     * HAVING = aggregate HAVING + extraHaving + rawHavings + havingExists + computed alias HAVING.
      * GROUP BY olub-olmamasından asılı olmayaraq tətbiq olunur (v1.1.51).
      */
+    @SuppressWarnings("unchecked")
     private SelectHavingStep<Record> applyHaving(SelectHavingStep<Record> grouped,
                                                  EntityTable<T> mainTable,
-                                                 Map<String, EntityTable<?>> tableMap) {
+                                                 Map<String, EntityTable<?>> tableMap,
+                                                 SQLDialect dialect) {
         Condition aggHaving = (aggregator != null)
                 ? AggregateBuilder.buildHaving(aggregator.getAggFields(), mainTable, tableMap)
                 : null;
@@ -1892,6 +1913,18 @@ public class SelectQueryBuilder<T> {
 
         for (Condition rh : rawHavings) {
             allHaving = (allHaving == null) ? rh : allHaving.and(rh);
+        }
+
+        // Computed alias HAVING — alias yox, ifadənin özü (PostgreSQL uyğunluğu).
+        // Məs. aggRatio "averageCost" üçün: HAVING SUM(a)/NULLIF(SUM(b),0) > 0.
+        for (ComputedHavingRow chr : computedHavingRows) {
+            ComputedField cf = computedChain.stream()
+                    .filter(c -> chr.alias().equals(c.getAlias()))
+                    .findFirst().orElse(null);
+            if (cf == null) continue;
+            Field<Object> expr = (Field<Object>) cf.buildExpr(mainTable, tableMap, dialect);
+            Condition c = FilterStrategies.get(chr.op()).apply(expr, chr.value());
+            allHaving = (allHaving == null) ? c : allHaving.and(c);
         }
 
         // EXISTS / NOT EXISTS HAVING şərtləri
