@@ -10,8 +10,8 @@
 ## Proyekt haqqında
 
 **Ad:** `jooq-sql-generate`
-**Versiya:** 1.1.55 (EXISTS joinField CONCAT alias, firstNullAs, withNullZero/withNullOne)
-**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.55`
+**Versiya:** 1.1.56 (addAggRatio + computed HAVING PostgreSQL fix)
+**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.56`
 **Repo:** https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate
 **Java:** 17
 **Asılılıqlar:** jOOQ 3.18.6, Spring Boot 3.2.5 (compileOnly), Jakarta Persistence 3.1.0
@@ -27,7 +27,7 @@
 
 ## Cari vəziyyət
 
-Versiya 1.1.55 hazırlanır — v1.1.50 (filter routing, andOn*, Collection<ConcatItem>),
+Versiya 1.1.56 hazırlanır — v1.1.50 (filter routing, andOn*, Collection<ConcatItem>),
 v1.1.51 (audit düzəlişləri), v1.1.52–53 (SubSelectBuilder + INSERT ON DUPLICATE cast
 fix-ləri, GROUP BY→SELECT auto-add) dəyişikliklərini əhatə edir. Sənədlər yenilənib.
 
@@ -62,6 +62,17 @@ az.mbm.jooqsqlgenerate
 ---
 
 ## İş Jurnalı
+
+### 2026-07-24 — v1.1.56: addAggRatio (iki aqreqatın nisbəti) + computed HAVING PostgreSQL fix
+
+Köhnə `setGroupFunctionOperations(..., DIVIDE)` qarşılığı: `addAggRatio(alias, [scale,] fn, num, den)`
+→ `fn(num)/NULLIF(fn(den),0)`. `ComputedField.aggRatio(fn, numCF, denCF)` + `isAggregate()`
+(GROUP BY-a düşmür). num/den `AggExpr` Consumer ilə verilir. Nəticə computed alias — SELECT/
+HAVING/ORDER BY-da işlənir. Yan-fix: entity mode computed alias HAVING əvvəl bare alias
+(`HAVING "alias"`) idi → PostgreSQL tanımırdı; indi ifadə genişlənir (SelectQueryBuilder.
+havingComputed + applyHaving-ə dialect). globalFilter(Map) yolu aqreqat computed alias-ı
+HAVING-ə yönləndirir (aggregateComputedAliases dəsti). buildExpr + buildExprGenerated ikisində.
+
 
 ### 2026-07-22 — v1.1.55: EXISTS joinField CONCAT alias + firstNullAs + withNullZero/withNullOne
 
