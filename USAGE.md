@@ -1516,6 +1516,40 @@ manager.addSumExpr("net", e -> e
 > SQL nəticəsi flat `ComputedField` zənciri ilə eynidir. Aqreqat `COALESCE(SUM(...), 0)`
 > ilə bükülür (mövcud davranış).
 
+### 7.3.4 addAggRatio — iki aqreqatın nisbəti (v1.1.56)
+
+İki ayrı aqreqatı SQL-də bölür: `fn(numerator) / NULLIF(fn(denominator), 0)`. Tipik hal —
+orta vahid dəyər (`SUM(cost) / SUM(quantity)`). Köhnə `setGroupFunctionOperations(..., DIVIDE)`
+yazı tərzinin təmiz qarşılığı.
+
+```java
+manager.addAggRatio("averageCost", 2, Agg.SUM,        // 2 = ROUND miqyası (istəyə bağlı)
+    num -> num.plus("t.marginalCostIn")
+              .plus("t.purchaseExpense", "t.quantityIn")   // + (f1 * f2)
+              .minus("t.marginalCostOut")
+              .minus("t.purchaseExpense", "t.quantityOut"),
+    den -> den.plus("t.quantityIn").minus("t.quantityOut"));
+// → ROUND(SUM(marginal_cost_in + purchase_expense*quantity_in - marginal_cost_out
+//          - purchase_expense*quantity_out) / NULLIF(SUM(quantity_in - quantity_out), 0), 2)
+//   AS averageCost
+```
+
+Miqyassız (round olmadan) variant: `addAggRatio("averageCost", Agg.SUM, num -> ..., den -> ...)`.
+
+**Nəticə HAVING və ORDER BY-da işlənə bilir** — çünki `ComputedField` alias-ıdır:
+
+```java
+.filter("averageCost", Op.GREATER_THAN, 0)                 // → HAVING (ifadə genişlənir)
+.globalFilter("averageCost", Map.of("greaterThan", "0"))    // → HAVING (REST-dən Map ilə)
+.addOrderBy(List.of(Map.of("averageCost", "desc")))         // → ORDER BY averageCost DESC
+```
+
+> **Vacib:** alias **prefixsiz** yazılmalıdır (`"averageCost"`, `"t.averageCost"` yox) — prefiksli
+> yazılış real sütun sayılıb WHERE-ə gedər. Aralıq filtri üçün eyni alias-a iki şərt verin
+> (AND ilə birləşir): `.filter("averageCost", GREATER_THAN, 0).filter("averageCost", LESS_THAN, 1000)`.
+>
+> `0`-a bölmə `NULLIF` ilə qorunur — məxrəc 0 olduqda nəticə NULL olur.
+
 ### 7.4 AggregateBuilder — fluent API
 
 `AggregateBuilder` obyektləri `JooqQuery` üzərində DEYİL, `SelectQueryBuilder.aggregate(...)`
@@ -2335,6 +2369,7 @@ public SelectTable getTaskReport(TaskFilterRequest req) {
 | `addAggFunctionWithMath(Agg, field, MathOp, field, alias)` | `SUM(f1 op f2)` — birbaşa 2 sahə |
 | `addAggFunctionOnComputed(Agg, ComputedField, alias)` | Çox sahəli/iç-içə ifadə üzərində aqreqat — `SUM(exprA - exprB)` daxil |
 | `addSumExpr(alias, e -> e.plus(...).minus(...))` | Oxunaqlı SUM ifadə zənciri (AggExpr) — bax 7.3.3 |
+| `addAggRatio(alias, [scale,] fn, num, den)` | İki aqreqatın nisbəti — `fn(num)/NULLIF(fn(den),0)`, HAVING/ORDER BY-da işlənə bilir — bax 7.3.4 |
 | `addAggExpr(Agg, alias, [round,] e -> ...)` | AggExpr — istənilən aqreqat funksiyası, istəyə bağlı yuvarlama |
 | `addLeftJoin(Class, alias).on(...).done()` | Builder LEFT JOIN |
 | `addInnerJoin(Class, alias).onFrom(...).done()` | Builder INNER JOIN |
