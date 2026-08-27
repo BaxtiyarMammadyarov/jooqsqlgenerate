@@ -10,8 +10,8 @@
 ## Proyekt haqqında
 
 **Ad:** `jooq-sql-generate`
-**Versiya:** 1.1.56 (addAggRatio + computed HAVING PostgreSQL fix)
-**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.56`
+**Versiya:** 1.1.57 (executeGenerated COUNT/pagination bayraq düzəlişi + H2 testlər)
+**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.57`
 **Repo:** https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate
 **Java:** 17
 **Asılılıqlar:** jOOQ 3.18.6, Spring Boot 3.2.5 (compileOnly), Jakarta Persistence 3.1.0
@@ -27,7 +27,7 @@
 
 ## Cari vəziyyət
 
-Versiya 1.1.56 hazırlanır — v1.1.50 (filter routing, andOn*, Collection<ConcatItem>),
+Versiya 1.1.57 hazırlanır — v1.1.50 (filter routing, andOn*, Collection<ConcatItem>),
 v1.1.51 (audit düzəlişləri), v1.1.52–53 (SubSelectBuilder + INSERT ON DUPLICATE cast
 fix-ləri, GROUP BY→SELECT auto-add) dəyişikliklərini əhatə edir. Sənədlər yenilənib.
 
@@ -62,6 +62,28 @@ az.mbm.jooqsqlgenerate
 ---
 
 ## İş Jurnalı
+
+### 2026-07-25 — v1.1.57: executeGenerated() COUNT/pagination bayraq düzəlişi + H2 testlər
+
+**Problem:** generated/derived mode-da COUNT məntiqi yalnız `if (paginate)`-ə bağlı idi:
+`withCount()` → paginate=false olduğundan rowCount həmişə 0; `skipCount()` → COUNT yenə icra
+olunurdu; `onlyCount()` → əsas data sorğusu lazımsız icra olunurdu.
+
+**Düzəliş (`JooqQuery.executeGenerated`):** entity mode `execute()` ilə eyni davranış —
+`needCount = onlyCount || ((paginate || countOnly) && !skipCount)`. `skipCount` → rowCount = -1
+(sentinel). `onlyCount` → əsas data icra edilmir, `dsl.selectZero().where(falseCondition())` +
+rowCount qaytarılır. DISTINCT: countSource `conditioned`/`grouped`-dır, bunlar
+`distinct ? selectDistinct : select` ilə qurulan `query`-dən törədiyi üçün DISTINCT count
+subquery-də (`COUNT(*) FROM (SELECT DISTINCT ...)`) avtomatik qorunur.
+
+**Testlər:** `ExecuteGeneratedCountTest` (JUnit 5 + AssertJ + real H2 in-memory) — withCount /
+skipCount / onlyCount / GROUP BY qrup sayı / DISTINCT unikal say / page ssenariləri.
+build.gradle-ə `assertj-core` + `h2` (testRuntimeOnly) əlavə edildi.
+
+**[x] Solved** — 2026-05-01 girişindəki "executeGenerated + JOIN + COUNT" known-issue:
+JOIN itməsi hissəsi artıq `countSource.asTable("_count")` (tövsiyə olunan həll) ilə həll
+olunmuşdu; bu buraxılışda bayraq idarəsi də tamamlandı.
+
 
 ### 2026-07-24 — v1.1.56: addAggRatio (iki aqreqatın nisbəti) + computed HAVING PostgreSQL fix
 
@@ -432,12 +454,9 @@ COUNT (səhv): SELECT count(*) FROM "task" t WHERE ...   ← JOIN itib
 **Yoxlanmamış / yarımçıq:**
 - Compile/test sandbox-da internetsizliyə görə icra olunmadı.
   İş kompüterində `./gradlew test` ilə yoxlanmalıdır.
-- `JooqQuery.java` (generated mode, sətr ~1882) eyni xətanı ehtiva edir:
-  `dsl.selectCount().from(mainTable).where(where)` — JOIN-lər tətbiq olunmur.
-  Burada 4 fərqli JOIN növü inline qurulur (rawJoins, joins, selectJoins, extJoins),
-  düzəliş daha mürəkkəbdir. Tövsiyə olunan həll: `dsl.selectCount().from(grouped.asTable("_count"))`
-  — bütün JOIN+WHERE+GROUP BY-ı dərived table kimi istifadə edir. Sonrakı sessiyada
-  düzəldiləcək (istifadəçi təsdiqindən sonra).
+- **[x] Solved (v1.1.57):** `JooqQuery` generated mode COUNT — JOIN-lər `countSource.asTable("_count")`
+  (grouped/conditioned derived table) ilə tam saxlanılır; əlavə olaraq withCount/skipCount/onlyCount
+  bayraqları entity mode ilə eyniləşdirildi. Bax: 2026-07-25 girişi + `ExecuteGeneratedCountTest`.
 
 ### 2026-05-12 — concat metodu JooqManager + JooqQuery-yə əlavə edildi
 

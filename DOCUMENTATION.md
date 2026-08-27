@@ -7,6 +7,20 @@
 
 ## Dəyişikliklər — Versiya Tarixi
 
+### v1.1.57 — `executeGenerated()` COUNT/pagination bayraq düzəlişi (entity mode ilə eyniləşdirmə)
+
+**Bug fix.** Generated/derived mode-da (`JooqQuery.from(generatedTable, alias)` /
+`from(SelectTable, alias)`) COUNT yalnız `if (paginate)`-ə bağlı idi. Nəticədə `withCount()`
+həmişə `0` qaytarırdı, `skipCount()` COUNT-u atlamırdı, `onlyCount()` əsas data sorğusunu yenə
+icra edirdi. İndi entity mode `execute()` ilə eyni — üç hal:
+`onlyCount()` → yalnız COUNT (data icra edilmir); `skipCount()` → yalnız data/SELECT (COUNT
+atlanır, rowCount=-1); heç biri → hər ikisi. Şərt:
+`needCount = onlyCount || ((paginate || countOnly) && !skipCount)`. DISTINCT/GROUP BY count
+subquery-də qorunur (`COUNT(*) FROM (SELECT DISTINCT ... GROUP BY ...) _count`). Testlər:
+`ExecuteGeneratedCountTest` (JUnit 5 + AssertJ + H2).
+
+---
+
 ### v1.1.56 — `addAggRatio` (iki aqreqatın nisbəti) + computed alias HAVING (PostgreSQL uyğunluğu)
 
 **Yeni feature — `addAggRatio`.** Köhnə `setGroupFunctionOperations(alias, aggAlias, DIVIDE)`

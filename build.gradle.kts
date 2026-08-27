@@ -10,7 +10,7 @@ plugins {
 
 // ─── Layihə məlumatları ───────────────────────────────────────────────────────
 group   = "az.mbm"
-version = "1.1.56"
+version = "1.1.57"
 
 // ─── Java versiyası ───────────────────────────────────────────────────────────
 java {
@@ -40,6 +40,9 @@ dependencies {
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testImplementation("org.assertj:assertj-core:3.25.3")
+    // COUNT/pagination davranış testləri üçün real in-memory DB
+    testRuntimeOnly("com.h2database:h2:2.2.224")
 
     // Smoke testlər üçün — compileOnly asılılıqlar test classpath-a avtomatik düşmür
     testImplementation("org.jooq:jooq:$jooqVersion")

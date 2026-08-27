@@ -1370,17 +1370,19 @@ public class SelectQueryBuilder<T> {
         // Addım 8 — ORDER BY tətbiqi
         SelectSeekStepN<Record> ordered = afterGroupBy.orderBy(allOrderFields);
 
-        // Addım 9 — COUNT (pagination və ya withCount() üçün)
-        // skipCount=true olduqda COUNT sorğusu işləmir, rowCount = -1 qaytarılır
-        // onlyCount=true olduqda yalnız COUNT işləyir, əsas sorğu icra edilmir
+        // Addım 9 — COUNT. Üç hal (v1.1.57):
+        //   • onlyCount()          → yalnız COUNT (əsas data icra edilmir)
+        //   • skipCount()          → yalnız data/SELECT (COUNT atlanır, rowCount = -1)
+        //   • heç biri (page/...)  → hər ikisi (data + COUNT)
         int rowCount = 0;
-        if (onlyCount) {
-            rowCount = buildCount(dsl, mainTable, whereCondition, afterGroupBy, tableMap);
-            return new SelectTable(dsl.selectZero().where(DSL.falseCondition()), rowCount);
-        } else if ((paginate || countOnly) && !skipCount) {
+        boolean needCount = onlyCount || ((paginate || countOnly) && !skipCount);
+        if (needCount) {
             rowCount = buildCount(dsl, mainTable, whereCondition, afterGroupBy, tableMap);
         } else if (skipCount) {
             rowCount = -1;
+        }
+        if (onlyCount) {
+            return new SelectTable(dsl.selectZero().where(DSL.falseCondition()), rowCount);
         }
 
         // Addım 10 — LIMIT / OFFSET

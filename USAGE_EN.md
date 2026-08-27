@@ -1050,6 +1050,40 @@ List<Map<String,Object>> rows = result.getResult();
 | `page(p,s).skipCount()` | ✓ LIMIT/OFFSET | ✗ | -1 |
 | `onlyCount()` | ✗ empty | ✓ | total rows |
 
+> **Three cases (v1.1.57):**
+> 1. `onlyCount()` → runs **only the COUNT**; the main data query is not executed.
+> 2. `skipCount()` → runs **only the data (SELECT)**; the COUNT is skipped (`rowCount = -1`).
+> 3. neither → **both** run (data + COUNT).
+>
+> Count condition: `onlyCount || ((paginate || countOnly) && !skipCount)`.
+
+> **Since v1.1.57 — identical in generated / derived-table mode.** These flags behave the
+> same whether the query runs through `execute()` (entity mode) or `executeGenerated()`
+> (`JooqQuery.from(generatedTable, alias)` / `JooqQuery.from(SelectTable, alias)`). Previously
+> the generated path only honored `page(...)`: `withCount()` always returned `0`, `skipCount()`
+> still ran the COUNT, and `onlyCount()` still executed the main data query. Now both modes
+> apply the same rule.
+>
+> With `GROUP BY` (or `distinct()`) the COUNT wraps the grouped/distinct query as a subquery
+> (`COUNT(*) FROM (SELECT DISTINCT ... GROUP BY ...) _count`), so `rowCount` is the number of
+> **groups / distinct rows**, not raw rows — in both modes.
+
+```java
+// Generated / derived-table mode — same flags:
+SelectTable result = JooqQuery.from(orderSummaryTable, "o")
+    .select("o.id", "o.status")
+    .page(0, 20)
+    .execute(dsl);
+result.getRowCount();   // total rows (COUNT ran)
+
+// Count only, no data:
+int total = JooqQuery.from(orderSummaryTable, "o")
+    .groupBy("o.status")
+    .onlyCount()
+    .execute(dsl)
+    .getRowCount();     // number of groups; data query NOT executed
+```
+
 ---
 
 ## 12. ROUND filter operations

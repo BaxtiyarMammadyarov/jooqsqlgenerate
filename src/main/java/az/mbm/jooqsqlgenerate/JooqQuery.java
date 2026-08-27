@@ -2393,21 +2393,38 @@ public final class JooqQuery<T> {
 
         SelectSeekStepN<Record> ordered = grouped.orderBy(rawOrderFields);
 
-        // 12. COUNT (pagination üçün)
-        // GROUP BY (+ HAVING) varsa COUNT mütləq "qruplaşdırılmış" nəticəni saymalıdır —
-        // əks halda qruplaşdırmadan əvvəlki sətir sayı qaytarılır (səhv nəticə: list 1
-        // sətir, count isə qruplaşmamış sətirlərin sayını — məs. 4 — göstərir).
-        // "conditioned"/"grouped" artıq bütün JOIN-ləri özündə saxlayır.
+        // 12. COUNT — entity mode (execute) ilə TAM eyni davranış (v1.1.57).
+        // Əvvəllər COUNT yalnız `if (paginate)`-ə bağlı idi; nəticədə:
+        //   • withCount()  → paginate=false olduğundan rowCount həmişə 0 qalırdı,
+        //   • skipCount()  → COUNT yenə icra olunurdu (atlanmırdı),
+        //   • onlyCount()  → əsas data sorğusu lazımsız icra olunurdu.
+        // Üç hal:
+        //   • onlyCount()          → yalnız COUNT (data icra edilmir)
+        //   • skipCount()          → yalnız data/SELECT (COUNT atlanır, rowCount = -1)
+        //   • heç biri (page/...)  → hər ikisi (data + COUNT)
         int rowCount = 0;
-        if (paginate) {
+        boolean needCount = onlyCount || ((paginate || countOnly) && !skipCount);
+        if (needCount) {
+            // GROUP BY (+ HAVING) VƏ/VƏ YA DISTINCT varsa COUNT "qruplaşdırılmış/unikal"
+            // nəticəni saymalıdır. countSource `conditioned`/`grouped`-dır — bunlar
+            // yuxarıda `distinct ? selectDistinct : select` ilə qurulmuş `query`-dən
+            // törədiyi üçün DISTINCT də subquery-də qorunur: COUNT(*) FROM (SELECT DISTINCT ...).
             Select<Record> countSource = rawGroupByFields.isEmpty() ? conditioned : grouped;
             Record1<Integer> r = dsl.selectCount()
                     .from(countSource.asTable("_count"))
                     .fetchOne();
             rowCount = (r == null) ? 0 : r.value1();
+        } else if (skipCount) {
+            // pagination var, amma COUNT qəsdən atlanır → -1 (entity mode ilə eyni sentinel).
+            rowCount = -1;
         }
 
-        // 13. LIMIT / OFFSET
+        // 13. onlyCount → əsas data sorğusu İCRA EDİLMİR: boş nəticə + rowCount qaytarılır.
+        if (onlyCount) {
+            return new SelectTable(dsl.selectZero().where(DSL.falseCondition()), rowCount);
+        }
+
+        // 14. LIMIT / OFFSET
         Select<Record> finalQuery = paginate
                 ? ordered.limit(pageSize).offset((long) pageNumber * pageSize)
                 : ordered;
