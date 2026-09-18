@@ -137,6 +137,24 @@ class SqlRenderSmokeTest {
         assertTrue(sql.contains(">"),     "> operatoru yoxdur: " + sql);
     }
 
+    /** v1.1.58: String sahədə ROUND Op ROUND-suz, adi müqayisə kimi işləməlidir (round() olmaz). */
+    @Test
+    void roundOpOnStringFieldSkipsRound() {
+        @SuppressWarnings("unchecked")
+        Field<Object> status = (Field<Object>) (Field<?>)
+                DSL.field(DSL.name("t", "status"), String.class);
+
+        Condition eq = FilterStrategies.get(Op.EQUAL_ROUND_1).apply(status, "A");
+        String eqSql = DSL.using(SQLDialect.POSTGRES).renderInlined(eq).toLowerCase();
+        assertTrue(!eqSql.contains("round"), "String sahədə ROUND olmamalıdır: " + eqSql);
+        assertTrue(eqSql.contains("status") && eqSql.contains("="),
+                "EQUAL_ROUND_1 string sahədə düz bərabərlik verməlidir: " + eqSql);
+
+        Condition ne = FilterStrategies.get(Op.NOT_EQUAL_ROUND_2).apply(status, "B");
+        String neSql = DSL.using(SQLDialect.POSTGRES).renderInlined(ne).toLowerCase();
+        assertTrue(!neSql.contains("round"), "String sahədə ROUND olmamalıdır: " + neSql);
+    }
+
     /** MathOp.apply() — düzgün operator render olunur, NONOPERATION left-i qaytarır. */
     @Test
     void mathOpApplyRendersOperators() {

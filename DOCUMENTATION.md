@@ -7,6 +7,20 @@
 
 ## Dəyişikliklər — Versiya Tarixi
 
+### v1.1.58 — Bug fix: String sahədə ROUND Op-lar (`EQUAL_ROUND_n` və s.) xəta verirdi
+
+**Problem:** string/VARCHAR tipli sahəyə ROUND müqayisə Op-u (`EQUAL_ROUND_1`, `NOT_EQUAL_ROUND_2`
+və digər ROUND variantları) `filter`/`globalFilter` ilə tətbiq olunanda Postgres
+`function round(character varying, integer) does not exist` xətası verirdi — çünki
+`registerRoundOps` sahə tipini yoxlamadan hər zaman `ROUND(field, scale)` qururdu.
+
+**Düzəliş:** yeni `roundedOrRaw(field, scale)` helper — string sahədə ROUND-u atlayır, sahəni
+olduğu kimi işlədir. Nəticədə string sahədə `EQUAL_ROUND_n` adi `EQUAL`, `NOT_EQUAL_ROUND_n` adi
+`NOT_EQUAL` kimi işləyir (digər ROUND Op-lar da düz müqayisəyə çevrilir). Numeric sahələrdə
+davranış dəyişmir. Test: `SqlRenderSmokeTest.roundOpOnStringFieldSkipsRound`.
+
+---
+
 ### v1.1.57 — `executeGenerated()` COUNT/pagination bayraq düzəlişi (entity mode ilə eyniləşdirmə)
 
 **Bug fix.** Generated/derived mode-da (`JooqQuery.from(generatedTable, alias)` /

@@ -167,12 +167,12 @@ public final class FilterStrategies {
      */
     private static void registerRoundOps(int scale, Op eq, Op ne,
                                          Op gt, Op gte, Op lt, Op lte) {
-        register(eq,  (field, val) -> rounded(field, scale).eq(coerced(field, val)));
-        register(ne,  (field, val) -> rounded(field, scale).ne(coerced(field, val)));
-        register(gt,  (field, val) -> rounded(field, scale).greaterThan(coerced(field, val)));
-        register(gte, (field, val) -> rounded(field, scale).greaterOrEqual(coerced(field, val)));
-        register(lt,  (field, val) -> rounded(field, scale).lessThan(coerced(field, val)));
-        register(lte, (field, val) -> rounded(field, scale).lessOrEqual(coerced(field, val)));
+        register(eq,  (field, val) -> roundedOrRaw(field, scale).eq(coerced(field, val)));
+        register(ne,  (field, val) -> roundedOrRaw(field, scale).ne(coerced(field, val)));
+        register(gt,  (field, val) -> roundedOrRaw(field, scale).greaterThan(coerced(field, val)));
+        register(gte, (field, val) -> roundedOrRaw(field, scale).greaterOrEqual(coerced(field, val)));
+        register(lt,  (field, val) -> roundedOrRaw(field, scale).lessThan(coerced(field, val)));
+        register(lte, (field, val) -> roundedOrRaw(field, scale).lessOrEqual(coerced(field, val)));
     }
 
     private FilterStrategies() {}
@@ -427,5 +427,18 @@ public final class FilterStrategies {
     private static Field<Object> rounded(Field<Object> field, int scale) {
         return (Field<Object>) (Field<?>) DSL.round(
                 (Field<? extends Number>) (Field<?>) field, scale);
+    }
+
+    /**
+     * ROUND müqayisə Op-ları üçün sahəni hazırlayır (v1.1.58 bug fix).
+     *
+     * <p>String/CharSequence tipli sahədə {@code ROUND(field, scale)} SQL-də etibarsızdır
+     * (Postgres: {@code function round(character varying, integer) does not exist}).
+     * Belə halda ROUND atlanır və sahə olduğu kimi qaytarılır — nəticədə {@code EQUAL_ROUND_n} /
+     * {@code NOT_EQUAL_ROUND_n} (və digər ROUND Op-lar) string sahədə adi {@code EQUAL} /
+     * {@code NOT_EQUAL} kimi işləyir. Numeric sahələrdə davranış dəyişmir.
+     */
+    private static Field<Object> roundedOrRaw(Field<Object> field, int scale) {
+        return isStringField(field) ? field : rounded(field, scale);
     }
 }
