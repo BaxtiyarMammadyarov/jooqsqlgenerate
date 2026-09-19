@@ -7,14 +7,16 @@
 
 ## Dəyişikliklər — Versiya Tarixi
 
-### v1.1.58 — String sahədə ROUND Op fix + `JooqManager.selectRound`
+### v1.1.59 — `JooqManager.selectRound` əlavə olundu
 
-**Əlavə:** `JooqManager.selectRound(fieldRef, scale, alias)` — əvvəl yalnız `JooqQuery`-də var
-idi, `JooqManager` istifadəçiləri (əksəriyyət) adi numeric sütuna SELECT-round tətbiq edə
-bilmirdi (computed və agg round onsuz da var idi). İndi `manager.selectRound(...)` işləyir;
-həmin alias-a filter də `WHERE ROUND(field, scale) ...` kimi tətbiq olunur (SELECT ilə tutarlı).
+`selectRound(fieldRef, scale, alias)` əvvəl yalnız `JooqQuery`-də var idi; `JooqManager`
+istifadəçiləri (əksəriyyət) adi numeric sütuna SELECT-round tətbiq edə bilmirdi (computed və
+agg round onsuz da var idi). İndi `manager.selectRound(...)` işləyir — sadə delegate; həmin
+alias-a filter də `WHERE ROUND(field, scale) ...` kimi tətbiq olunur (SELECT ilə tutarlı).
 
+---
 
+### v1.1.58 — Bug fix: String sahədə ROUND Op-lar (`EQUAL_ROUND_n` və s.) xəta verirdi
 
 **Problem:** string/VARCHAR tipli sahəyə ROUND müqayisə Op-u (`EQUAL_ROUND_1`, `NOT_EQUAL_ROUND_2`
 və digər ROUND variantları) `filter`/`globalFilter` ilə tətbiq olunanda Postgres

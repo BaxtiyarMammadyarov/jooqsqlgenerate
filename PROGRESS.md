@@ -10,8 +10,8 @@
 ## Proyekt haqqında
 
 **Ad:** `jooq-sql-generate`
-**Versiya:** 1.1.58 (string sahədə ROUND Op düzəlişi)
-**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.58`
+**Versiya:** 1.1.59 (JooqManager.selectRound əlavəsi)
+**Maven coordinate:** `az.mbm:jooq-sql-generate:1.1.59`
 **Repo:** https://github.com/BaxtiyarMammadyarov/jooqsqlgenerate
 **Java:** 17
 **Asılılıqlar:** jOOQ 3.18.6, Spring Boot 3.2.5 (compileOnly), Jakarta Persistence 3.1.0
@@ -27,7 +27,7 @@
 
 ## Cari vəziyyət
 
-Versiya 1.1.58 hazırlanır — v1.1.50 (filter routing, andOn*, Collection<ConcatItem>),
+Versiya 1.1.59 hazırlanır — v1.1.50 (filter routing, andOn*, Collection<ConcatItem>),
 v1.1.51 (audit düzəlişləri), v1.1.52–53 (SubSelectBuilder + INSERT ON DUPLICATE cast
 fix-ləri, GROUP BY→SELECT auto-add) dəyişikliklərini əhatə edir. Sənədlər yenilənib.
 
@@ -62,6 +62,14 @@ az.mbm.jooqsqlgenerate
 ---
 
 ## İş Jurnalı
+
+### 2026-09-19 — v1.1.59: JooqManager.selectRound əlavə olundu
+
+`selectRound(fieldRef, scale, alias)` yalnız JooqQuery-də var idi; JooqManager istifadəçiləri
+adi numeric sütuna SELECT-round tətbiq edə bilmirdi (computed `.as(alias,scale)` və agg round
+onsuz da var idi). Sadə delegate əlavə olundu: `q().selectRound(...)`. Round-lu alias-a filter
+`WHERE ROUND(field,scale)` kimi işləyir (SELECT ilə tutarlı). Qeyd: 1.1.58 artıq push
+edildiyi üçün bu ayrıca 1.1.59 kimi çıxarılır.
 
 ### 2026-09-18 — v1.1.58: String sahədə ROUND Op-lar xəta verirdi (bug fix)
 
