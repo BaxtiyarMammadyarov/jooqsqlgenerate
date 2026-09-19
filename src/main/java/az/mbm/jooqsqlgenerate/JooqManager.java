@@ -438,6 +438,27 @@ public class JooqManager {
         return this;
     }
 
+    /**
+     * SELECT-də {@code ROUND(field, scale) AS alias} sütunu (adi numeric sütun üçün).
+     *
+     * <p>Həmin alias-a {@code filter}/{@code globalFilter} tətbiq edildikdə WHERE-də də
+     * eyni {@code ROUND(field, scale)} avtomatik işlədilir — yəni SELECT-də göstərilən
+     * round-lu dəyər ilə filtr eyni ifadə üzərindən gedir (frontend = filter).
+     *
+     * <pre>{@code
+     *   manager.selectRound("o.totalPrice", 2, "totalPrice")   // SELECT ROUND(total_price, 2) AS totalPrice
+     *          .filter("totalPrice", Op.GREATER_THAN, "100");  // WHERE  ROUND(total_price, 2) > 100
+     * }</pre>
+     *
+     * @param fieldRef {@code "alias.field"} formatında numeric sahə
+     * @param scale    onluq rəqəm sayı
+     * @param alias    SELECT çıxış alias-ı (filtr də bu prefixsiz alias ilə verilir)
+     */
+    public JooqManager selectRound(String fieldRef, int scale, String alias) {
+        q().selectRound(fieldRef, scale, alias);
+        return this;
+    }
+
     /** COALESCE SELECT sütunu — List&lt;String&gt; variantı. Bax: {@link #addCoalesceColumn(String, Object, String...)}. */
     public JooqManager addCoalesceColumn(String alias, Object defaultValue, List<String> fields) {
         q().coalesce(alias, defaultValue, fields);
